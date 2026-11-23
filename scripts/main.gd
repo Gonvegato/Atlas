@@ -95,6 +95,8 @@ var area_kind: String = "bosque"
 var current_area: int = -1
 var area_erase: bool = false
 var trees_3d: bool = true
+## Sombras del relieve en 3D (se guarda en atlas.cfg: es cosa del dispositivo, no del mapa).
+var shadows_3d: bool = true
 var _world3d_dirty: bool = true
 var _places3d_dirty: bool = true
 var _place_label_pos: Dictionary = {}
@@ -911,8 +913,23 @@ func _apply_2d_transform() -> void:
 func _update_3d_camera() -> void:
 	cam_pivot.rotation = Vector3(pitch, yaw, 0.0)
 	cam_3d.position = Vector3(0.0, 0.0, cam_dist)
+	_fit_shadows()
 	if labels3d != null:
 		labels3d.queue_redraw()
+
+## Sombras del sol hechas a la medida del mundo: un solo mapa (sin los cortes rectos entre tramos de la sombra en
+## cascada) que llega justo hasta donde hay terreno, y margen de sobra. Con la configuración de serie (cuatro tramos
+## hasta 100 unidades para un mundo de 12) en el móvil salían bandas y triángulos de «acné» de sombra en el agua y
+## líneas rectas cruzando el relieve.
+func _fit_shadows() -> void:
+	if sun_light == null:
+		return
+	sun_light.shadow_enabled = shadows_3d
+	sun_light.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	sun_light.directional_shadow_max_distance = cam_dist + 10.0
+	sun_light.shadow_bias = 0.12
+	sun_light.shadow_normal_bias = 2.5
+	sun_light.shadow_blur = 1.0
 
 func _toggle_3d() -> void:
 	input_ctrl.is_3d_mode = not input_ctrl.is_3d_mode
@@ -1827,7 +1844,25 @@ func _build_relief_3d(col: Control) -> void:
 	, 11)
 	_paint_filter(ground_chips[0], true)
 	_paint_filter(ground_chips[1], false)
-	_note(relief, "Modelos CC0 de Kenney, KayKit (Kay Lousberg) y Quaternius; suelos CC0 de Poly Haven. Si el 3D va a tirones, baja a «Pocos» o pon el suelo liso.")
+	relief.add_child(Estilo.etiqueta("SOMBRAS", 11, Estilo.GRIS))
+	var cfg := ConfigFile.new()
+	cfg.load("user://atlas.cfg")
+	shadows_3d = bool(cfg.get_value("vista", "sombras", true))
+	var shadow_chips: Array[Button] = []
+	shadow_chips = _chips(relief, ["CON SOMBRAS", "SIN SOMBRAS"], func(i: int):
+		shadows_3d = i == 0
+		_fit_shadows()
+		for k in shadow_chips.size():
+			_paint_filter(shadow_chips[k], k == i)
+		var c2 := ConfigFile.new()
+		c2.load("user://atlas.cfg")
+		c2.set_value("vista", "sombras", shadows_3d)
+		c2.save("user://atlas.cfg")
+	, 11)
+	_paint_filter(shadow_chips[0], shadows_3d)
+	_paint_filter(shadow_chips[1], not shadows_3d)
+	_fit_shadows()
+	_note(relief, "Modelos CC0 de Kenney, KayKit (Kay Lousberg) y Quaternius; suelos CC0 de Poly Haven. Si el 3D va a tirones, baja a «Pocos», pon el suelo liso o quita las sombras.")
 	relief.add_child(Estilo.filete(2))
 
 func _build_section_relieve(col: Control) -> void:

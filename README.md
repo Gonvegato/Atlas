@@ -2,6 +2,14 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.12.2
+
+- **Arreglo: cortes rectos y triángulos en el 3D (en el móvil).** Eran artefactos de las sombras del sol: venían con la
+  configuración de serie (cuatro tramos en cascada hasta 100 unidades para un mundo de 12, mapa de 16 bits y 2.048 px en
+  móvil), y en la GPU del móvil salían como bandas y triángulos en el agua y líneas rectas cruzando el relieve. Ahora hay
+  un único mapa de sombras ajustado a lo que se ve (sin cortes entre tramos), de 4.096 px y 32 bits, con más margen y un
+  poco de suavizado. Y botón CON SOMBRAS / SIN SOMBRAS en Relieve 3D (se recuerda en el dispositivo).
+
 ## 0.12.1
 
 - **La firma de la familia la pone Familia-Revista.** ATLAS compila siempre la versión final (no la de depuración) y la

@@ -8,7 +8,7 @@ config/name="ATLAS."
 config/description="Cartografía fantástica 2D y 3D impulsada por GPU para Android"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
-config/version="0.12.1"
+config/version="0.12.2"
 config/icon="res://icon.svg"
 
 [display]
@@ -26,6 +26,10 @@ pointing/emulate_touch_from_mouse=false
 [rendering]
 
 textures/default_filters/anisotropic_filtering_level=4
+lights_and_shadows/directional_shadow/size=4096
+lights_and_shadows/directional_shadow/size.mobile=4096
+lights_and_shadows/directional_shadow/16_bits=false
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality.mobile=2
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 textures/vram_compression/import_etc2_astc=true
