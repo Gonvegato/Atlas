@@ -272,7 +272,10 @@ vec2 voronoi(vec2 x) {
 
 void fragment() {
 	vec2 tex_size = vec2(textureSize(height_tex, 0));
-	vec2 t = 1.5 / tex_size;
+	// Las muestras del sombreado, a la distancia que abarca un píxel de pantalla (nunca menos de 1,5 píxeles del
+	// mapa): de lejos un píxel cubre varios del mapa y, con la distancia fija, el relieve hacía moiré y parpadeaba.
+	float foot = max(1.5, fwidth(UV.x * tex_size.x) * 1.15);
+	vec2 t = foot / tex_size;
 	float h = texture(height_tex, UV).r;
 
 	// Sobel 3x3 para el sombreado
@@ -287,7 +290,9 @@ void fragment() {
 
 	float dx = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl);
 	float dy = (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr);
-	vec3 normal = normalize(vec3(-dx * relief_strength * 0.25, -dy * relief_strength * 0.25, 1.0));
+	// Pendiente por unidad de distancia: el mismo sombreado aunque cambie la separación de las muestras.
+	float slope_k = relief_strength * 0.25 * (1.5 / foot);
+	vec3 normal = normalize(vec3(-dx * slope_k, -dy * slope_k, 1.0));
 	float shade = clamp(dot(normal, normalize(sun_dir)), 0.0, 1.0);
 
 	// Altura suavizada (núcleo 1-2-1): costa y curvas sin escalones aunque la capa sea de 8 bits.
@@ -328,8 +333,22 @@ void fragment() {
 		float shadow_factor = mix(1.0, 0.58 + shade * 0.58, smoothstep(0.02, 0.25, slope));
 		color *= shadow_factor;
 
+		// Hachures: en los escarpes (cañones, acantilados), trazos de tinta a favor de la pendiente cada ~4 px de
+		// pantalla, como en los mapas grabados. Pegados al mapa (no a la pantalla) para que no bailen al moverlo.
+		float steep = smoothstep(0.32, 0.62, slope);
+		if (steep > 0.0) {
+			vec2 gdir = normalize(vec2(dx, dy) + vec2(1e-6));
+			vec2 ps = UV * tex_size / max(fwidth(UV.x * tex_size.x), 0.2);
+			float along = dot(ps, vec2(-gdir.y, gdir.x));
+			float hl = abs(fract(along / 4.0) - 0.5) * 4.0;
+			float hline = 1.0 - smoothstep(0.45, 1.15, hl);
+			color = mix(color, col_ink, hline * steep * 0.5);
+		}
+
 		float contour_val = abs(fract(coast_dist * contour_density - 0.5) - 0.5) / max(fwidth(coast_dist * contour_density), 0.001);
 		float contour_line = 1.0 - smoothstep(0.0, 1.4, contour_val);
+		// Si las curvas quedan a menos de ~4 px unas de otras, se desvanecen (si no, hacen moiré al alejar).
+		contour_line *= smoothstep(2.0, 5.0, 1.0 / max(fwidth(coast_dist * contour_density), 0.0001));
 		color = mix(color, col_ink, contour_line * 0.12);
 
 		if (show_symbols) {

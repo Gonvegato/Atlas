@@ -4,6 +4,8 @@ extends Control
 ## (unproject_position) y aquí se pinta, con el mismo halo de papel que en 2D. Lo de detrás de la cámara no se pinta.
 
 var camera: Camera3D
+## La cámara proyecta en píxeles del SubViewport (a resolución real); esto lo pasa a unidades de la interfaz.
+var px_scale: float = 1.0
 ## [texto, posición 3D, tipo] con tipo "lugar", "capital", "reino" o "region" / "agua".
 var labels: Array = []
 var ink: Color = Estilo.TINTA
@@ -28,7 +30,7 @@ func _draw() -> void:
 	# Prioridad (capitales, reinos, regiones, lugares) y sin solapes: lo que choca con algo ya pintado no se pinta.
 	# De lejos quedan los importantes; al acercarte hay sitio para todos.
 	var order: Array = labels.duplicate()
-	var prio := {"capital": 0, "reino": 1, "region": 2, "agua": 2, "lugar": 3}
+	var prio := {"reino": 0, "capital": 1, "region": 2, "agua": 2, "lugar": 3}
 	order.sort_custom(func(a, b): return int(prio.get(a[2], 3)) < int(prio.get(b[2], 3)))
 	var taken: Array[Rect2] = []
 	for l in order:
@@ -37,7 +39,7 @@ func _draw() -> void:
 		var kind: String = l[2]
 		if camera.is_position_behind(pos):
 			continue
-		var sp: Vector2 = camera.unproject_position(pos)
+		var sp: Vector2 = camera.unproject_position(pos) / px_scale
 		if sp.x < -100 or sp.y < -40 or sp.x > size.x + 100 or sp.y > size.y + 40:
 			continue
 		var f: Font = Estilo.F_SEMI
@@ -82,6 +84,6 @@ func _draw() -> void:
 				else:
 					Estilo.placa(self, f, at, txt, fs, Color(paper, 0.93), ink, 1.0, ink, Vector2(4, 2))
 			"reino":
-				Estilo.placa(self, f, at, txt, fs, Color(paper, 0.72), col, 0.0, col, Vector2(8, 4))
+				Estilo.pestana(self, f, at, txt, fs, col)
 			_:
 				Estilo.placa(self, f, at, txt, fs, Color(paper, 0.7), col, 0.0, col, Vector2(6, 3))

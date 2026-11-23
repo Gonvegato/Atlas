@@ -29,6 +29,9 @@ var ink: Color = Estilo.TINTA
 var paper: Color = Estilo.PAPEL
 
 var _realm_font: FontVariation
+## Rectángulos ya ocupados por rótulos en este dibujo (los que chocan no se pintan).
+var _taken: Array[Rect2] = []
+const PLACE_ORDER = {"capital": 0, "ciudad": 1, "castillo": 2, "puerto": 3, "templo": 4, "pueblo": 5, "torre": 6, "batalla": 7, "ruinas": 8, "mina": 9, "aldea": 10}
 var _area_font: FontVariation
 
 func _ready() -> void:
@@ -63,11 +66,15 @@ func hide_ring() -> void:
 		queue_redraw()
 
 func _draw() -> void:
+	_taken.clear()
+	# Primero se decide qué rótulos de lugares caben (son lo más importante); luego reinos y regiones buscan hueco
+	# sin pisarlos y se pintan debajo.
+	var layout: Array = _layout_places()
 	if show_area_names:
 		_draw_area_names()
 	if show_realm_names:
 		_draw_realm_names()
-	_draw_places()
+	_draw_places(layout)
 	if ring_visible:
 		draw_arc(ring_center, ring_radius + 1.5, 0.0, TAU, 72, Estilo.PAPEL, 2.0, true)
 		draw_arc(ring_center, ring_radius, 0.0, TAU, 72, Estilo.TINTA, 1.5, true)
@@ -117,30 +124,35 @@ func _draw_realm_names() -> void:
 		var uv: Vector2 = c["uv"]
 		var p: Vector2 = uv_to_screen(uv)
 		var extent: float = sqrt(area) * minf(map_screen_size.x, map_screen_size.y)
-		var fs: int = int(clampf(extent * 0.085, 11.0, 30.0))
 		var kind: String = r["kind"]
 		var nm: String = r["name"]
 		var txt: String = (kind + " DE " + nm).to_upper()
 		var col: Color = r["color"]
+		# Ni más ancha que el territorio (×1,4) ni ilegible: si no cabe a 9 px, solo el nombre del reino.
+		var w10: float = _realm_font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
+		var fs: int = int(clampf(minf(extent * 0.085, extent * 1.4 / maxf(w10, 1.0) * 10.0), 8.0, 30.0))
+		if fs < 9:
+			txt = nm.to_upper()
+			w10 = _realm_font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
+			fs = int(clampf(extent * 1.4 / maxf(w10, 1.0) * 10.0, 9.0, 30.0))
 		var tw: float = _realm_font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		var at: Vector2 = _free_spot(p, tw, fs)
-		Estilo.placa(self, _realm_font, at, txt, fs, Color(paper, 0.5), col.darkened(0.35), 0.0, col.darkened(0.45), Vector2(6, 2))
+		var r2: Rect2 = Estilo.pestana(self, _realm_font, at, txt, fs, col)
+		_taken.append(r2)
 
 ## Donde poner el nombre de un reino tapando los menos lugares posibles: prueba alturas alrededor del centro
 ## (el centro gana si empata).
 func _free_spot(center: Vector2, tw: float, fs: int) -> Vector2:
-	var offsets: Array[float] = [0.0, 1.2, -1.2, 2.2, -2.2, 3.2, -3.2]
+	var offsets: Array[float] = [0.0, 1.3, -1.3, 2.5, -2.5, 3.7, -3.7, 5.0, -5.0]
 	var best: Vector2 = center + Vector2(-tw * 0.5, fs * 0.35)
 	var best_hits: int = 1 << 20
 	for o in offsets:
 		var at: Vector2 = center + Vector2(-tw * 0.5, fs * 0.35 + o * fs)
 		var box := Rect2(at + Vector2(-6, -fs - 6), Vector2(tw + 12, fs + 14))
 		var hits: int = 0
-		for pl in places:
-			var uv: Vector2 = pl["uv"]
-			var sp: Vector2 = uv_to_screen(uv)
-			if box.has_point(sp):
-				hits += 3 if str(pl["kind"]) == "capital" else 1
+		for r in _taken:
+			if r.intersects(box):
+				hits += 1
 		if hits < best_hits:
 			best_hits = hits
 			best = at
@@ -150,39 +162,104 @@ func _free_spot(center: Vector2, tw: float, fs: int) -> Vector2:
 
 # ---------------------------------------------------------------- lugares
 
-func _draw_places() -> void:
-	for p in places:
-		var kind: String = p["kind"]
+## Tamaño de símbolos y rótulos según el zoom: de lejos más pequeños (si no, tapan el mapa), de cerca algo más.
+func ui_scale() -> float:
+	return clampf(0.5 + 0.5 * map_zoom, 0.6, 1.25)
+
+## [lugar, posición en pantalla, ¿lleva nombre?]; deja en _taken los símbolos y nombres que se pintarán.
+func _layout_places() -> Array:
+	var k: float = ui_scale()
+	var order: Array = places.duplicate()
+	order.sort_custom(func(a, b): return int(PLACE_ORDER.get(a["kind"], 20)) < int(PLACE_ORDER.get(b["kind"], 20)))
+	var out: Array = []
+	for p in order:
 		var uv: Vector2 = p["uv"]
 		var at: Vector2 = uv_to_screen(uv)
 		if at.x < -40 or at.y < -40 or at.x > size.x + 40 or at.y > size.y + 40:
 			continue
+		out.append([p, at, false])
+		_taken.append(Rect2(at - Vector2(11, 11) * k, Vector2(22, 22) * k))
+	if not show_place_names:
+		return out
+	for e in out:
+		var p: Dictionary = e[0]
+		var at: Vector2 = e[1]
 		var id: int = int(p["id"])
-		if id == selected_place:
-			draw_circle(at, 15.0, Color(Estilo.ACENTO, 0.25))
-			draw_arc(at, 15.0, 0.0, TAU, 40, Estilo.ACENTO, 2.0, true)
-		_draw_symbol(kind, at)
+		var kind: String = p["kind"]
 		var t: Array = Catalogo.tipo_lugar(kind)
 		var min_zoom: float = t[2]
-		if show_place_names and (map_zoom >= min_zoom or id == selected_place):
-			_draw_place_name(kind, str(p["name"]), at)
+		if map_zoom < min_zoom and id != selected_place:
+			continue
+		# Derecha, izquierda, arriba, abajo: la primera que no pise nada.
+		for dir in 4:
+			var box: Rect2 = _place_name_box(kind, str(p["name"]), at, k, dir)
+			var clash: bool = false
+			if id != selected_place or dir < 3:
+				for r in _taken:
+					if r.intersects(box) and not r.has_point(at):
+						clash = true
+						break
+			if not clash:
+				_taken.append(box)
+				e[2] = true
+				e.append(dir)
+				break
+	return out
 
-func _draw_place_name(kind: String, nm: String, at: Vector2) -> void:
-	var f: Font = Estilo.F_SEMI
-	var fs: int = 12
-	var txt: String = nm
+func _draw_places(layout: Array) -> void:
+	var k: float = ui_scale()
+	for i in range(layout.size() - 1, -1, -1):
+		var p: Dictionary = layout[i][0]
+		var at: Vector2 = layout[i][1]
+		draw_set_transform(at, 0.0, Vector2(k, k))
+		if int(p["id"]) == selected_place:
+			draw_circle(Vector2.ZERO, 15.0, Color(Estilo.ACENTO, 0.25))
+			draw_arc(Vector2.ZERO, 15.0, 0.0, TAU, 40, Estilo.ACENTO, 2.0, true)
+		_draw_symbol(str(p["kind"]), Vector2.ZERO)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	for e in layout:
+		if not bool(e[2]):
+			continue
+		var p: Dictionary = e[0]
+		draw_set_transform(e[1], 0.0, Vector2(k, k))
+		_draw_place_name(str(p["kind"]), str(p["name"]), Vector2.ZERO, int(e[3]))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func _place_name_style(kind: String, nm: String) -> Array:
 	if kind == "capital":
-		f = Estilo.F_GROTESCA
-		fs = 17
-		txt = nm.to_upper()
-	elif kind == "ciudad":
-		f = Estilo.versalitas()
-		fs = 13
-		txt = nm.to_upper()
-	elif kind == "aldea" or kind == "ruinas" or kind == "mina":
-		f = Estilo.F_TEXTO
-		fs = 11
-	var pos: Vector2 = at + Vector2(14, fs * 0.36)
+		return [Estilo.F_GROTESCA, 17, nm.to_upper()]
+	if kind == "ciudad":
+		return [Estilo.versalitas(), 13, nm.to_upper()]
+	if kind == "aldea" or kind == "ruinas" or kind == "mina":
+		return [Estilo.F_TEXTO, 11, nm]
+	return [Estilo.F_SEMI, 12, nm]
+
+## Línea base del nombre (en unidades sin escalar, desde el símbolo) según el lado: 0 dcha · 1 izda · 2 arriba · 3 abajo.
+func _name_origin(tw: float, fs: int, dir: int) -> Vector2:
+	match dir:
+		1:
+			return Vector2(-14.0 - tw, fs * 0.36)
+		2:
+			return Vector2(-tw * 0.5, -15.0)
+		3:
+			return Vector2(-tw * 0.5, 15.0 + fs * 0.8)
+	return Vector2(14.0, fs * 0.36)
+
+func _place_name_box(kind: String, nm: String, at: Vector2, k: float, dir: int = 0) -> Rect2:
+	var st: Array = _place_name_style(kind, nm)
+	var f: Font = st[0]
+	var fs: int = st[1]
+	var tw: float = f.get_string_size(str(st[2]), HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var o: Vector2 = _name_origin(tw, fs, dir)
+	return Rect2(at + (o + Vector2(-5, -fs * 1.0 - 3)) * k, Vector2(tw + 10, fs + 8) * k)
+
+func _draw_place_name(kind: String, nm: String, at: Vector2, dir: int = 0) -> void:
+	var st: Array = _place_name_style(kind, nm)
+	var f: Font = st[0]
+	var fs: int = st[1]
+	var txt: String = st[2]
+	var tw: float = f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var pos: Vector2 = at + _name_origin(tw, fs, dir)
 	if kind == "capital":
 		Estilo.placa(self, f, pos, txt, fs, ink, ink, 0.0, paper, Vector2(6, 3))
 	elif kind == "ciudad":

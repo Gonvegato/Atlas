@@ -88,9 +88,16 @@ void fragment() {
 		target = min(h, prof);
 		a = strength;
 	} else {
-		// Cañón: fondo estrecho y paredes casi verticales.
-		float wall = smoothstep(0.26, 0.36, d);
-		target = min(h, mix(bed, h, wall));
+		// Cañón: cauce estrecho con agua, fondo seco algo más ancho y paredes escalonadas (cuatro escarpes con su
+		// cornisa, como los cañones del desierto) hasta el borde, que conserva el terreno.
+		float floor_h = sea_level + 0.006;
+		float wall_t = clamp((d - 0.16) / 0.66, 0.0, 1.0);
+		float steps_n = 4.0;
+		float q = wall_t * steps_n;
+		float stepped = (floor(q) + smoothstep(0.55, 0.85, fract(q))) / steps_n;
+		float prof = mix(floor_h, max(h, floor_h), stepped);
+		prof = mix(bed, prof, smoothstep(0.05, 0.12, d));
+		target = min(h, prof);
 		a = strength;
 	}
 	COLOR = vec4(target, target, target, clamp(a, 0.0, 1.0));

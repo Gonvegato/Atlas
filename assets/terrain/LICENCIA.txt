@@ -1,5 +1,5 @@
 Texturas de suelo de Poly Haven (https://polyhaven.com), licencia CC0 (dominio público):
 leafy_grass, withered_grass, forest_leaves_02, forest_leaves_04, forest_floor, sand_01, aerial_rocks_02,
 snow_field_aerial, brown_mud_leaves_01, cracked_red_ground, mud_cracked_dry_03, burned_ground_01, farm_soil,
-rocky_terrain_02, dry_ground_rocks, mossy_rock.
-Reducidas a 512 px, con el brillo medio igualado y montadas en una tira (suelos.png, una capa por fila).
+rocky_terrain_02, dry_ground_rocks, mossy_rock, aerial_grass_rock, sparse_grass, dry_river_pebbles, rock_face_03.
+A 1024 px, con el brillo medio igualado y montadas en una tira (suelos.png, una capa por fila).

@@ -166,3 +166,13 @@ static func placa(ci: CanvasItem, font: Font, at: Vector2, text: String, fs: int
 		ci.draw_rect(r, border, false, bw)
 	ci.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, text_col)
 	return r
+
+## Pestaña de reino: bloque del color del reino con el nombre en papel o en tinta (lo que contraste más) y una
+## franja más oscura a la izquierda, como una pestaña de archivador.
+static func pestana(ci: CanvasItem, font: Font, at: Vector2, text: String, fs: int, col: Color) -> Rect2:
+	var lum: float = col.r * 0.299 + col.g * 0.587 + col.b * 0.114
+	var txt_col: Color = PAPEL if lum < 0.6 else TINTA
+	var r: Rect2 = placa(ci, font, at + Vector2(6, 0), text, fs, Color(col, 0.94), TINTA, 1.5, txt_col, Vector2(8, 4))
+	ci.draw_rect(Rect2(r.position, Vector2(6, r.size.y)), col.darkened(0.35))
+	ci.draw_string(font, at + Vector2(6, 0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, txt_col)
+	return r

@@ -5,7 +5,7 @@ shader_type spatial;
 // 2 = roca: textura por el tinte de la instancia.
 render_mode cull_disabled, diffuse_lambert_wrap, specular_disabled, shadows_disabled;
 
-uniform sampler2D tex : source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2D tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform vec3 albedo : source_color = vec3(1.0);
 uniform int part = 0;
 uniform float scissor = 0.5;

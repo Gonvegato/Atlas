@@ -16,7 +16,7 @@ uniform float biome_tint_amt = 0.0;
 uniform bool show_realms = true;
 // Suelos con textura (CC0 de Poly Haven, assets/terrain/suelos.png como Texture2DArray). biome_data es la misma
 // paleta de biomas SIN source_color: su fila 3 guarda índices de capa, que no deben pasar por la conversión de color.
-uniform sampler2DArray ground_tex : source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2DArray ground_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D biome_data : filter_nearest, repeat_disable;
 uniform bool use_ground = true;
 // Repeticiones de la textura por unidad del mundo (el mapa mide 12 de lado mayor).
@@ -167,8 +167,8 @@ void fragment() {
 				l2 = round(d.g * 255.0);
 				m = d.b;
 			} else if (elev > 0.3) {
-				l1 = 0.0;
-				l2 = 1.0;
+				l1 = 16.0;
+				l2 = 0.0;
 				m = 0.45;
 			}
 			vec3 g = ground(l1, wp);
@@ -197,8 +197,13 @@ void fragment() {
 				rockw = max(rockw, smoothstep(0.42, 0.56, elev + (n1 - 0.5) * 0.12));
 			}
 			if (rockw > 0.01) {
-				float rl = dot(ground_triplanar(15.0, p3, n_obj), vec3(0.2126, 0.7152, 0.0722));
+				float rl = dot(ground_triplanar(19.0, p3, n_obj), vec3(0.2126, 0.7152, 0.0722));
 				vec3 rock = mix(rock_col, cliff_col, smoothstep(0.38, 0.62, slope)) * (0.7 + rl * 1.1);
+				// Estratos en las paredes empinadas (cañones, escarpes): franjas de ocre y rojizo según la altura.
+				float band = fract(p3.y * 7.0 + (n1 - 0.5) * 0.35);
+				vec3 strata = mix(vec3(0.80, 0.55, 0.36), vec3(0.60, 0.36, 0.26), smoothstep(0.42, 0.58, band));
+				strata = mix(strata, vec3(0.88, 0.74, 0.55), smoothstep(0.86, 0.96, band));
+				rock = mix(rock, strata * (0.75 + rl * 0.8), smoothstep(0.42, 0.62, slope) * 0.75);
 				g = mix(g, rock, rockw);
 			}
 			float sn = elev + (n1 - 0.5) * 0.1;

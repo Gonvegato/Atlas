@@ -105,6 +105,16 @@ var _drag_before: Dictionary = {}
 var _drag_moved: bool = false
 var _last_pan_pos: Vector2 = Vector2.ZERO
 var _armed: String = ""
+# Gesto táctil del panel lateral: 0 nada · 1 esperando (aún no se sabe si es toque, desplazamiento o deslizador) ·
+# 2 desplazando el panel · 3 se lo pasamos a la interfaz (deslizador en horizontal).
+var panel_rect_node: Control
+var panel_scroll: ScrollContainer
+var _pg_state: int = 0
+var _pg_start: Vector2 = Vector2.ZERO
+var _pg_last: Vector2 = Vector2.ZERO
+var _pg_scroll0: float = 0.0
+var _pg_vel: float = 0.0
+const PG_SLOP: float = 10.0
 
 var mat_2d: ShaderMaterial
 var mat_3d: ShaderMaterial
@@ -123,6 +133,7 @@ var lbl_area_count: Label
 var lbl_area_hint: Label
 var lbl_trees: Label
 var density_chips: Array[Button] = []
+var lbl_msaa_note: Label
 
 # --- interfaz
 var btn_mode_3d: Button
@@ -190,9 +201,137 @@ func _ready() -> void:
 	_select_tool(current_tool)
 	_select_biome(current_biome)
 	_select_section("relieve")
+	# El 3D a la resolución real de la pantalla (no a la lógica de 1280×800), con MSAA 4×.
+	view_3d_container.stretch = false
+	view_3d_container.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	# Que crezca hacia abajo y a la derecha (en la escena crecía hacia los dos lados y se descolocaba).
+	view_3d_container.grow_horizontal = Control.GROW_DIRECTION_END
+	view_3d_container.grow_vertical = Control.GROW_DIRECTION_END
+	_msaa_guard_load()
+	subviewport_3d.anisotropic_filtering_level = Viewport.ANISOTROPY_16X
+	workspace.resized.connect(_fit_3d_viewport)
+	get_viewport().size_changed.connect(_fit_3d_viewport)
 	await get_tree().process_frame
 	_center_map()
+	_fit_3d_viewport()
 	view_2d_root.resized.connect(_center_map)
+
+# ================================================================ gesto táctil del panel lateral
+
+## En Godot los botones se quedan el arrastre y el ScrollContainer no se mueve si el dedo empieza encima de uno; y
+## un arrastre vertical encima de un deslizador le cambia el valor. Aquí se decide antes de que la interfaz vea nada:
+## vertical → se desplaza el panel; horizontal → se le pasa a la interfaz (deslizadores); sin moverse → toque normal.
+func _input(event: InputEvent) -> void:
+	# Los eventos que reenvía este filtro llevan una marca (no se vuelven a interceptar).
+	if panel_rect_node == null or event.has_meta("atlas_panel"):
+		return
+	var emulated: bool = (event is InputEventMouseButton or event is InputEventMouseMotion) and event.device == InputEvent.DEVICE_ID_EMULATION
+	var touch: bool = event is InputEventScreenTouch or event is InputEventScreenDrag
+	if not (emulated or touch):
+		return
+	# Solo el primer dedo; los demás no se tocan, salvo que estemos en mitad de un gesto del panel.
+	if touch and int(event.get("index")) != 0:
+		if _pg_state == 1 or _pg_state == 2:
+			get_viewport().set_input_as_handled()
+		return
+	var pos: Vector2 = event.get("position")
+	var is_press: bool = (event is InputEventScreenTouch and event.pressed) or (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT)
+	var is_release: bool = (event is InputEventScreenTouch and not event.pressed) or (event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_LEFT)
+	var is_move: bool = event is InputEventScreenDrag or event is InputEventMouseMotion
+	# Godot entrega el clic emulado y el toque por separado (y el clic, a veces, antes): el gesto empieza con el
+	# primero que llegue y el otro se descarta.
+	if is_press:
+		if _pg_state == 0 and panel_rect_node.get_global_rect().has_point(pos):
+			_pg_state = 1
+			_pg_start = pos
+			_pg_last = pos
+			_pg_scroll0 = float(panel_scroll.scroll_vertical)
+			_pg_vel = 0.0
+			get_viewport().set_input_as_handled()
+		elif _pg_state == 1 or _pg_state == 2:
+			get_viewport().set_input_as_handled()
+		return
+	if is_release:
+		match _pg_state:
+			1:
+				# Toque sin moverse: se le da a la interfaz (pulsar y soltar donde empezó).
+				_pg_state = 0
+				get_viewport().set_input_as_handled()
+				_replay([_click_ev(_pg_start, true), _click_ev(_pg_start, false)])
+			2:
+				_pg_state = 0
+				get_viewport().set_input_as_handled()
+			3:
+				if event is InputEventScreenTouch:
+					_pg_state = 0
+		return
+	if is_move:
+		match _pg_state:
+			1:
+				get_viewport().set_input_as_handled()
+				var mv: Vector2 = pos - _pg_start
+				if mv.length() >= PG_SLOP:
+					if absf(mv.y) >= absf(mv.x):
+						_pg_state = 2
+					else:
+						# Horizontal: para la interfaz (deslizadores). Se le da el clic inicial y desde ahí, lo demás.
+						_pg_state = 3
+						_replay([_click_ev(_pg_start, true)])
+				_pg_last = pos
+			2:
+				get_viewport().set_input_as_handled()
+				if event is InputEventScreenDrag:
+					var dy: float = pos.y - _pg_last.y
+					_pg_vel = lerpf(_pg_vel, dy * 60.0, 0.5)
+				panel_scroll.scroll_vertical = int(_pg_scroll0 - (pos.y - _pg_start.y))
+				_pg_last = pos
+
+func _click_ev(p: Vector2, pressed: bool) -> InputEventMouseButton:
+	var m := InputEventMouseButton.new()
+	m.button_index = MOUSE_BUTTON_LEFT
+	m.pressed = pressed
+	m.position = p
+	m.global_position = p
+	m.button_mask = MOUSE_BUTTON_MASK_LEFT if pressed else 0
+	return m
+
+## Reenvía eventos a la interfaz, marcados para que este mismo filtro no los vuelva a interceptar.
+func _replay(events: Array) -> void:
+	for e in events:
+		var ev: InputEvent = e
+		ev.set_meta("atlas_panel", true)
+		Input.parse_input_event(ev)
+
+func _process(delta: float) -> void:
+	# Inercia del panel al soltar después de desplazar.
+	if _pg_state == 0 and absf(_pg_vel) > 20.0 and panel_scroll != null:
+		panel_scroll.scroll_vertical = int(float(panel_scroll.scroll_vertical) - _pg_vel * delta)
+		_pg_vel *= pow(0.04, delta)
+	elif _pg_state == 0:
+		_pg_vel = 0.0
+
+## Píxeles reales de pantalla por unidad de la interfaz (2 en una tablet de 2560×1600 con la base de 1280×800).
+func _screen_scale() -> float:
+	var logical: Vector2 = get_viewport().get_visible_rect().size
+	if logical.y <= 0.0:
+		return 1.0
+	return clampf(float(DisplayServer.window_get_size().y) / logical.y, 1.0, 4.0)
+
+## Antes el SubViewport del 3D tomaba el tamaño lógico del contenedor y se estiraba al doble en pantallas densas
+## (borroso y con parpadeo al alejarse). Ahora mide lo mismo que la pantalla y el contenedor se encoge a la mitad.
+func _fit_3d_viewport() -> void:
+	var f: float = _screen_scale()
+	var sz: Vector2 = workspace.size
+	if sz.x <= 0.0 or sz.y <= 0.0:
+		return
+	var px := Vector2i((sz * f).round())
+	subviewport_3d.size = px
+	view_3d_container.size = Vector2(px)
+	view_3d_container.scale = Vector2.ONE / f
+	view_3d_container.position = Vector2.ZERO
+	if labels3d != null:
+		labels3d.px_scale = f
+		labels3d.queue_redraw()
 
 # ================================================================ mapa y 3D
 
@@ -222,11 +361,13 @@ func _on_layers_ready(size: Vector2i) -> void:
 	var world := Vector2(size) / long_side * 12.0
 	var plane := PlaneMesh.new()
 	plane.size = world
-	plane.subdivide_width = int(round(300.0 * world.x / 12.0))
-	plane.subdivide_depth = int(round(300.0 * world.y / 12.0))
+	# Un vértice cada ~4 píxeles del mapa (512 en uno de 2.048), hasta 768 por lado.
+	var subdiv: float = clampf(long_side / 4.0, 256.0, 768.0)
+	plane.subdivide_width = int(round(subdiv * world.x / 12.0))
+	plane.subdivide_depth = int(round(subdiv * world.y / 12.0))
 	terrain_mesh.mesh = plane
 	mat_3d.set_shader_parameter("terrain_size", world)
-	mat_3d.set_shader_parameter("vertex_step", 1.0 / 300.0)
+	mat_3d.set_shader_parameter("vertex_step", 1.0 / subdiv)
 	lbl_map_px.text = "%s × %s PX" % [Estilo.miles(size.x), Estilo.miles(size.y)]
 	lbl_world.text = "MUNDO Nº %04d · %s" % [engine.world_seed, Estilo.fecha_corta()]
 	_center_map()
@@ -308,7 +449,7 @@ func _tool_radius() -> float:
 		"valley":
 			return r * 1.8
 		"canyon":
-			return r * 1.1
+			return r * 1.6
 	return r
 
 func _on_stroke_started(pos: Vector2, pressure: float) -> void:
@@ -459,8 +600,53 @@ func _toggle_3d() -> void:
 	sec_relief_3d.visible = in_3d
 	labels3d.visible = in_3d
 	if in_3d:
+		_msaa_enter_3d()
 		_rebuild_3d()
 	_update_hint()
+
+# ---------------------------------------------------------------- MSAA del 3D con protector
+## El MSAA ya colgó el arranque con Vulkan: aquí solo se activa al entrar en 3D, y si una entrada en 3D con MSAA no
+## llega a durar 3 s (cuelgue), el siguiente arranque lo deja apagado y lo avisa en Mundo → Calidad.
+var msaa_on: bool = true
+var msaa_fallback: bool = false
+
+func _msaa_guard_load() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(engine.CONFIG_PATH)
+	msaa_on = bool(cfg.get_value("calidad", "msaa_3d", true))
+	if bool(cfg.get_value("arranque", "pendiente_msaa", false)):
+		msaa_on = false
+		msaa_fallback = true
+		cfg.set_value("calidad", "msaa_3d", false)
+		cfg.set_value("arranque", "pendiente_msaa", false)
+		cfg.save(engine.CONFIG_PATH)
+	subviewport_3d.msaa_3d = Viewport.MSAA_DISABLED
+
+func _msaa_enter_3d() -> void:
+	if not msaa_on:
+		subviewport_3d.msaa_3d = Viewport.MSAA_DISABLED
+		return
+	var cfg := ConfigFile.new()
+	cfg.load(engine.CONFIG_PATH)
+	cfg.set_value("arranque", "pendiente_msaa", true)
+	cfg.save(engine.CONFIG_PATH)
+	subviewport_3d.msaa_3d = Viewport.MSAA_4X
+	get_tree().create_timer(3.0).timeout.connect(func():
+		var c2 := ConfigFile.new()
+		c2.load(engine.CONFIG_PATH)
+		c2.set_value("arranque", "pendiente_msaa", false)
+		c2.save(engine.CONFIG_PATH)
+	)
+
+func _set_msaa(on: bool) -> void:
+	msaa_on = on
+	msaa_fallback = false
+	var cfg := ConfigFile.new()
+	cfg.load(engine.CONFIG_PATH)
+	cfg.set_value("calidad", "msaa_3d", on)
+	cfg.save(engine.CONFIG_PATH)
+	if input_ctrl.is_3d_mode:
+		_msaa_enter_3d()
 
 ## Árboles, edificios y nombres del 3D: solo si algo cambió desde la última vez.
 func _rebuild_3d() -> void:
@@ -510,7 +696,7 @@ func _refresh_labels_3d() -> void:
 			if overlay.centroids.has(id):
 				var c: Dictionary = overlay.centroids[id]
 				var col: Color = r["color"]
-				out.append([(str(r["kind"]) + " DE " + str(r["name"])).to_upper(), _uv_to_3d(c["uv"], 0.6), "reino", col.darkened(0.35)])
+				out.append([(str(r["kind"]) + " DE " + str(r["name"])).to_upper(), _uv_to_3d(c["uv"], 1.1), "reino", col])
 	for p in engine.places:
 		var id: int = int(p["id"])
 		var pos: Vector3 = _place_label_pos.get(id, _uv_to_3d(p["uv"], 0.2))
@@ -796,6 +982,8 @@ func _refresh_biome_swatches() -> void:
 func _refresh_quality() -> void:
 	if btn_quality == null:
 		return
+	if lbl_msaa_note != null:
+		lbl_msaa_note.text = "La última vez el 3D con MSAA no respondió: se ha apagado. Puedes volver a probar." if msaa_fallback else "Bordes suaves en árboles, edificios y montañas del 3D."
 	_paint_filter(btn_quality, engine.hdr)
 	btn_quality.text = "ALTA PRECISIÓN · 16 BITS" if engine.hdr else "PRECISIÓN NORMAL · 8 BITS"
 	if engine.hdr_fallback:
@@ -965,7 +1153,16 @@ func _build_panel() -> void:
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scroll.offset_left = 3
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	# Barra de desplazamiento visible y gruesa (de tinta), por si se prefiere arrastrarla.
+	var bar: VScrollBar = scroll.get_v_scroll_bar()
+	bar.custom_minimum_size = Vector2(8, 0)
+	bar.add_theme_stylebox_override("scroll", Estilo.caja(Color(Estilo.TINTA, 0.06)))
+	bar.add_theme_stylebox_override("grabber", Estilo.caja(Color(Estilo.TINTA, 0.55)))
+	bar.add_theme_stylebox_override("grabber_highlight", Estilo.caja(Estilo.TINTA))
+	bar.add_theme_stylebox_override("grabber_pressed", Estilo.caja(Estilo.ACENTO))
 	panel.add_child(scroll)
+	panel_rect_node = panel
+	panel_scroll = scroll
 
 	var margin := MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1485,6 +1682,19 @@ func _build_section_mundo(col: Control) -> void:
 	)
 	q.add_child(btn_quality)
 	lbl_quality_note = _note(v, "")
+	var q2 := HFlowContainer.new()
+	v.add_child(q2)
+	var btn_msaa := Estilo.boton("", 11, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 9)
+	var refresh_msaa := func():
+		btn_msaa.text = "3D SIN DIENTES (MSAA 4×)" if msaa_on else "3D CON DIENTES (SIN MSAA)"
+		_paint_filter(btn_msaa, msaa_on)
+	btn_msaa.pressed.connect(func():
+		_set_msaa(not msaa_on)
+		refresh_msaa.call()
+	)
+	q2.add_child(btn_msaa)
+	refresh_msaa.call()
+	lbl_msaa_note = _note(v, "")
 
 func _build_brush(col: Control) -> void:
 	brush_box = VBoxContainer.new()
