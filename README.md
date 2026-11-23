@@ -2,6 +2,22 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.13.0
+
+- **Mundos infinitos.** Nuevo mundo → tamaño INFINITO. La app trabaja sobre una ventana de 4.096 px (con todos los
+  pinceles, el 2D y el 3D de siempre) que se mueve por un mundo sin bordes guardado en trozos de 1.024 px: cuando la
+  vista se acerca al borde, la ventana se recoloca sola (guarda los trozos que has tocado, trae los guardados y genera
+  los nuevos con las coordenadas del mundo, así que todo encaja). Continentes y océanos sin fin (siempre hay tierra
+  donde empiezas); con DIBUJAR A MANO, océano sin fin para dibujar costas donde quieras. Lugares, caminos y rutas se
+  quedan en su sitio del mundo. Sin marco y sin poder alejarse más de media ventana: nunca se ve dónde acaba. Solo se
+  guardan los trozos tocados (lo demás lo vuelve a hacer igual el generador); los trozos viajan con el mapa a la cuenta
+  y se copian al duplicarlo. Al recolocarse, el historial de deshacer empieza de nuevo.
+- **Interfaz como el resto de la familia (dirección C).** Cabecera negra con la fila pequeña (+ NUEVO MUNDO en el
+  acento, deshacer, rehacer, encuadrar · mapa · fecha) y el nombre en papel con el punto del acento; pestañas sobre
+  papel con la elegida en bloque del acento, su número en el acento y el filete de tinta debajo; Bricolage con tamaño
+  óptico 48 (como pide la familia); listas (biomas, mis mapas) en Fraunces, la serif de la familia, con raya fina y
+  barra del acento en la elegida; mesa y fondo del 3D en papel hondo en vez de casi negro.
+
 ## 0.12.3
 
 - **Arreglo: rayas rectas (surcos) en el relieve generado, en el móvil.** El ruido del terreno elegía el valor de cada

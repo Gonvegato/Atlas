@@ -176,8 +176,14 @@ func set_high_precision(on: bool) -> void:
 # ---------------------------------------------------------------- mundos
 
 ## mode: 0 = continente generado · 1 = océano vacío
-func create_world(size: Vector2i, seed: int, mode: int) -> void:
+func create_world(size: Vector2i, seed: int, mode: int, inf: bool = false) -> void:
 	world_ready = false
+	infinite = inf
+	if inf:
+		size = Vector2i(INF_WINDOW, INF_WINDOW)
+		world_origin = -size / 2
+	else:
+		world_origin = Vector2i.ZERO
 	map_size = Vector2i(clampi(size.x, 256, MAX_SIDE), clampi(size.y, 256, MAX_SIDE))
 	world_seed = seed
 	world_mode = mode
@@ -189,6 +195,7 @@ func create_world(size: Vector2i, seed: int, mode: int) -> void:
 	mat_init.set_shader_parameter("seed", float(seed))
 	mat_init.set_shader_parameter("mode", mode)
 	mat_init.set_shader_parameter("aspect_scale", Vector2(map_size) / short_side)
+	_init_window_params()
 	await height.fill(mat_init)
 	await biome.fill(null, Color.BLACK)
 	await realm.fill(null, Color.BLACK)
@@ -227,6 +234,8 @@ func create_world(size: Vector2i, seed: int, mode: int) -> void:
 ## Amplía el lienzo hacia un lado ("N", "S", "E", "O") en [frac] del tamaño actual. Lo nuevo es mar profundo.
 ## No se puede deshacer (el historial se vacía): cambian los tamaños de todo.
 func extend(dir: String, frac: float = 0.5) -> bool:
+	if infinite:
+		return false
 	var add := Vector2i.ZERO
 	var offset := Vector2i.ZERO
 	if dir == "N" or dir == "S":
@@ -551,6 +560,7 @@ func _entry_bytes(e: Dictionary) -> int:
 	return 256
 
 func _push(e: Dictionary) -> void:
+	_mark_dirty_entry(e)
 	undo_stack.append(e)
 	redo_stack.clear()
 	var total: int = 0
@@ -581,7 +591,26 @@ func redo() -> void:
 	await _apply(e, true)
 	_emit_history()
 
+## Mundo infinito: qué trozos de la ventana han cambiado (solo esos se escriben al moverse o guardar; los que no
+## se han tocado los vuelve a hacer igual el generador).
+var _dirty_chunks: Dictionary = {}
+
+func _mark_dirty_entry(e: Dictionary) -> void:
+	if not infinite:
+		return
+	if str(e.get("t", "")) == "paint":
+		var r: Rect2i = e["rect"]
+		var c0: Vector2i = (world_origin + r.position) / CHUNK
+		var c1: Vector2i = (world_origin + r.end - Vector2i.ONE) / CHUNK
+		for cy in range(mini(c0.y, c1.y), maxi(c0.y, c1.y) + 1):
+			for cx in range(mini(c0.x, c1.x), maxi(c0.x, c1.x) + 1):
+				_dirty_chunks[Vector2i(cx, cy)] = true
+	elif str(e.get("t", "")) == "multi":
+		for it in e["items"]:
+			_mark_dirty_entry(it)
+
 func _apply(e: Dictionary, forward: bool) -> void:
+	_mark_dirty_entry(e)
 	var t: String = e["t"]
 	if t == "paint":
 		var l: PaintLayer = _layer_by_name(e["layer"])
@@ -970,11 +999,23 @@ func save_map(extra: Dictionary = {}) -> void:
 	meta["hdr"] = height.mirror_format == Image.FORMAT_RH
 	meta["saved_at"] = Time.get_unix_time_from_system()
 	meta["extra"] = extra
+	meta["mode"] = world_mode
+	meta["infinite"] = infinite
+	meta["origin"] = world_origin
 	var layers: Array = [["relieve", height.mirror.duplicate()], ["biomas", biome.mirror.duplicate()], ["reinos", realm.mirror.duplicate()], ["regiones", area.mirror.duplicate()]]
 	var thumb: Image = _thumbnail()
+	var inf: bool = infinite
+	var origin: Vector2i = world_origin
+	var wsize: Vector2i = map_size
+	var dirty: Dictionary = _dirty_chunks.duplicate()
+	_dirty_chunks.clear()
 	var task := func() -> bool:
 		var ok: bool = true
-		for l in layers:
+		if inf and not dirty.is_empty():
+			# Mundo infinito: los trozos tocados de la ventana (el resto del mundo ya está en los suyos o lo hace el
+			# generador igual).
+			ok = _write_chunks(dir, [layers[0][1], layers[1][1], layers[2][1], layers[3][1]], origin, wsize, dirty)
+		for l in ([] if inf else layers):
 			var img: Image = l[1]
 			var f := FileAccess.open_compressed(dir + "/" + str(l[0]) + ".bin.tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
 			if f == null:
@@ -993,7 +1034,7 @@ func save_map(extra: Dictionary = {}) -> void:
 		thumb.save_png(dir + "/miniatura.png")
 		if ok:
 			# Se cambia de golpe al terminar: un cierre a medias nunca deja el mapa roto.
-			for n in ["relieve", "biomas", "reinos", "regiones", "mundo"]:
+			for n in (["mundo"] if inf else ["relieve", "biomas", "reinos", "regiones", "mundo"]):
 				DirAccess.rename_absolute(dir + "/" + n + ".bin.tmp", dir + "/" + n + ".bin")
 		return ok
 	var result: Array = [false]
@@ -1047,18 +1088,23 @@ func load_map(id: String) -> bool:
 	if typeof(meta) != TYPE_DICTIONARY:
 		return false
 	var m: Dictionary = meta
+	var inf: bool = bool(m.get("infinite", false))
 	var imgs: Array = []
-	var task := func():
-		for n in ["relieve", "biomas", "reinos", "regiones"]:
-			imgs.append(_read_layer(dir + "/" + n + ".bin"))
-	var tid: int = WorkerThreadPool.add_task(task)
-	while not WorkerThreadPool.is_task_completed(tid):
-		await get_tree().process_frame
-	WorkerThreadPool.wait_for_task_completion(tid)
-	for im in imgs:
-		if im == null:
-			return false
+	if not inf:
+		var task := func():
+			for n in ["relieve", "biomas", "reinos", "regiones"]:
+				imgs.append(_read_layer(dir + "/" + n + ".bin"))
+		var tid: int = WorkerThreadPool.add_task(task)
+		while not WorkerThreadPool.is_task_completed(tid):
+			await get_tree().process_frame
+		WorkerThreadPool.wait_for_task_completion(tid)
+		for im in imgs:
+			if im == null:
+				return false
 	world_ready = false
+	infinite = inf
+	world_origin = m.get("origin", Vector2i.ZERO)
+	world_mode = int(m.get("mode", 0))
 	map_size = m["size"]
 	map_id = id
 	map_name = str(m.get("name", "Mi mundo"))
@@ -1071,7 +1117,10 @@ func load_map(id: String) -> bool:
 	for i in 4:
 		var l: PaintLayer = layers[i]
 		l.setup(map_size, hdr if i == 0 else false)
-		await l.load_image(imgs[i])
+		if not inf:
+			await l.load_image(imgs[i])
+	if inf:
+		await _compose_window(dir, [], Vector2i.ZERO, {})
 	undo_stack.clear()
 	redo_stack.clear()
 	_set_meta(m)
@@ -1108,7 +1157,7 @@ static func list_maps() -> Array:
 			continue
 		var m: Dictionary = meta
 		out.append({"id": id, "name": str(m.get("name", id)), "size": m.get("size", Vector2i.ZERO), "saved_at": float(m.get("saved_at", 0.0)),
-			"obra": str(m.get("obra", "")), "obra_t": str(m.get("obra_t", ""))})
+			"obra": str(m.get("obra", "")), "obra_t": str(m.get("obra_t", "")), "infinite": bool(m.get("infinite", false))})
 	out.sort_custom(func(a, b): return float(a["saved_at"]) > float(b["saved_at"]))
 	return out
 
@@ -1123,9 +1172,174 @@ static func delete_map_files(id: String) -> void:
 
 ## Copia del mapa abierto con otro id y nombre (y pasa a ser el abierto).
 func duplicate_map(new_name: String, extra: Dictionary) -> void:
+	var old_dir: String = MAPS_DIR + "/" + map_id
 	map_id = _new_map_id()
 	map_name = new_name
+	if infinite:
+		# Los trozos de fuera de la ventana también.
+		var new_dir: String = MAPS_DIR + "/" + map_id
+		DirAccess.make_dir_recursive_absolute(new_dir)
+		for f in DirAccess.get_files_at(old_dir):
+			if f.begins_with("trozo_"):
+				DirAccess.copy_absolute(old_dir + "/" + f, new_dir + "/" + f)
 	await save_map(extra)
+
+# ---------------------------------------------------------------- mundo infinito
+#
+# Un mundo infinito es una ventana de INF_WINDOW px (la capa de siempre, con todos sus pinceles, el 2D y el 3D) sobre
+# un mundo sin bordes guardado en trozos de CHUNK px (un archivo por trozo y capa en la carpeta del mapa). Al
+# acercarse al borde, la ventana se recoloca: escribe sus trozos, se desplaza trozos enteros y compone la nueva con lo
+# que ya tenía, los trozos guardados y, donde no hay nada, el generador con las coordenadas del mundo. Lugares,
+# caminos y rutas se guardan en uv de la ventana y se desplazan con ella.
+
+const CHUNK := 1024
+const INF_WINDOW := 4096
+const LAYER_FILES := ["relieve", "biomas", "reinos", "regiones"]
+var infinite: bool = false
+## Píxel del mundo de la esquina de arriba a la izquierda de la ventana (múltiplo de CHUNK).
+var world_origin: Vector2i = Vector2i.ZERO
+signal window_moved(shift_px: Vector2i)
+
+static func _chunk_file(dir: String, li: int, c: Vector2i) -> String:
+	return "%s/trozo_%s_%d_%d.bin" % [dir, LAYER_FILES[li], c.x, c.y]
+
+func _init_window_params() -> void:
+	mat_init.set_shader_parameter("infinite", infinite)
+	mat_init.set_shader_parameter("world_origin", Vector2(world_origin))
+	mat_init.set_shader_parameter("window_size", Vector2(map_size))
+
+## Escribe los trozos de la ventana. Las capas de identificadores vacías no se guardan (y se borra su archivo si
+## lo había). Seguro en otro hilo (trabaja con copias).
+static func _write_chunks(dir: String, imgs: Array, origin: Vector2i, wsize: Vector2i, only: Dictionary = {}) -> bool:
+	var ok: bool = true
+	var n: Vector2i = wsize / CHUNK
+	var oc: Vector2i = Vector2i(floori(float(origin.x) / CHUNK), floori(float(origin.y) / CHUNK))
+	for li in 4:
+		var img: Image = imgs[li]
+		for cy in n.y:
+			for cx in n.x:
+				if not only.is_empty() and not only.has(oc + Vector2i(cx, cy)):
+					continue
+				var reg: Image = img.get_region(Rect2i(cx * CHUNK, cy * CHUNK, CHUNK, CHUNK))
+				var path: String = _chunk_file(dir, li, oc + Vector2i(cx, cy))
+				var data: PackedByteArray = reg.get_data()
+				if li > 0 and data.count(0) == data.size():
+					if FileAccess.file_exists(path):
+						DirAccess.remove_absolute(path)
+					continue
+				var f := FileAccess.open_compressed(path + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
+				if f == null:
+					ok = false
+					continue
+				f.store_32(reg.get_width())
+				f.store_32(reg.get_height())
+				f.store_32(reg.get_format())
+				f.store_buffer(data)
+				f.close()
+				DirAccess.rename_absolute(path + ".tmp", path)
+	return ok
+
+## Compone la ventana en world_origin: el generador (con las coordenadas del mundo), encima lo que se conserva de la
+## ventana anterior ([keep] desplazado [keep_offset]) y los trozos guardados que no estaban en ella.
+func _compose_window(dir: String, keep: Array, keep_offset: Vector2i, keep_chunks: Dictionary) -> void:
+	var short_side: float = float(mini(map_size.x, map_size.y))
+	mat_init.set_shader_parameter("seed", float(world_seed))
+	mat_init.set_shader_parameter("mode", world_mode)
+	mat_init.set_shader_parameter("aspect_scale", Vector2(map_size) / short_side)
+	_init_window_params()
+	await height.fill(mat_init)
+	var gen: Image = await height.read_region(Rect2i(Vector2i.ZERO, map_size))
+	var layers: Array[PaintLayer] = [height, biome, realm, area]
+	var imgs: Array = [gen]
+	for li in range(1, 4):
+		var im := Image.create(map_size.x, map_size.y, false, layers[li].mirror_format)
+		im.fill(Color.BLACK)
+		imgs.append(im)
+	if not keep.is_empty():
+		for li in 4:
+			var k: Image = keep[li]
+			if k.get_format() != (imgs[li] as Image).get_format():
+				k.convert((imgs[li] as Image).get_format())
+			(imgs[li] as Image).blit_rect(k, Rect2i(Vector2i.ZERO, k.get_size()), keep_offset)
+	var n: Vector2i = map_size / CHUNK
+	var oc: Vector2i = world_origin / CHUNK
+	var loaded: Array = []
+	var task := func():
+		for cy in n.y:
+			for cx in n.x:
+				var wc: Vector2i = oc + Vector2i(cx, cy)
+				if keep_chunks.has(wc):
+					continue
+				for li in 4:
+					var path: String = _chunk_file(dir, li, wc)
+					if FileAccess.file_exists(path):
+						var ci: Image = _read_layer(path)
+						if ci != null:
+							loaded.append([li, Vector2i(cx, cy), ci])
+	var tid: int = WorkerThreadPool.add_task(task)
+	while not WorkerThreadPool.is_task_completed(tid):
+		await get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(tid)
+	for e in loaded:
+		var li: int = e[0]
+		var cpos: Vector2i = e[1]
+		var ci: Image = e[2]
+		if ci.get_format() != (imgs[li] as Image).get_format():
+			ci.convert((imgs[li] as Image).get_format())
+		(imgs[li] as Image).blit_rect(ci, Rect2i(Vector2i.ZERO, ci.get_size()), cpos * CHUNK)
+	for li in 4:
+		await layers[li].load_image(imgs[li])
+
+## Desplaza la ventana [dc] trozos (con signo). El historial de deshacer empieza de nuevo.
+func recenter(dc: Vector2i) -> void:
+	if not infinite or dc == Vector2i.ZERO or not world_ready:
+		return
+	world_ready = false
+	var dir: String = MAPS_DIR + "/" + map_id
+	DirAccess.make_dir_recursive_absolute(dir)
+	var old: Array = [height.mirror.duplicate(), biome.mirror.duplicate(), realm.mirror.duplicate(), area.mirror.duplicate()]
+	var origin: Vector2i = world_origin
+	var wsize: Vector2i = map_size
+	var dirty: Dictionary = _dirty_chunks.duplicate()
+	_dirty_chunks.clear()
+	if not dirty.is_empty():
+		var tid: int = WorkerThreadPool.add_task(func(): _write_chunks(dir, old, origin, wsize, dirty))
+		while not WorkerThreadPool.is_task_completed(tid):
+			await get_tree().process_frame
+		WorkerThreadPool.wait_for_task_completion(tid)
+	var shift_px: Vector2i = dc * CHUNK
+	var old_oc: Vector2i = world_origin / CHUNK
+	var n: Vector2i = map_size / CHUNK
+	world_origin += shift_px
+	var keep_chunks: Dictionary = {}
+	var new_oc: Vector2i = world_origin / CHUNK
+	for cy in n.y:
+		for cx in n.x:
+			var wc: Vector2i = new_oc + Vector2i(cx, cy)
+			if wc.x >= old_oc.x and wc.y >= old_oc.y and wc.x < old_oc.x + n.x and wc.y < old_oc.y + n.y:
+				keep_chunks[wc] = true
+	await _compose_window(dir, old, -shift_px, keep_chunks)
+	var d: Vector2 = Vector2(shift_px) / Vector2(map_size)
+	for p in places:
+		p["uv"] = Vector2(p["uv"]) - d
+	for r in routes + roads:
+		var pts: Array = r["points"]
+		for i in pts.size():
+			pts[i] = Vector2(pts[i]) - d
+	_road_grid_dirty = true
+	undo_stack.clear()
+	redo_stack.clear()
+	world_ready = true
+	_emit_history()
+	places_changed.emit()
+	roads_changed.emit()
+	realms_changed.emit()
+	_compute_stats()
+	_compute_centroids()
+	_compute_area_shapes()
+	layer_changed.emit("height")
+	layer_changed.emit("biome")
+	window_moved.emit(shift_px)
 
 # ---------------------------------------------------------------- regiones con nombre
 

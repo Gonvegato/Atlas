@@ -44,7 +44,8 @@ const TOOLS = [
 	["plateau", "MESETA", "Aplana a la altura del punto donde empiezas el trazo."],
 ]
 
-const SIZES = [["PEQUEÑO", 1024], ["MEDIANO", 2048], ["GRANDE", 3072], ["ENORME", 4096], ["GIGANTE", 6144], ["COLOSAL", 8192]]
+## 0 = infinito (una ventana de 4.096 px que se mueve por un mundo sin bordes guardado en trozos).
+const SIZES = [["PEQUEÑO", 1024], ["MEDIANO", 2048], ["GRANDE", 3072], ["ENORME", 4096], ["GIGANTE", 6144], ["COLOSAL", 8192], ["INFINITO", 0]]
 const SHAPES = [["CUADRADO", Vector2(1, 1)], ["3:2", Vector2(3, 2)], ["APAISADO 2:1", Vector2(2, 1)], ["VERTICAL 2:3", Vector2(2, 3)]]
 
 const THEMES = [
@@ -504,6 +505,9 @@ func _on_layers_ready(size: Vector2i) -> void:
 		m.set_shader_parameter("biome_tex", engine.biome.get_texture())
 		m.set_shader_parameter("realm_tex", engine.realm.get_texture())
 	mat_2d.set_shader_parameter("area_tex", engine.area.get_texture())
+	if map_frame != null:
+		# En un mundo infinito no hay marco: el mapa no acaba.
+		map_frame.visible = not engine.infinite
 	_apply_blend()
 	_world3d_dirty = true
 	_places3d_dirty = true
@@ -556,6 +560,11 @@ func _connect_signals() -> void:
 	autosave_timer.wait_time = 4.0
 	autosave_timer.timeout.connect(_do_save)
 	add_child(autosave_timer)
+	_recenter_timer = Timer.new()
+	_recenter_timer.one_shot = true
+	_recenter_timer.wait_time = 0.35
+	_recenter_timer.timeout.connect(_try_recenter)
+	add_child(_recenter_timer)
 	engine.dirty_changed.connect(_schedule_save)
 	engine.saved.connect(_on_saved)
 	engine.map_loaded.connect(_on_map_loaded)
@@ -900,11 +909,38 @@ func _center_map() -> void:
 	map_canvas.size = Vector2(w, h)
 	map_zoom = 1.0
 	map_offset = (ws_size - map_canvas.size) * 0.5
+	if engine.infinite:
+		# Centrado en el medio de la ventana, con el zoom mínimo del mundo infinito.
+		map_zoom = 0.0001
+		map_offset = (ws_size - map_canvas.size * map_zoom) * 0.5
 	_apply_2d_transform()
+	if engine.infinite:
+		map_offset = (ws_size - map_canvas.size * map_zoom) * 0.5
+		_apply_2d_transform()
+
+## Mundo infinito: no se puede alejar tanto como para ver más de media ventana, ni salir de ella (la ventana se
+## recoloca antes de llegar al borde, así que nunca se ve dónde acaba).
+func _clamp_infinite_view() -> void:
+	var ws: Vector2 = view_2d_root.size
+	if ws.x <= 0.0 or map_canvas.size.x <= 0.0:
+		return
+	var fill: float = maxf(ws.x / map_canvas.size.x, ws.y / map_canvas.size.y)
+	var min_zoom: float = fill * 2.0
+	if map_zoom < min_zoom:
+		var c: Vector2 = ws * 0.5
+		map_offset = c - (c - map_offset) * (min_zoom / map_zoom)
+		map_zoom = min_zoom
+	var cs: Vector2 = map_canvas.size * map_zoom
+	map_offset.x = clampf(map_offset.x, ws.x - cs.x, 0.0)
+	map_offset.y = clampf(map_offset.y, ws.y - cs.y, 0.0)
 
 func _apply_2d_transform() -> void:
+	if engine != null and engine.infinite:
+		_clamp_infinite_view()
 	map_canvas.scale = Vector2.ONE * map_zoom
 	map_canvas.position = map_offset
+	if engine != null and engine.infinite and _recenter_timer != null:
+		_recenter_timer.start()
 	overlay.set_view(map_offset, map_canvas.size * map_zoom, map_zoom)
 	# Celdas de los árboles: entre ~6 y ~12 px de pantalla, en potencias de 2 de píxeles del mapa (más árboles al acercarse).
 	if map_canvas.size.x > 0.0 and mat_2d != null:
@@ -913,6 +949,37 @@ func _apply_2d_transform() -> void:
 		cell = clampf(cell, 4.0, 64.0)
 		mat_2d.set_shader_parameter("tree_cell", cell)
 		mat_2d.set_shader_parameter("symbol_cell", clampf(cell * 1.6, 8.0, 96.0))
+
+var _recenter_timer: Timer
+var map_frame: Panel
+var _told_infinite: bool = false
+
+## Mundo infinito: si el centro de la vista se acerca al borde de la ventana, la ventana se recoloca (trozos
+## enteros) y la vista se queda donde estaba.
+func _try_recenter() -> void:
+	if not engine.infinite or not engine.world_ready or input_ctrl.is_3d_mode or _stroke_kind != "":
+		return
+	var ws: Vector2 = map_canvas.get_parent().size
+	var scale_px: float = map_canvas.size.x * map_zoom / float(engine.map_size.x)
+	if scale_px <= 0.0:
+		return
+	var center_px: Vector2 = (ws * 0.5 - map_offset) / scale_px
+	var w := Vector2(engine.map_size)
+	var dc := Vector2i.ZERO
+	if center_px.x < w.x * 0.3 or center_px.x > w.x * 0.7:
+		dc.x = int(round((center_px.x - w.x * 0.5) / float(engine.CHUNK)))
+	if center_px.y < w.y * 0.3 or center_px.y > w.y * 0.7:
+		dc.y = int(round((center_px.y - w.y * 0.5) / float(engine.CHUNK)))
+	if dc == Vector2i.ZERO:
+		return
+	lbl_save_state.text = "CARGANDO EL MUNDO…"
+	await engine.recenter(dc)
+	map_offset += Vector2(dc * engine.CHUNK) * scale_px
+	_apply_2d_transform()
+	if not _told_infinite:
+		_told_infinite = true
+		_toast("El mundo sigue: se ha cargado lo de ese lado. (Al moverte así, DESHACER empieza de nuevo.)")
+	_schedule_save()
 
 func _update_3d_camera() -> void:
 	cam_pivot.rotation = Vector3(pitch, yaw, 0.0)
@@ -1139,6 +1206,9 @@ func _cardinal(deg: float) -> String:
 ## Un mundo nuevo con el tamaño y la forma elegidos en Mundo (o los actuales).
 func _new_world() -> void:
 	var long_side: int = SIZES[new_size_idx][1]
+	var inf: bool = long_side == 0
+	if inf:
+		long_side = 4096
 	var shape: Vector2 = SHAPES[new_shape_idx][1]
 	var size := Vector2i(long_side, long_side)
 	if shape.x > shape.y:
@@ -1150,14 +1220,16 @@ func _new_world() -> void:
 	current_realm = -1
 	route_pts.clear()
 	await engine.save_map(_view_extra())
-	await engine.create_world(size, s, 1 if new_mode == 2 else new_mode)
+	await engine.create_world(size, s, 1 if new_mode == 2 else new_mode, inf)
 	if new_obra != "":
 		_set_obra(new_obra, false)
 	map_name_edit.text = engine.map_name
 	_refresh_route()
+	if inf:
+		_toast("Mundo infinito: muévete en cualquier dirección y el mundo sigue. Lo que dibujes se guarda por trozos.")
 	if new_mode == 2:
 		# Lienzo en blanco (mar) para dibujar el mundo a mano: tierra por contorno y lienzo que crece.
-		grow_canvas = true
+		grow_canvas = not inf
 		_select_section("relieve")
 		_select_tool("land")
 		_set_draw_mode("contorno")
@@ -1738,6 +1810,7 @@ func _build_map_frame() -> void:
 	frame.offset_bottom = MAP_MAT
 	frame.add_theme_stylebox_override("panel", Estilo.caja(Estilo.PAPEL, Estilo.TINTA, 3))
 	map_canvas.add_child(frame)
+	map_frame = frame
 
 # ---------------------------------------------------------------- panel
 
@@ -2780,7 +2853,8 @@ func _refresh_maps_list() -> void:
 		line.add_theme_constant_override("separation", 6)
 		maps_list.add_child(line)
 		var nov: String = str(m.get("obra_t", ""))
-		var txt: String = "%s%s · %s px · %02d.%02d.%02d" % [str(m["name"]), (" · " + nov) if nov != "" else "", Estilo.miles(maxi(sz.x, sz.y)), d["day"], d["month"], int(d["year"]) % 100]
+		var size_txt: String = "infinito" if bool(m.get("infinite", false)) else (Estilo.miles(maxi(sz.x, sz.y)) + " px")
+		var txt: String = "%s%s · %s · %02d.%02d.%02d" % [str(m["name"]), (" · " + nov) if nov != "" else "", size_txt, d["day"], d["month"], int(d["year"]) % 100]
 		var b := Estilo.boton(txt, 15, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 10, 8)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2852,7 +2926,7 @@ func _build_section_mundo(col: Control) -> void:
 	v.add_child(Estilo.etiqueta("TAMAÑO (LADO MAYOR)", 11, Estilo.GRIS))
 	var size_labels: Array = []
 	for s in SIZES:
-		size_labels.append("%s · %s" % [s[0], Estilo.miles(s[1])])
+		size_labels.append(("%s · %s" % [s[0], Estilo.miles(s[1])]) if int(s[1]) > 0 else "INFINITO · SIN BORDES")
 	size_chips = _chips(v, size_labels, func(i: int):
 		new_size_idx = i
 		for k in size_chips.size():
