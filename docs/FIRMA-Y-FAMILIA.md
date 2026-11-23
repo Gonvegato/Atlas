@@ -8,7 +8,7 @@ secreto de GitHub no la puede sacar nadie. Por eso el reparto es este:
 1. Cada vez que algo entra en `main`, ATLAS compila su APK (versión final, firmada con una clave provisional) y lo
    publica en una dirección fija:
    - `https://github.com/Gonvegato/Atlas/releases/latest/download/ATLAS.apk`
-   - `https://github.com/Gonvegato/Atlas/releases/latest/download/ATLAS.json` (`{"version", "code", "sha"}`)
+   - `https://github.com/Gonvegato/Atlas/releases/latest/download/ATLAS.json` (`version`, `code`, `sha` = el commit, `apk_sha256` = la huella del APK)
 2. Familia-Revista (que sí tiene la clave) lo descarga, lo vuelve a firmar con `familia.keystore` (alias `familia`,
    sin linaje) y lo sube a Drive con las demás apps. Comprobado con apksigner: el APK de Godot se deja volver a firmar
    y queda con un único firmante, el nuevo.
