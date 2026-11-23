@@ -205,6 +205,8 @@ func _setup_materials() -> void:
 	mat_3d = ShaderMaterial.new()
 	mat_3d.shader = load("res://shaders/terrain_3d.gdshader")
 	mat_3d.set_shader_parameter("biome_pal", biome_pal_tex)
+	mat_3d.set_shader_parameter("biome_data", biome_pal_tex)
+	mat_3d.set_shader_parameter("ground_tex", load("res://assets/terrain/suelos.png"))
 	terrain_mesh.material_override = mat_3d
 	_rebuild_realm_palette()
 
@@ -220,10 +222,11 @@ func _on_layers_ready(size: Vector2i) -> void:
 	var world := Vector2(size) / long_side * 12.0
 	var plane := PlaneMesh.new()
 	plane.size = world
-	plane.subdivide_width = int(round(220.0 * world.x / 12.0))
-	plane.subdivide_depth = int(round(220.0 * world.y / 12.0))
+	plane.subdivide_width = int(round(300.0 * world.x / 12.0))
+	plane.subdivide_depth = int(round(300.0 * world.y / 12.0))
 	terrain_mesh.mesh = plane
 	mat_3d.set_shader_parameter("terrain_size", world)
+	mat_3d.set_shader_parameter("vertex_step", 1.0 / 300.0)
 	lbl_map_px.text = "%s × %s PX" % [Estilo.miles(size.x), Estilo.miles(size.y)]
 	lbl_world.text = "MUNDO Nº %04d · %s" % [engine.world_seed, Estilo.fecha_corta()]
 	_center_map()
@@ -534,11 +537,10 @@ func _apply_theme(idx: int) -> void:
 	for k in [["col_deep_sea", "deep"], ["col_shallow_sea", "shallow"], ["col_land_low", "low"], ["col_land_mid", "mid"], ["col_snow", "snow"], ["biome_tint", "tint"]]:
 		var c: Color = t[k[1]]
 		mat_2d.set_shader_parameter(k[0], c)
-		mat_3d.set_shader_parameter(k[0], c)
 	for k in [["biome_desat", "desat"], ["biome_tint_amt", "tint_amt"]]:
 		var v: float = t[k[1]]
 		mat_2d.set_shader_parameter(k[0], v)
-		mat_3d.set_shader_parameter(k[0], v)
+	_apply_3d_palette()
 	var high: Color = t["high"]
 	var ink: Color = t["ink"]
 	mat_2d.set_shader_parameter("col_land_high", high)
@@ -551,6 +553,18 @@ func _apply_theme(idx: int) -> void:
 	_world3d_dirty = true
 	if input_ctrl.is_3d_mode:
 		_rebuild_3d.call_deferred()
+
+## El 3D va siempre con la paleta de fantasía (colores vivos, como los árboles y los edificios), sea cual sea el
+## estilo del mapa 2D: agua turquesa y azul hondo, hierba verde viva y los colores puros de los biomas.
+func _apply_3d_palette() -> void:
+	mat_3d.set_shader_parameter("col_shallow_sea", Color(0.18, 0.62, 0.74))
+	mat_3d.set_shader_parameter("col_deep_sea", Color(0.05, 0.20, 0.42))
+	mat_3d.set_shader_parameter("col_land_low", Color(0.30, 0.64, 0.30))
+	mat_3d.set_shader_parameter("col_land_mid", Color(0.44, 0.60, 0.32))
+	mat_3d.set_shader_parameter("col_snow", Color(0.97, 0.98, 1.0))
+	mat_3d.set_shader_parameter("biome_tint", Color(1, 1, 1))
+	mat_3d.set_shader_parameter("biome_desat", 0.0)
+	mat_3d.set_shader_parameter("biome_tint_amt", 0.0)
 
 ## El color de un bioma tal y como lo pinta el estilo elegido (la misma cuenta que el shader).
 func _styled_biome_color(c: Color) -> Color:
@@ -809,7 +823,7 @@ func _build_ui() -> void:
 	view_2d_root.add_child(overlay)
 
 	vegetation = Vegetacion3D.new()
-	vegetation.style_color = _styled_biome_color
+	# Hojas con los colores puros del bioma (paleta de fantasía), como el suelo 3D.
 	subviewport_3d.add_child(vegetation)
 	places3d = Lugares3D.new()
 	subviewport_3d.add_child(places3d)
@@ -1089,7 +1103,16 @@ func _build_relief_3d(col: Control) -> void:
 	, 11)
 	for k in density_chips.size():
 		_paint_filter(density_chips[k], k == 2)
-	_note(relief, "Modelos CC0 de Kenney, KayKit (Kay Lousberg) y Quaternius. Si el 3D va a tirones, baja a «Pocos».")
+	relief.add_child(Estilo.etiqueta("SUELO", 11, Estilo.GRIS))
+	var ground_chips: Array[Button] = []
+	ground_chips = _chips(relief, ["TEXTURAS", "LISO"], func(i: int):
+		mat_3d.set_shader_parameter("use_ground", i == 0)
+		for k in ground_chips.size():
+			_paint_filter(ground_chips[k], k == i)
+	, 11)
+	_paint_filter(ground_chips[0], true)
+	_paint_filter(ground_chips[1], false)
+	_note(relief, "Modelos CC0 de Kenney, KayKit (Kay Lousberg) y Quaternius; suelos CC0 de Poly Haven. Si el 3D va a tirones, baja a «Pocos» o pon el suelo liso.")
 	relief.add_child(Estilo.filete(2))
 
 func _build_section_relieve(col: Control) -> void:

@@ -62,6 +62,57 @@ const BIOMAS = [
 	["BOSQUE MIXTO", Color(0.32, 0.52, 0.32), SIMB_MIXTO, 0.96, 1.05, Color(0.24, 0.42, 0.34), 0.6],
 ]
 
+## Suelos del relieve 3D: capas de assets/terrain/suelos.png (texturas CC0 de Poly Haven, en este orden).
+const SUELO_HIERBA_2 := 0
+const SUELO_SECO := 1
+const SUELO_HOJAS := 2
+const SUELO_AGUJAS := 3
+const SUELO_HOJARASCA := 4
+const SUELO_ARENA := 5
+const SUELO_ROCA_MUSGO := 6
+const SUELO_NIEVE := 7
+const SUELO_BARRO := 8
+const SUELO_ROJO := 9
+const SUELO_AGRIETADO := 10
+const SUELO_QUEMADO := 11
+const SUELO_LABRADO := 12
+const SUELO_HIERBA := 13
+const SUELO_GRAVA := 14
+const SUELO_ROCA := 15
+
+## Bioma → [suelo, segundo suelo, cuánto del segundo (se mezcla con ruido)].
+const SUELO_BIOMA = {
+	"PRADERA": [SUELO_HIERBA, SUELO_HIERBA_2, 0.4],
+	"BOSQUE": [SUELO_HOJAS, SUELO_HIERBA, 0.35],
+	"BOSQUE VIEJO": [SUELO_ROCA_MUSGO, SUELO_HOJAS, 0.5],
+	"TAIGA": [SUELO_AGUJAS, SUELO_HOJAS, 0.3],
+	"SELVA": [SUELO_HIERBA, SUELO_ROCA_MUSGO, 0.45],
+	"SABANA": [SUELO_SECO, SUELO_HIERBA, 0.3],
+	"ESTEPA": [SUELO_SECO, SUELO_GRAVA, 0.35],
+	"DESIERTO": [SUELO_ARENA, SUELO_ARENA, 0.0],
+	"DESIERTO DE ROCA": [SUELO_GRAVA, SUELO_ROCA, 0.35],
+	"TIERRAS ROJAS": [SUELO_ROJO, SUELO_GRAVA, 0.2],
+	"TUNDRA": [SUELO_ROCA_MUSGO, SUELO_NIEVE, 0.3],
+	"GLACIAR": [SUELO_NIEVE, SUELO_NIEVE, 0.0],
+	"PANTANO": [SUELO_BARRO, SUELO_HIERBA, 0.3],
+	"MANGLAR": [SUELO_BARRO, SUELO_ROCA_MUSGO, 0.35],
+	"BREZAL": [SUELO_SECO, SUELO_ROCA_MUSGO, 0.35],
+	"MONTE BAJO": [SUELO_HIERBA_2, SUELO_SECO, 0.4],
+	"CULTIVOS": [SUELO_LABRADO, SUELO_HIERBA, 0.35],
+	"VOLCÁNICO": [SUELO_QUEMADO, SUELO_ROCA, 0.25],
+	"SALAR": [SUELO_AGRIETADO, SUELO_AGRIETADO, 0.0],
+	"BOSQUE EN FLOR": [SUELO_HIERBA, SUELO_HOJAS, 0.4],
+	"BOSQUE ENCANTADO": [SUELO_ROCA_MUSGO, SUELO_HOJARASCA, 0.45],
+	"BOSQUE DE CRISTAL": [SUELO_ROCA, SUELO_NIEVE, 0.3],
+	"BOSQUE DE HONGOS": [SUELO_BARRO, SUELO_ROCA_MUSGO, 0.4],
+	"BOSQUE MUERTO": [SUELO_GRAVA, SUELO_QUEMADO, 0.35],
+	"TIERRAS MALDITAS": [SUELO_QUEMADO, SUELO_ROJO, 0.35],
+	"BOSQUE OTOÑAL": [SUELO_HOJARASCA, SUELO_HOJAS, 0.4],
+	"BOSQUE DE ABEDULES": [SUELO_HIERBA, SUELO_HOJAS, 0.4],
+	"PALMERAL": [SUELO_ARENA, SUELO_HIERBA, 0.3],
+	"BOSQUE MIXTO": [SUELO_HOJAS, SUELO_AGUJAS, 0.4],
+}
+
 const TIPOS_REINO = ["REINO", "IMPERIO", "REPÚBLICA", "DUCADO", "CONDADO", "PRINCIPADO", "CALIFATO", "TEOCRACIA", "CLANES", "LIGA", "TRIBUS", "MARCA"]
 
 ## Colores heráldicos (esmaltes y algunos más), para los reinos.
@@ -123,12 +174,13 @@ static func tipo_lugar(id: String) -> Array:
 			return t
 	return TIPOS_LUGAR[1]
 
-## La paleta de biomas como textura (N+1 × 3, filtro nearest en el shader): fila 0 el color; fila 1 el símbolo
-## (r = símbolo / 255), la densidad (g), la variación (b) y el tamaño (a = tamaño / 2); fila 2 el segundo color.
+## La paleta de biomas como textura (N+1 × 4, filtro nearest en el shader): fila 0 el color; fila 1 el símbolo
+## (r = símbolo / 255), la densidad (g), la variación (b) y el tamaño (a = tamaño / 2); fila 2 el segundo color;
+## fila 3 el suelo del 3D (r = capa / 255, g = segunda capa / 255, b = cuánto de la segunda; a = 1 si tiene suelo).
 static func textura_biomas() -> ImageTexture:
 	var n: int = BIOMAS.size() + 1
-	var img := Image.create(n, 3, false, Image.FORMAT_RGBA8)
-	for y in 3:
+	var img := Image.create(n, 4, false, Image.FORMAT_RGBA8)
+	for y in 4:
 		img.set_pixel(0, y, Color(0, 0, 0, 0))
 	for i in BIOMAS.size():
 		var b: Array = BIOMAS[i]
@@ -141,4 +193,6 @@ static func textura_biomas() -> ImageTexture:
 		img.set_pixel(i + 1, 0, c)
 		img.set_pixel(i + 1, 1, Color(float(simb) / 255.0, dens, var_amt, size / 2.0))
 		img.set_pixel(i + 1, 2, c2)
+		var suelo: Array = SUELO_BIOMA.get(b[0], [SUELO_HIERBA, SUELO_HIERBA_2, 0.3])
+		img.set_pixel(i + 1, 3, Color(float(suelo[0]) / 255.0, float(suelo[1]) / 255.0, float(suelo[2]), 1.0))
 	return ImageTexture.create_from_image(img)

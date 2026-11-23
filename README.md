@@ -2,6 +2,25 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.6.0
+
+- **Suelos con textura en el 3D**: 16 texturas CC0 de [Poly Haven](https://polyhaven.com) en un `Texture2DArray` (comprimido
+  en GPU: ETC2 en Android), en `assets/terrain/`:
+  - hierba, hierba seca, hojarasca, agujas de pino, suelo de bosque, arena, roca con musgo, nieve, barro, tierra roja, salar
+    agrietado, suelo volcánico, tierra de labor, grava y roca.
+  - Cada bioma tiene su suelo y un segundo que se mezcla con ruido; arena en las orillas y lindes irregulares entre biomas.
+  - Cada textura se muestrea a dos escalas para que no se note la repetición.
+  - Selector «Suelo: texturas / liso» en el panel 3D, por si el móvil no da para más.
+- **Fantasía en el 3D**, siempre con colores vivos aunque el 2D vaya en Editorial o Pergamino: agua turquesa y azul hondo, hierba
+  verde, más saturación y contraste en el suelo y las hojas con los colores puros del bioma.
+- **Montañas low-poly**, como los modelos:
+  - Sombreado por caras (sin las vetas de antes).
+  - Altura suavizada en el vértice para que las crestas no tiemblen; malla de 300 divisiones.
+  - Roca cálida con paredes más oscuras y casquetes de nieve de borde nítido.
+- **Nombres en 3D sin amontonarse**: prioridad (capitales, reinos, regiones, lugares) y fuera los que se solapan. De lejos se ven
+  los importantes y al acercarte, todos.
+
+
 ## 0.5.0
 
 - **Nombres con placa detrás**, en el estilo de la familia (rectángulos duros, papel y tinta):

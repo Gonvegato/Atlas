@@ -25,7 +25,13 @@ func _ready() -> void:
 func _draw() -> void:
 	if camera == null or not is_visible_in_tree():
 		return
-	for l in labels:
+	# Prioridad (capitales, reinos, regiones, lugares) y sin solapes: lo que choca con algo ya pintado no se pinta.
+	# De lejos quedan los importantes; al acercarte hay sitio para todos.
+	var order: Array = labels.duplicate()
+	var prio := {"capital": 0, "reino": 1, "region": 2, "agua": 2, "lugar": 3}
+	order.sort_custom(func(a, b): return int(prio.get(a[2], 3)) < int(prio.get(b[2], 3)))
+	var taken: Array[Rect2] = []
+	for l in order:
 		var txt: String = l[0]
 		var pos: Vector3 = l[1]
 		var kind: String = l[2]
@@ -54,6 +60,16 @@ func _draw() -> void:
 				col = water_ink
 		var tw: float = f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		var at: Vector2 = sp + Vector2(-tw * 0.5, 0.0)
+		var top_y: float = -22.0 if (kind == "lugar" or kind == "capital") else 0.0
+		var box := Rect2(sp + Vector2(-tw * 0.5 - 8.0, top_y - fs - 8.0), Vector2(tw + 16.0, fs + 14.0))
+		var clash: bool = false
+		for r in taken:
+			if r.intersects(box):
+				clash = true
+				break
+		if clash:
+			continue
+		taken.append(box)
 		match kind:
 			"capital", "lugar":
 				# Línea guía desde el sitio hasta la placa, que flota un poco por encima.
