@@ -6,6 +6,11 @@ shader_type canvas_item;
 uniform sampler2D height_tex : filter_linear, repeat_disable;
 uniform sampler2D biome_tex : filter_nearest, repeat_disable;
 uniform sampler2D realm_tex : filter_nearest, repeat_disable;
+uniform sampler2D area_tex : filter_nearest, repeat_disable;
+// Regiones con nombre: su contorno solo se ve al editarlas (sección Regiones).
+uniform bool show_area_edges = false;
+uniform int selected_area = 0;
+uniform vec3 area_col : source_color = vec3(0.36, 0.47, 0.58);
 // Paletas: biomas (N × 2: color; símbolo y densidad) y reinos (64 × 1: color, a = existe).
 uniform sampler2D biome_pal : filter_nearest, repeat_disable;
 uniform sampler2D realm_pal : filter_nearest, repeat_disable;
@@ -16,8 +21,12 @@ uniform vec3 sun_dir = vec3(-0.6, -0.5, 0.62);
 uniform float contour_density = 28.0;
 uniform bool show_symbols = true;
 uniform bool show_realms = true;
-// Lado de la celda de los símbolos, en píxeles del mapa.
+// Lado de la celda de los símbolos, en píxeles del mapa (main lo ajusta al zoom: lejos, celdas grandes; cerca,
+// pequeñas, para que los árboles midan en pantalla más o menos lo mismo y haya más cuanto más te acercas).
 uniform float symbol_cell = 26.0;
+uniform float tree_cell = 16.0;
+// Dirección de la luz en el plano (para iluminar las copas).
+uniform vec2 light2d = vec2(-0.7, -0.7);
 
 uniform vec3 col_deep_sea : source_color = vec3(0.24, 0.33, 0.43);
 uniform vec3 col_shallow_sea : source_color = vec3(0.42, 0.53, 0.64);
@@ -94,38 +103,11 @@ float inside(float d, float aa) {
 	return 1.0 - smoothstep(-aa, aa, d);
 }
 
-// Un símbolo: x = relleno, y = tinta.
+// Patrones de suelo (uno por celda): x = relleno, y = tinta.
 vec2 glyph(int kind, vec2 p, float aa, float rnd, vec2 cell_id) {
 	float lw = max(0.032, aa * 0.8);
-	float fill = 0.0;
 	float ink = 0.0;
-	if (kind == 1 || kind == 14) {
-		float r = 0.21 + rnd * 0.06;
-		float dc = sd_circle(p - vec2(0.0, -0.07), r);
-		fill = inside(dc, aa);
-		ink = ink_line(abs(dc), lw, aa);
-		float dt = sd_seg(p, vec2(0.0, -0.07 + r), vec2(0.0, 0.30));
-		ink = max(ink, ink_line(dt, lw, aa) * step(0.0, dc));
-		if (kind == 14) {
-			ink = max(ink, ink_line(sd_seg(p, vec2(-0.30, 0.31), vec2(0.30, 0.31)), lw * 0.8, aa));
-		}
-	} else if (kind == 2) {
-		float dtr = sd_tri(p - vec2(0.0, -0.36), vec2(0.18 + rnd * 0.04, 0.52));
-		fill = inside(dtr, aa);
-		ink = ink_line(abs(dtr), lw, aa);
-		ink = max(ink, ink_line(sd_seg(p, vec2(0.0, 0.16), vec2(0.0, 0.30)), lw, aa));
-	} else if (kind == 3) {
-		float dc = min(min(sd_circle(p - vec2(-0.12, 0.0), 0.19), sd_circle(p - vec2(0.12, 0.0), 0.19)), sd_circle(p - vec2(0.0, -0.15), 0.21));
-		fill = inside(dc, aa);
-		ink = ink_line(abs(dc), lw, aa);
-	} else if (kind == 15) {
-		vec2 q = (p - vec2(0.0, -0.12)) / vec2(0.30, 0.09);
-		float de = (length(q) - 1.0) * 0.09;
-		fill = inside(de, aa);
-		ink = ink_line(abs(de), lw, aa);
-		float dt = min(sd_seg(p, vec2(0.0, -0.05), vec2(0.0, 0.26)), sd_seg(p, vec2(0.0, 0.06), vec2(0.12, -0.05)));
-		ink = max(ink, ink_line(dt, lw, aa) * step(0.0, de));
-	} else if (kind == 4) {
+	if (kind == 4) {
 		float dg = min(min(sd_seg(p, vec2(-0.10, 0.12), vec2(-0.17, -0.04)), sd_seg(p, vec2(0.0, 0.12), vec2(0.0, -0.09))), sd_seg(p, vec2(0.10, 0.12), vec2(0.17, -0.04)));
 		ink = ink_line(dg, lw * 0.75, aa);
 	} else if (kind == 5) {
@@ -140,20 +122,127 @@ vec2 glyph(int kind, vec2 p, float aa, float rnd, vec2 cell_id) {
 		float dm = min(sd_seg(p, vec2(-0.26, 0.08), vec2(0.26, 0.08)), sd_seg(p, vec2(-0.14, 0.18), vec2(0.14, 0.18)));
 		dm = min(dm, min(sd_seg(p, vec2(-0.08, 0.08), vec2(-0.11, -0.15)), sd_seg(p, vec2(0.06, 0.08), vec2(0.09, -0.11))));
 		ink = ink_line(dm, lw * 0.8, aa);
-	} else if (kind == 10) {
-		float dr = (abs(p.x) / 0.13 + abs(p.y + 0.02) / 0.30 - 1.0) * 0.11;
-		fill = inside(dr, aa);
-		ink = max(ink_line(abs(dr), lw, aa), ink_line(sd_seg(p, vec2(0.0, -0.30), vec2(0.0, 0.26)), lw * 0.6, aa) * inside(dr, aa));
-	} else if (kind == 11) {
-		float dcap = max(sd_circle(p - vec2(0.0, 0.02), 0.23), p.y - 0.02);
-		float dst = sd_seg(p, vec2(0.0, 0.02), vec2(0.0, 0.27));
-		fill = max(inside(dcap, aa), ink_line(dst, 0.055, aa));
-		ink = max(ink_line(abs(dcap), lw, aa), ink_line(abs(dst - 0.055), lw * 0.8, aa) * step(0.02, p.y));
-	} else if (kind == 13) {
-		float dd = min(sd_seg(p, vec2(0.0, 0.30), vec2(0.0, -0.22)), min(sd_seg(p, vec2(0.0, -0.02), vec2(-0.15, -0.20)), sd_seg(p, vec2(0.0, 0.07), vec2(0.14, -0.11))));
-		ink = ink_line(dd, lw, aa);
 	}
-	return vec2(fill, ink);
+	return vec2(0.0, ink);
+}
+
+bool is_tree(int k) {
+	return k == 1 || k == 2 || k == 3 || k == 10 || k == 11 || k == 13 || (k >= 14 && k <= 20);
+}
+
+float sd_ellipse(vec2 p, vec2 c, vec2 r) {
+	vec2 q = (p - c) / r;
+	return (length(q) - 1.0) * min(r.x, r.y);
+}
+
+// Un árbol con la base del tronco en (0, 0), y hacia abajo, en unidades de celda.
+// x = relleno (copa), y = tinta, z = luz de la copa (0,7..1,2), w = detalle (flores, motas, tronco claro).
+vec4 tree(int kind, vec2 p, float aa, float rnd, vec2 L) {
+	float lw = max(0.045, aa * 0.9);
+	float d = 1e3;
+	vec2 cc = vec2(0.0, -0.55);
+	float trunk = 1e3;
+	float extra = 0.0;
+	float detail = 0.0;
+	if (kind == 17) {
+		kind = rnd < 0.5 ? 2 : 1;
+	}
+	if (kind == 3 && rnd > 0.78) {
+		kind = 16;
+	}
+	if (kind == 1 || kind == 20 || kind == 14) {
+		float j = rnd - 0.5;
+		d = sd_circle(p - vec2(0.0, -0.55), 0.34 + j * 0.06);
+		d = min(d, sd_circle(p - vec2(-0.21, -0.45 + j * 0.05), 0.25));
+		d = min(d, sd_circle(p - vec2(0.21, -0.47 - j * 0.05), 0.26));
+		d = min(d, sd_circle(p - vec2(0.03 * j, -0.78), 0.24));
+		trunk = sd_seg(p, vec2(0.0, -0.3), vec2(0.0, 0.0)) - 0.035;
+		if (kind == 20) {
+			for (int i = 0; i < 4; i++) {
+				vec2 fp = vec2(-0.2, -0.75) + hash2(vec2(rnd * 91.0, float(i) * 3.7)) * vec2(0.4, 0.4);
+				detail = max(detail, inside(sd_circle(p - fp, 0.05), aa));
+			}
+		}
+		if (kind == 14) {
+			extra = min(sd_seg(p, vec2(0.0, -0.12), vec2(-0.2, 0.06)), sd_seg(p, vec2(0.0, -0.12), vec2(0.2, 0.06)));
+		}
+	} else if (kind == 2) {
+		float w1 = 0.23 + (rnd - 0.5) * 0.06;
+		d = sd_tri(p - vec2(0.0, -1.08), vec2(w1, 0.62));
+		d = min(d, sd_tri(p - vec2(0.0, -0.82), vec2(w1 + 0.07, 0.66)));
+		trunk = sd_seg(p, vec2(0.0, -0.16), vec2(0.0, 0.0)) - 0.035;
+		cc = vec2(0.0, -0.6);
+	} else if (kind == 3) {
+		d = sd_circle(p - vec2(0.0, -0.62), 0.4);
+		d = min(d, sd_circle(p - vec2(-0.3, -0.5), 0.28));
+		d = min(d, sd_circle(p - vec2(0.31, -0.52), 0.28));
+		d = min(d, sd_circle(p - vec2(-0.12, -0.9), 0.26));
+		d = min(d, sd_circle(p - vec2(0.16, -0.88), 0.25));
+		trunk = sd_seg(p, vec2(0.0, -0.3), vec2(0.0, 0.0)) - 0.04;
+		cc = vec2(0.0, -0.65);
+	} else if (kind == 16) {
+		vec2 top = vec2(0.1, -0.78);
+		trunk = sd_seg(p, vec2(0.0, 0.0), top) - 0.035;
+		for (int i = 0; i < 6; i++) {
+			float ang = -2.9 + float(i) * 0.6 + rnd * 0.3;
+			vec2 tip = top + vec2(cos(ang), sin(ang) + 0.45) * 0.36;
+			d = min(d, sd_seg(p, top, tip) - 0.05 * (1.0 - clamp(length(p - top) / 0.36, 0.0, 1.0)) - 0.012);
+		}
+		cc = top;
+	} else if (kind == 15) {
+		d = sd_ellipse(p, vec2(0.0, -0.66), vec2(0.46, 0.13));
+		trunk = min(sd_seg(p, vec2(0.0, 0.0), vec2(0.0, -0.4)), min(sd_seg(p, vec2(0.0, -0.4), vec2(-0.14, -0.6)), sd_seg(p, vec2(0.0, -0.4), vec2(0.15, -0.6)))) - 0.03;
+		cc = vec2(0.0, -0.66);
+	} else if (kind == 18) {
+		d = sd_ellipse(p, vec2(0.0, -0.64), vec2(0.19, 0.36));
+		trunk = sd_seg(p, vec2(0.0, -0.3), vec2(0.0, 0.0)) - 0.045;
+		cc = vec2(0.0, -0.64);
+	} else if (kind == 19) {
+		d = sd_circle(p - vec2(-0.13, -0.16), 0.17);
+		d = min(d, sd_circle(p - vec2(0.12, -0.17), 0.18));
+		d = min(d, sd_circle(p - vec2(0.0, -0.3), 0.18));
+		cc = vec2(0.0, -0.2);
+	} else if (kind == 11) {
+		d = max(sd_ellipse(p, vec2(0.0, -0.45), vec2(0.36, 0.3)), p.y + 0.45);
+		trunk = sd_seg(p, vec2(0.0, -0.45), vec2(0.0, 0.0)) - 0.07;
+		cc = vec2(0.0, -0.55);
+		for (int i = 0; i < 3; i++) {
+			vec2 fp = vec2(-0.2 + float(i) * 0.2, -0.58 + abs(float(i) - 1.0) * 0.06);
+			detail = max(detail, inside(sd_circle(p - fp, 0.055), aa));
+		}
+	} else if (kind == 10) {
+		d = (abs(p.x) / 0.12 + abs(p.y + 0.45) / 0.45 - 1.0) * 0.11;
+		d = min(d, (abs(p.x + 0.2) / 0.09 + abs(p.y + 0.28) / 0.28 - 1.0) * 0.08);
+		d = min(d, (abs(p.x - 0.19) / 0.09 + abs(p.y + 0.33) / 0.33 - 1.0) * 0.08);
+		cc = vec2(0.0, -0.4);
+		extra = sd_seg(p, vec2(0.0, -0.9), vec2(0.0, 0.0));
+	} else if (kind == 13) {
+		extra = min(sd_seg(p, vec2(0.0, 0.0), vec2(0.0, -0.75)), min(sd_seg(p, vec2(0.0, -0.4), vec2(-0.22, -0.66)), sd_seg(p, vec2(0.0, -0.5), vec2(0.2, -0.74))));
+		extra = min(extra, sd_seg(p, vec2(-0.12, -0.53), vec2(-0.2, -0.45)));
+	}
+	float fill = inside(d, aa);
+	float ink = ink_line(abs(d), lw, aa);
+	float t_fill = inside(trunk, aa) * (1.0 - fill);
+	ink = max(ink, ink_line(abs(trunk), lw * 0.8, aa) * (1.0 - fill));
+	if (kind == 13) {
+		ink = max(ink, ink_line(extra, lw * 1.2, aa));
+	} else if (kind == 14) {
+		ink = max(ink, ink_line(extra, lw * 0.8, aa) * (1.0 - fill));
+	} else if (kind == 10) {
+		ink = max(ink, ink_line(extra, lw * 0.6, aa) * fill);
+	}
+	// Luz: más clara hacia el sol, sombra al lado contrario (en coníferas, la mitad de la sombra marcada).
+	vec2 n = p - cc;
+	float light = 0.95 + 0.28 * clamp(dot(normalize(n + vec2(0.0001)), L), -1.0, 1.0);
+	if (kind == 2) {
+		light = (p.x * L.x > 0.0) ? 1.12 : 0.80;
+	}
+	// El tronco cuenta como tinta con algo de relleno oscuro.
+	ink = max(ink, t_fill * 0.85);
+	if (kind == 18) {
+		detail = max(detail, t_fill);
+	}
+	return vec4(fill, ink, light, detail * fill + (kind == 18 ? t_fill : 0.0));
 }
 
 // Voronoi: x = distancia al borde de la celda, y = azar de la celda.
@@ -266,23 +355,71 @@ void fragment() {
 					}
 				}
 			}
-			// Símbolos sueltos: uno por celda (con azar), del bioma que hay en el centro de su celda.
+			// Patrones de suelo sueltos (hierba, dunas, punteado, pantano): uno por celda, del bioma del centro.
 			vec2 gp = UV * tex_size / symbol_cell;
 			vec2 ci = floor(gp);
 			float rnd = hash1(ci);
 			vec2 jit = (hash2(ci + 5.0) - 0.5) * 0.28;
 			vec2 center_uv = (ci + 0.5 + jit) * symbol_cell / tex_size;
 			int gid = id_at(biome_tex, center_uv);
-			float hc = texture(height_tex, center_uv).r;
-			if (gid > 0 && hc > sea_level + 0.006) {
+			if (gid > 0 && texture(height_tex, center_uv).r > sea_level + 0.006) {
 				vec4 meta = texelFetch(biome_pal, ivec2(gid, 1), 0);
 				int kind = int(round(meta.r * 255.0));
-				if (kind != 8 && kind != 9 && kind != 12 && rnd < meta.g) {
+				if (kind >= 4 && kind <= 7 && rnd < meta.g) {
 					float aa = max(fwidth(gp.x), 0.002);
 					vec2 g = glyph(kind, fract(gp) - 0.5 - jit, aa, hash1(ci + 2.0), ci);
-					vec3 fill_col = biome_color(gid) * 0.78;
-					color = mix(color, fill_col, g.x * 0.95);
-					color = mix(color, col_ink, g.y * 0.85);
+					color = mix(color, col_ink, g.y * 0.8);
+				}
+			}
+
+			// Bosques: un árbol por celda como mucho, con la base abajo y la copa hacia arriba. Se recorren las
+			// 3×3 celdas vecinas de arriba abajo para que los de delante tapen a los de detrás.
+			vec2 tq = UV * tex_size / tree_cell;
+			vec2 tb = floor(tq);
+			float taa = max(fwidth(tq.x), 0.002);
+			int here = id_at(biome_tex, UV);
+			bool near_forest = here > 0 && is_tree(int(round(texelFetch(biome_pal, ivec2(here, 1), 0).r * 255.0)));
+			if (!near_forest) {
+				// Un borde de bosque puede asomar desde la celda de abajo.
+				int below = id_at(biome_tex, (tb + vec2(0.5, 1.5)) * tree_cell / tex_size);
+				near_forest = below > 0 && is_tree(int(round(texelFetch(biome_pal, ivec2(below, 1), 0).r * 255.0)));
+			}
+			if (near_forest) {
+				// Suelo del bosque: el color del bioma algo más oscuro y moteado.
+				if (here > 0) {
+					float mott = vnoise(UV * tex_size / (tree_cell * 1.7));
+					color *= 0.86 + mott * 0.12;
+				}
+				for (int dj = -1; dj <= 1; dj++) {
+					for (int di = -1; di <= 1; di++) {
+						vec2 cell = tb + vec2(float(di), float(dj));
+						float r = hash1(cell * 1.31 + 7.0);
+						vec2 base = cell + vec2(0.5, 0.86) + (hash2(cell + 11.0) - 0.5) * vec2(0.55, 0.22);
+						vec2 buv = base * tree_cell / tex_size;
+						int tid = id_at(biome_tex, buv);
+						if (tid <= 0) continue;
+						vec4 m1 = texelFetch(biome_pal, ivec2(tid, 1), 0);
+						int tk = int(round(m1.r * 255.0));
+						if (!is_tree(tk) || r > m1.g) continue;
+						if (texture(height_tex, buv).r <= sea_level + 0.004) continue;
+						float size = m1.a * 2.0 * (0.82 + hash1(cell + 3.0) * 0.36);
+						vec2 lp = (tq - base) / size;
+						if (lp.y > 0.2 || lp.y < -1.25 || abs(lp.x) > 0.6) continue;
+						vec4 tr = tree(tk, lp, taa / size, hash1(cell + 5.0), light2d);
+						if (tr.x + tr.y <= 0.0) continue;
+						vec3 c1 = biome_color(tid);
+						vec3 c2 = texelFetch(biome_pal, ivec2(tid, 2), 0).rgb;
+						float l2 = dot(c2, vec3(0.299, 0.587, 0.114));
+						c2 = mix(mix(c2, vec3(l2), biome_desat), biome_tint * (0.55 + 0.55 * l2), biome_tint_amt);
+						bool detail_kind = (tk == 20 || tk == 11 || tk == 18);
+						vec3 crown = detail_kind ? c1 : mix(c1, c2, hash1(cell + 9.0) * m1.b);
+						crown *= tr.z * (0.92 + hash1(cell + 13.0) * 0.16);
+						color = mix(color, crown, tr.x);
+						if (detail_kind) {
+							color = mix(color, c2, tr.w);
+						}
+						color = mix(color, col_ink, tr.y * 0.9);
+					}
 				}
 			}
 		}
@@ -314,6 +451,28 @@ void fragment() {
 			if (edge && (rid > 0 || nb > 0)) {
 				color = mix(color, col_ink, 0.82);
 			}
+		}
+	}
+
+	if (show_area_edges) {
+		int aid = id_at(area_tex, UV);
+		vec2 ap = vec2(max(texel_px * 1.2, 0.75)) / tex_size;
+		bool aedge = false;
+		int anb = 0;
+		for (int k = 0; k < 4; k++) {
+			vec2 o = k == 0 ? vec2(1.0, 0.0) : (k == 1 ? vec2(-1.0, 0.0) : (k == 2 ? vec2(0.0, 1.0) : vec2(0.0, -1.0)));
+			int n = id_at(area_tex, UV + o * ap);
+			if (n != aid) {
+				aedge = true;
+				anb = max(anb, n);
+			}
+		}
+		if (aid > 0 && aid == selected_area) {
+			color = mix(color, area_col, 0.16);
+		}
+		if (aedge && (aid > 0 || anb > 0)) {
+			float dash = step(0.45, fract((FRAGCOORD.x + FRAGCOORD.y) * 0.07));
+			color = mix(color, area_col, 0.95 * dash);
 		}
 	}
 

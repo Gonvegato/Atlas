@@ -11,6 +11,7 @@ const MAP_MAT: float = 14.0
 const PLACE_HIT_PX: float = 20.0
 
 const MapOverlay = preload("res://scripts/ui/map_overlay.gd")
+const Labels3D = preload("res://scripts/ui/labels_3d.gd")
 
 @onready var engine: Node = $HeightmapEngine
 @onready var input_ctrl: Node = $TouchInputController
@@ -24,7 +25,7 @@ const MapOverlay = preload("res://scripts/ui/map_overlay.gd")
 @onready var cam_pivot: Node3D = $Workspace/View3DContainer/SubViewport3D/CameraPivot
 @onready var cam_3d: Camera3D = $Workspace/View3DContainer/SubViewport3D/CameraPivot/Camera3D
 
-const SECTIONS = [["relieve", "RELIEVE"], ["biomas", "BIOMAS"], ["politico", "POLÍTICO"], ["lugares", "LUGARES"], ["mundo", "MUNDO"]]
+const SECTIONS = [["relieve", "RELIEVE"], ["biomas", "BIOMAS"], ["regiones", "REGIONES"], ["politico", "POLÍTICO"], ["lugares", "LUGARES"], ["mundo", "MUNDO"]]
 
 ## [id, nombre, qué hace]
 const TOOLS = [
@@ -73,6 +74,13 @@ var current_biome: int = 2
 var current_realm: int = -1
 var realm_erase: bool = false
 var place_kind: String = "ciudad"
+var area_kind: String = "bosque"
+var current_area: int = -1
+var area_erase: bool = false
+var trees_3d: bool = true
+var _world3d_dirty: bool = true
+var _places3d_dirty: bool = true
+var _place_label_pos: Dictionary = {}
 var selected_place: int = -1
 var brush_radius: float = 38.0
 var brush_strength: float = 0.5
@@ -101,7 +109,20 @@ var _armed: String = ""
 var mat_2d: ShaderMaterial
 var mat_3d: ShaderMaterial
 var overlay: Control
+var labels3d: Control
+var vegetation: Vegetacion3D
+var places3d: Lugares3D
 var biome_pal_tex: ImageTexture
+var area_list: VBoxContainer
+var area_editor: VBoxContainer
+var area_name_edit: LineEdit
+var area_kind_chips: Array[Button] = []
+var area_mode_chips: Array[Button] = []
+var area_biome_option: OptionButton
+var lbl_area_count: Label
+var lbl_area_hint: Label
+var lbl_trees: Label
+var density_chips: Array[Button] = []
 
 # --- interfaz
 var btn_mode_3d: Button
@@ -192,6 +213,9 @@ func _on_layers_ready(size: Vector2i) -> void:
 		m.set_shader_parameter("height_tex", engine.height.get_texture())
 		m.set_shader_parameter("biome_tex", engine.biome.get_texture())
 		m.set_shader_parameter("realm_tex", engine.realm.get_texture())
+	mat_2d.set_shader_parameter("area_tex", engine.area.get_texture())
+	_world3d_dirty = true
+	_places3d_dirty = true
 	var long_side: float = float(maxi(size.x, size.y))
 	var world := Vector2(size) / long_side * 12.0
 	var plane := PlaneMesh.new()
@@ -242,6 +266,19 @@ func _connect_signals() -> void:
 		val_strokes.text = Estilo.miles(engine.stroke_count)
 	)
 	engine.realms_changed.connect(_on_realms_changed)
+	engine.areas_changed.connect(_on_areas_changed)
+	engine.area_shapes_changed.connect(func(sh: Dictionary):
+		overlay.area_shapes = sh
+		overlay.queue_redraw()
+		_refresh_labels_3d()
+	)
+	engine.layer_changed.connect(func(layer_name: String):
+		if layer_name == "biome" or layer_name == "height":
+			_world3d_dirty = true
+			_places3d_dirty = true
+			if input_ctrl.is_3d_mode:
+				_rebuild_3d.call_deferred()
+	)
 	engine.places_changed.connect(_on_places_changed)
 	engine.realm_centroids_changed.connect(func(c: Dictionary):
 		overlay.centroids = c
@@ -281,6 +318,12 @@ func _on_stroke_started(pos: Vector2, pressure: float) -> void:
 		"biomas":
 			_stroke_kind = "paint"
 			engine.begin_stroke("biome", current_biome, uv)
+		"regiones":
+			if current_area <= 0 and not area_erase:
+				_flash(lbl_area_hint)
+				return
+			_stroke_kind = "paint"
+			engine.begin_stroke("area", 0 if area_erase else current_area, uv)
 		"politico":
 			if current_realm <= 0 and not realm_erase:
 				_flash_realm_hint()
@@ -385,10 +428,19 @@ func _apply_2d_transform() -> void:
 	map_canvas.scale = Vector2.ONE * map_zoom
 	map_canvas.position = map_offset
 	overlay.set_view(map_offset, map_canvas.size * map_zoom, map_zoom)
+	# Celdas de los árboles: entre ~6 y ~12 px de pantalla, en potencias de 2 de píxeles del mapa (más árboles al acercarse).
+	if map_canvas.size.x > 0.0 and mat_2d != null:
+		var tpp: float = float(engine.map_size.x) / (map_canvas.size.x * map_zoom)
+		var cell: float = pow(2.0, floor(log(maxf(12.0 * tpp, 1.0)) / log(2.0)))
+		cell = clampf(cell, 4.0, 64.0)
+		mat_2d.set_shader_parameter("tree_cell", cell)
+		mat_2d.set_shader_parameter("symbol_cell", clampf(cell * 1.6, 8.0, 96.0))
 
 func _update_3d_camera() -> void:
 	cam_pivot.rotation = Vector3(pitch, yaw, 0.0)
 	cam_3d.position = Vector3(0.0, 0.0, cam_dist)
+	if labels3d != null:
+		labels3d.queue_redraw()
 
 func _toggle_3d() -> void:
 	input_ctrl.is_3d_mode = not input_ctrl.is_3d_mode
@@ -400,7 +452,62 @@ func _toggle_3d() -> void:
 	)
 	btn_mode_3d.text = "VOLVER AL MAPA  ←" if in_3d else "VER RELIEVE 3D  →"
 	sec_relief_3d.visible = in_3d
+	labels3d.visible = in_3d
+	if in_3d:
+		_rebuild_3d()
 	_update_hint()
+
+## Árboles, edificios y nombres del 3D: solo si algo cambió desde la última vez.
+func _rebuild_3d() -> void:
+	if not engine.world_ready:
+		return
+	var long_side: float = float(maxi(engine.map_size.x, engine.map_size.y))
+	var world := Vector2(engine.map_size) / long_side * 12.0
+	var hs: float = 2.6 * relief_mult
+	if _world3d_dirty:
+		_world3d_dirty = false
+		var n: int = 0
+		if trees_3d:
+			n = vegetation.build(engine.biome.mirror, engine.height.mirror, sea_level, world, hs, engine.world_seed)
+		else:
+			vegetation.clear()
+		lbl_trees.text = "%s PLANTAS" % Estilo.miles(n)
+	if _places3d_dirty:
+		_places3d_dirty = false
+		_place_label_pos = places3d.build(engine.places, engine.height.mirror, sea_level, world, hs)
+	_refresh_labels_3d()
+
+func _uv_to_3d(uv: Vector2, lift: float) -> Vector3:
+	var long_side: float = float(maxi(engine.map_size.x, engine.map_size.y))
+	var world := Vector2(engine.map_size) / long_side * 12.0
+	var px := Vector2i(clampi(int(uv.x * engine.map_size.x), 0, engine.map_size.x - 1), clampi(int(uv.y * engine.map_size.y), 0, engine.map_size.y - 1))
+	var hv: float = engine.height.mirror.get_pixelv(px).r
+	return Vector3((uv.x - 0.5) * world.x, maxf(hv - sea_level, 0.0) * 2.6 * relief_mult + lift, (uv.y - 0.5) * world.y)
+
+func _refresh_labels_3d() -> void:
+	if labels3d == null or not input_ctrl.is_3d_mode:
+		return
+	var out: Array = []
+	for a in engine.areas:
+		var id: int = int(a["id"])
+		if overlay.area_shapes.has(id):
+			var t: Array = Catalogo.tipo_region(str(a["kind"]))
+			var sh: Dictionary = overlay.area_shapes[id]
+			out.append([str(a["name"]).to_upper(), _uv_to_3d(sh["uv"], 0.35), "agua" if bool(t[2]) else "region"])
+	if show_realms:
+		for r in engine.realms:
+			var id: int = int(r["id"])
+			if overlay.centroids.has(id):
+				var c: Dictionary = overlay.centroids[id]
+				var col: Color = r["color"]
+				out.append([(str(r["kind"]) + " DE " + str(r["name"])).to_upper(), _uv_to_3d(c["uv"], 0.6), "reino", col.darkened(0.35)])
+	for p in engine.places:
+		var id: int = int(p["id"])
+		var pos: Vector3 = _place_label_pos.get(id, _uv_to_3d(p["uv"], 0.2))
+		var kind: String = p["kind"]
+		out.append([str(p["name"]).to_upper() if kind == "capital" else str(p["name"]), pos, "capital" if kind == "capital" else "lugar"])
+	labels3d.labels = out
+	labels3d.queue_redraw()
 
 func _update_hint() -> void:
 	if input_ctrl.is_3d_mode:
@@ -434,6 +541,9 @@ func _apply_theme(idx: int) -> void:
 	for i in theme_buttons.size():
 		_paint_filter(theme_buttons[i], i == idx)
 	_refresh_biome_swatches()
+	_world3d_dirty = true
+	if input_ctrl.is_3d_mode:
+		_rebuild_3d.call_deferred()
 
 ## El color de un bioma tal y como lo pinta el estilo elegido (la misma cuenta que el shader).
 func _styled_biome_color(c: Color) -> Color:
@@ -450,6 +560,7 @@ func _apply_sun() -> void:
 	var az: float = deg_to_rad(sun_azimuth)
 	# En el mapa el norte está arriba (-Y en pantalla); la luz viene DESDE el acimut.
 	mat_2d.set_shader_parameter("sun_dir", Vector3(sin(az) * 0.78, -cos(az) * 0.78, 0.62))
+	mat_2d.set_shader_parameter("light2d", Vector2(sin(az), -cos(az)))
 	var elev: float = deg_to_rad(42.0)
 	# En 3D el norte es -Z (la V de la textura crece hacia +Z). La luz viaja hacia el lado opuesto.
 	var travel := Vector3(-sin(az) * cos(elev), -sin(elev), cos(az) * cos(elev))
@@ -497,13 +608,14 @@ func _select_section(id: String) -> void:
 	for k in tab_buttons.keys():
 		var b: Button = tab_buttons[k]
 		if str(k) == id:
-			Estilo.pintar_boton(b, Estilo.SOBRE_ACENTO, Estilo.ACENTO, Estilo.ACENTO.darkened(0.15), 20, 0)
+			Estilo.pintar_boton(b, Estilo.SOBRE_ACENTO, Estilo.ACENTO, Estilo.ACENTO.darkened(0.15), 16, 0)
 		else:
-			Estilo.pintar_boton(b, Estilo.PAPEL, Estilo.TINTA, Color("1C1B19"), 20, 0)
+			Estilo.pintar_boton(b, Estilo.PAPEL, Estilo.TINTA, Color("1C1B19"), 16, 0)
 	for k in sections_ui.keys():
 		var c: Control = sections_ui[k]
 		c.visible = (str(k) == id)
-	brush_box.visible = id in ["relieve", "biomas", "politico"]
+	brush_box.visible = id in ["relieve", "biomas", "politico", "regiones"]
+	mat_2d.set_shader_parameter("show_area_edges", id == "regiones")
 	_refresh_brush_rows()
 	_update_hint()
 
@@ -597,6 +709,12 @@ func _refresh_realm_editor() -> void:
 		b.add_theme_stylebox_override("hover", sb)
 		b.add_theme_stylebox_override("pressed", sb)
 
+func _flash(l: Label) -> void:
+	l.add_theme_color_override("font_color", Estilo.ACENTO)
+	get_tree().create_timer(1.2).timeout.connect(func():
+		l.add_theme_color_override("font_color", Estilo.GRIS)
+	)
+
 func _flash_realm_hint() -> void:
 	lbl_realm_hint.add_theme_color_override("font_color", Estilo.ACENTO)
 	get_tree().create_timer(1.2).timeout.connect(func():
@@ -604,6 +722,9 @@ func _flash_realm_hint() -> void:
 	)
 
 func _on_places_changed() -> void:
+	_places3d_dirty = true
+	if input_ctrl.is_3d_mode:
+		_rebuild_3d.call_deferred()
 	overlay.places = engine.places
 	if engine.place_by_id(selected_place).is_empty():
 		selected_place = -1
@@ -677,6 +798,17 @@ func _build_ui() -> void:
 	overlay = MapOverlay.new()
 	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	view_2d_root.add_child(overlay)
+
+	vegetation = Vegetacion3D.new()
+	vegetation.style_color = _styled_biome_color
+	subviewport_3d.add_child(vegetation)
+	places3d = Lugares3D.new()
+	subviewport_3d.add_child(places3d)
+	labels3d = Labels3D.new()
+	labels3d.set_anchors_preset(Control.PRESET_FULL_RECT)
+	labels3d.visible = false
+	labels3d.camera = cam_3d
+	workspace.add_child(labels3d)
 
 func _build_header() -> void:
 	var header := Panel.new()
@@ -766,7 +898,7 @@ func _build_tabs() -> void:
 
 	for item in SECTIONS:
 		var id: String = item[0]
-		var b := Estilo.boton(item[1], 13, Estilo.PAPEL, Estilo.TINTA, Color("1C1B19"), 20, 0)
+		var b := Estilo.boton(item[1], 13, Estilo.PAPEL, Estilo.TINTA, Color("1C1B19"), 16, 0)
 		b.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		b.custom_minimum_size = Vector2(0, TABS_H)
 		b.pressed.connect(func(): _select_section(id))
@@ -827,6 +959,7 @@ func _build_panel() -> void:
 	_build_relief_3d(col)
 	_build_section_relieve(col)
 	_build_section_biomas(col)
+	_build_section_regiones(col)
 	_build_section_politico(col)
 	_build_section_lugares(col)
 	_build_section_mundo(col)
@@ -923,7 +1056,31 @@ func _build_relief_3d(col: Control) -> void:
 		relief_mult = v
 		mat_3d.set_shader_parameter("height_scale", 2.6 * v)
 		val_relief.text = "× " + ("%.1f" % v).replace(".", ",")
+		_world3d_dirty = true
+		_places3d_dirty = true
+		if input_ctrl.is_3d_mode:
+			_rebuild_3d()
 	)
+	var trow := HBoxContainer.new()
+	relief.add_child(trow)
+	var tl := Estilo.etiqueta("ÁRBOLES Y EDIFICIOS", 11, Estilo.GRIS)
+	tl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	trow.add_child(tl)
+	lbl_trees = Estilo.etiqueta("", 11, Estilo.TINTA)
+	trow.add_child(lbl_trees)
+	density_chips = _chips(relief, ["SIN ÁRBOLES", "POCOS", "NORMAL", "MUCHOS"], func(i: int):
+		trees_3d = i > 0
+		if i > 0:
+			vegetation.density_idx = i - 1
+		for k in density_chips.size():
+			_paint_filter(density_chips[k], k == i)
+		_world3d_dirty = true
+		if input_ctrl.is_3d_mode:
+			_rebuild_3d()
+	, 11)
+	for k in density_chips.size():
+		_paint_filter(density_chips[k], k == 2)
+	_note(relief, "Modelos CC0 de Kenney (Nature, Castle y Fantasy Town Kit). Si el 3D va a tirones, baja a «Pocos».")
 	relief.add_child(Estilo.filete(2))
 
 func _build_section_relieve(col: Control) -> void:
@@ -1029,6 +1186,124 @@ func _build_section_politico(col: Control) -> void:
 	b_del.pressed.connect(func():
 		_confirm("realm_del", b_del, "ELIMINAR ESTE REINO", func(): engine.delete_realm(current_realm))
 	)
+
+# ---------------------------------------------------------------- regiones con nombre
+
+func _build_section_regiones(col: Control) -> void:
+	var v := _section_box(col, "regiones")
+	lbl_area_count = _title(v, "Regiones", "0 REGIONES")
+	_note(v, "Bosques, montes, mares, lagos… con su nombre. Elige el tipo, crea la región, ponle nombre y pinta dónde está.")
+	var labels: Array = []
+	for t in Catalogo.TIPOS_REGION:
+		labels.append(t[1])
+	area_kind_chips = _chips(v, labels, func(i: int):
+		area_kind = Catalogo.TIPOS_REGION[i][0]
+		if current_area > 0:
+			engine.update_area(current_area, "kind", area_kind)
+		_refresh_area_editor()
+	, 10)
+	_accent_link(v, "+ NUEVA REGIÓN", func():
+		var id: int = engine.add_area(area_kind)
+		if id > 0:
+			current_area = id
+			area_erase = false
+			_on_areas_changed()
+			area_name_edit.grab_focus()
+			area_name_edit.select_all()
+	)
+	area_list = VBoxContainer.new()
+	area_list.add_theme_constant_override("separation", 6)
+	v.add_child(area_list)
+	lbl_area_hint = _note(v, "Con una región elegida, el lápiz pinta su contorno (discontinuo; solo se ve aquí).")
+	var opts := HFlowContainer.new()
+	v.add_child(opts)
+	_toggle_chip(opts, "NOMBRES", true, func(on: bool):
+		overlay.show_area_names = on
+		overlay.queue_redraw()
+	)
+
+	area_editor = VBoxContainer.new()
+	area_editor.add_theme_constant_override("separation", 10)
+	v.add_child(area_editor)
+	area_editor.add_child(Estilo.filete(2))
+	area_editor.add_child(Estilo.etiqueta("NOMBRE", 11, Estilo.GRIS))
+	area_name_edit = _line_edit(area_editor, func(t: String):
+		if t.strip_edges() != "":
+			engine.update_area(current_area, "name", t.strip_edges())
+	)
+	_accent_link(area_editor, "OTRO NOMBRE →", func():
+		var a: Dictionary = engine.area_by_id(current_area)
+		if not a.is_empty():
+			engine.update_area(current_area, "name", Nombres.region(str(a["kind"]), engine.rng))
+	)
+	area_mode_chips = _chips(area_editor, ["PINTAR", "BORRAR CONTORNO"], func(i: int):
+		area_erase = (i == 1)
+		_on_areas_changed()
+	, 11)
+	area_editor.add_child(Estilo.etiqueta("AL PINTARLA, PINTA TAMBIÉN EL BIOMA", 11, Estilo.GRIS))
+	area_biome_option = OptionButton.new()
+	area_biome_option.focus_mode = Control.FOCUS_NONE
+	area_biome_option.add_theme_font_override("font", Estilo.versalitas())
+	area_biome_option.add_theme_font_size_override("font_size", 12)
+	for k in ["normal", "hover", "pressed", "focus"]:
+		area_biome_option.add_theme_stylebox_override(k, Estilo.caja(Color(0, 0, 0, 0), Estilo.TINTA, 2, 12, 9))
+	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		area_biome_option.add_theme_color_override(k, Estilo.TINTA)
+	area_biome_option.add_item("NINGUNO (SOLO EL NOMBRE)", 0)
+	for i in Catalogo.BIOMAS.size():
+		area_biome_option.add_item(str(Catalogo.BIOMAS[i][0]), i + 1)
+	area_biome_option.item_selected.connect(func(idx: int):
+		engine.update_area(current_area, "biome", area_biome_option.get_item_id(idx))
+	)
+	area_editor.add_child(area_biome_option)
+	var b_del := _accent_button(area_editor, "ELIMINAR ESTA REGIÓN")
+	b_del.pressed.connect(func():
+		_confirm("area_del", b_del, "ELIMINAR ESTA REGIÓN", func(): engine.delete_area(current_area))
+	)
+
+func _on_areas_changed() -> void:
+	if engine.area_by_id(current_area).is_empty():
+		current_area = -1
+	overlay.areas = engine.areas
+	overlay.queue_redraw()
+	_set_tab_count("regiones", engine.areas.size())
+	lbl_area_count.text = "%d REGIONES" % engine.areas.size() if engine.areas.size() != 1 else "1 REGIÓN"
+	mat_2d.set_shader_parameter("selected_area", current_area)
+	for c in area_list.get_children():
+		c.queue_free()
+	for a in engine.areas:
+		var id: int = int(a["id"])
+		var t: Array = Catalogo.tipo_region(str(a["kind"]))
+		var b := Estilo.boton("%s · %s" % [str(a["name"]).to_upper(), str(t[1])], 11, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 9)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		b.clip_text = true
+		b.pressed.connect(func():
+			current_area = id
+			area_erase = false
+			_on_areas_changed()
+		)
+		area_list.add_child(b)
+		_paint_filter(b, id == current_area and not area_erase)
+	_refresh_area_editor()
+	_refresh_labels_3d()
+
+func _refresh_area_editor() -> void:
+	var a: Dictionary = engine.area_by_id(current_area)
+	area_editor.visible = not a.is_empty()
+	for i in area_mode_chips.size():
+		_paint_filter(area_mode_chips[i], (i == 1) == area_erase)
+	var kind: String = area_kind if a.is_empty() else str(a["kind"])
+	for i in area_kind_chips.size():
+		_paint_filter(area_kind_chips[i], Catalogo.TIPOS_REGION[i][0] == kind)
+	if a.is_empty():
+		return
+	if not area_name_edit.has_focus():
+		area_name_edit.text = str(a["name"])
+	var bid: int = int(a["biome"])
+	for i in area_biome_option.item_count:
+		if area_biome_option.get_item_id(i) == bid:
+			area_biome_option.select(i)
 
 func _build_section_lugares(col: Control) -> void:
 	var v := _section_box(col, "lugares")
@@ -1143,6 +1418,8 @@ func _build_section_mundo(col: Control) -> void:
 		mat_3d.set_shader_parameter("sea_level", x)
 		engine.sea_level = x
 		engine.set_sea_level(x)
+		_world3d_dirty = true
+		_places3d_dirty = true
 		val_sea.text = "%d %%" % int(round(x * 100.0))
 	)
 	val_sea.text = "%d %%" % int(round(sea_level * 100.0))

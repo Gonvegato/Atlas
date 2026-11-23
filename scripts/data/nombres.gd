@@ -40,3 +40,32 @@ static func lugar(tipo: String, rng: RandomNumberGenerator) -> String:
 		var p: Array = PREFIJOS_LUGAR[tipo]
 		return str(p[rng.randi() % p.size()]) + base
 	return base
+
+const PREFIJOS_REGION = {
+	"bosque": ["Bosque de ", "Bosque ", "Floresta de "],
+	"selva": ["Selva de ", "Junglas de "],
+	"montes": ["Montes de ", "Montañas de ", "Picos de "],
+	"sierra": ["Sierra de ", "Sierra "],
+	"colinas": ["Colinas de ", "Lomas de "],
+	"desierto": ["Desierto de ", "Arenas de "],
+	"llanura": ["Llanuras de ", "Campos de "],
+	"pantano": ["Pantanos de ", "Ciénagas de "],
+	"valle": ["Valle de ", "Valle "],
+	"meseta": ["Meseta de "],
+	"tierras": ["Tierras de ", "Marca de "],
+	"isla": ["Isla de ", "Isla "],
+	"peninsula": ["Península de "],
+	"cabo": ["Cabo ", "Punta "],
+	"mar": ["Mar de ", "Mar "],
+	"oceano": ["Océano ", "Mar Exterior de "],
+	"lago": ["Lago ", "Lago de "],
+	"bahia": ["Bahía de ", "Ensenada de "],
+	"golfo": ["Golfo de "],
+	"estrecho": ["Estrecho de "],
+	"rio": ["Río ", "Río "],
+}
+
+static func region(tipo: String, rng: RandomNumberGenerator) -> String:
+	var base: String = raiz(rng)
+	var p: Array = PREFIJOS_REGION.get(tipo, ["Tierras de "])
+	return str(p[rng.randi() % p.size()]) + base

@@ -2,6 +2,31 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.4.0
+
+- **Bosques de verdad en 2D**: cada bosque con su árbol, a tinta y con luz y sombra en la copa (del lado del sol):
+  - caducifolio de varios lóbulos, conífera de dos pisos, selva (con alguna palmera), palmera, acacia, abedul (tronco blanco),
+    arbusto, árbol en flor, manglar (con raíces), seta gigante, cristales y árbol seco;
+  - bosque mixto (coníferas y caducifolios) y bosque otoñal (cada árbol entre ocre y rojo).
+  - Los árboles se solapan como en un mapa dibujado (los de delante tapan a los de detrás) y hay muchos más.
+  - El número se adapta al zoom: de lejos se ve la masa del bosque y, al acercarte, aparecen más árboles, más pequeños.
+- **29 biomas** (cuatro nuevos: bosque otoñal, bosque de abedules, palmeral y bosque mixto).
+- **Árboles y edificios en el relieve 3D**, con modelos CC0 de Kenney ([Nature Kit](https://kenney.nl/assets/nature-kit),
+  [Castle Kit](https://kenney.nl/assets/castle-kit) y [Fantasy Town Kit](https://kenney.nl/assets/fantasy-town-kit), en
+  `assets/kenney/`, con su `License.txt`):
+  - Pinos, robles, palmeras, abedules, arbustos, cactus, setas y rocas según el bioma. Las hojas llevan el color del bioma y del
+    estilo del mapa (no el turquesa del kit).
+  - Castillos y torres del Castle Kit; cascos de ciudades, pueblos y aldeas con casas; templos, puertos, ruinas, minas y batallas.
+  - Densidad: sin árboles, pocos, normal o muchos (hasta 16.000). Un `MultiMeshInstance3D` por modelo.
+- **Nombres en 3D**: lugares, regiones y reinos rotulados encima del relieve, siguiendo a la cámara.
+- **Regiones con nombre** (sección nueva): «+ Nueva región», tipo, nombre (p. ej., «Bosque del Cosmos») y pintas dónde está.
+  - 21 tipos: bosque, selva, montes, sierra, colinas, desierto, llanura, pantano, valle, meseta, tierras, isla, península, cabo,
+    mar, océano, lago, bahía, golfo, estrecho y río.
+  - Al pintarla puede pintar también su bioma: un bosque pinta bosque de serie; se elige cualquiera o ninguno.
+  - El nombre se rotula en cursiva a lo largo de la zona (azul si es agua) y el contorno discontinuo solo se ve al editar.
+  - Un trazo que pinta región y bioma se deshace de una vez.
+
+
 ## 0.3.0
 
 Cinco secciones en la banda de tinta, cada una con su panel: **Relieve · Biomas · Político · Lugares · Mundo** (con la cuenta de

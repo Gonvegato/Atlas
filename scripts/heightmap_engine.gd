@@ -11,6 +11,11 @@ signal realms_changed()
 signal places_changed()
 ## id de reino → {"uv": Vector2 (centro), "area": float (fracción del mapa)}
 signal realm_centroids_changed(centroids: Dictionary)
+signal areas_changed()
+## id de región → {"uv": Vector2, "angle": float (rad), "length": float (fracción del lado mayor)}
+signal area_shapes_changed(shapes: Dictionary)
+## Una capa ha cambiado (trazo, deshacer, ampliar…): "height", "biome", "realm" o "area".
+signal layer_changed(layer_name: String)
 
 const MAX_SIDE: int = 4096
 const MAX_HISTORY: int = 40
@@ -30,11 +35,14 @@ var world_mode: int = 0
 var stroke_count: int = 0
 var realms: Array = []
 var places: Array = []
+## Regiones con nombre (bosques, montes, mares…): {id, name, kind, biome (0 = no pinta bioma)}
+var areas: Array = []
 var world_ready: bool = false
 
 var height: PaintLayer
 var biome: PaintLayer
 var realm: PaintLayer
+var area: PaintLayer
 
 var mat_init: ShaderMaterial
 var _mat_add: ShaderMaterial
@@ -50,6 +58,8 @@ var _next_place_id: int = 1
 var _stroke_tool: String = ""
 var _stroke_value: int = 0
 var _stroke_layer: PaintLayer = null
+## Capas que pinta el trazo: [capa, valor]. Una región con bioma pinta las dos a la vez.
+var _stroke_targets: Array = []
 var _stroke_dirty: Rect2i = Rect2i()
 var _stroke_has: bool = false
 var _last_px: Vector2 = Vector2(-1, -1)
@@ -72,7 +82,9 @@ func _ready() -> void:
 	biome.name = "Biome"
 	realm = PaintLayer.new()
 	realm.name = "Realm"
-	for l in [height, biome, realm]:
+	area = PaintLayer.new()
+	area.name = "Area"
+	for l in [height, biome, realm, area]:
 		add_child(l)
 	# Nada de leer texturas durante _ready(): el mundo se crea y se lee unos fotogramas después.
 	await get_tree().create_timer(0.25).timeout
@@ -135,6 +147,7 @@ func create_world(size: Vector2i, seed: int, mode: int) -> void:
 	height.setup(map_size, hdr)
 	biome.setup(map_size, false)
 	realm.setup(map_size, false)
+	area.setup(map_size, false)
 	var short_side: float = float(mini(map_size.x, map_size.y))
 	mat_init.set_shader_parameter("seed", float(seed))
 	mat_init.set_shader_parameter("mode", mode)
@@ -142,12 +155,14 @@ func create_world(size: Vector2i, seed: int, mode: int) -> void:
 	await height.fill(mat_init)
 	await biome.fill(null, Color.BLACK)
 	await realm.fill(null, Color.BLACK)
+	await area.fill(null, Color.BLACK)
 	# Una lectura completa para el espejo del relieve (las otras dos empiezan a 0, como su espejo).
 	await height.read_region(Rect2i(Vector2i.ZERO, map_size))
 	undo_stack.clear()
 	redo_stack.clear()
 	realms.clear()
 	places.clear()
+	areas.clear()
 	_next_place_id = 1
 	stroke_count = 0
 	world_ready = true
@@ -157,6 +172,10 @@ func create_world(size: Vector2i, seed: int, mode: int) -> void:
 	places_changed.emit()
 	_compute_stats()
 	realm_centroids_changed.emit({})
+	areas_changed.emit()
+	area_shapes_changed.emit({})
+	layer_changed.emit("height")
+	layer_changed.emit("biome")
 
 ## Amplía el lienzo hacia un lado ("N", "S", "E", "O") en [frac] del tamaño actual. Lo nuevo es mar profundo.
 ## No se puede deshacer (el historial se vacía): cambian los tamaños de todo.
@@ -176,8 +195,8 @@ func extend(dir: String, frac: float = 0.5) -> bool:
 	var old_size: Vector2i = map_size
 	var new_size: Vector2i = map_size + add
 	world_ready = false
-	var fills: Array = [Color(sea_level - 0.12, 0, 0), Color(0, 0, 0), Color(0, 0, 0)]
-	var layers: Array[PaintLayer] = [height, biome, realm]
+	var fills: Array = [Color(sea_level - 0.12, 0, 0), Color(0, 0, 0), Color(0, 0, 0), Color(0, 0, 0)]
+	var layers: Array[PaintLayer] = [height, biome, realm, area]
 	for i in layers.size():
 		var l: PaintLayer = layers[i]
 		var img := Image.create(new_size.x, new_size.y, false, l.mirror_format)
@@ -198,6 +217,9 @@ func extend(dir: String, frac: float = 0.5) -> bool:
 	places_changed.emit()
 	_compute_stats()
 	_compute_centroids()
+	_compute_area_shapes()
+	layer_changed.emit("height")
+	layer_changed.emit("biome")
 	return true
 
 # ---------------------------------------------------------------- trazos
@@ -207,19 +229,39 @@ func _layer_for(tool: String) -> PaintLayer:
 		return biome
 	if tool == "realm":
 		return realm
+	if tool == "area":
+		return area
 	return height
 
 func _layer_name(l: PaintLayer) -> String:
-	return "height" if l == height else ("biome" if l == biome else "realm")
+	if l == height:
+		return "height"
+	if l == biome:
+		return "biome"
+	if l == realm:
+		return "realm"
+	return "area"
 
 func _layer_by_name(n: String) -> PaintLayer:
-	return height if n == "height" else (biome if n == "biome" else realm)
+	match n:
+		"height":
+			return height
+		"biome":
+			return biome
+		"realm":
+			return realm
+	return area
 
 ## [value]: el id del bioma o del reino que se pinta (0 = borrar).
 func begin_stroke(tool: String, value: int, start_uv: Vector2) -> void:
 	_stroke_tool = tool
 	_stroke_value = value
 	_stroke_layer = _layer_for(tool)
+	_stroke_targets = [[_stroke_layer, value]]
+	if tool == "area":
+		var a: Dictionary = area_by_id(value)
+		if not a.is_empty() and int(a["biome"]) > 0:
+			_stroke_targets.append([biome, int(a["biome"])])
 	_stroke_dirty = Rect2i()
 	_stroke_has = false
 	_last_px = Vector2(-1, -1)
@@ -259,6 +301,14 @@ func paint_uv(uv: Vector2, radius_px: float, strength: float, steps: float = 10.
 	m.set_shader_parameter("brush_radius", radius_px)
 	if base == _mat_id:
 		m.set_shader_parameter("value", float(_stroke_value) / 255.0)
+		# Las demás capas del trazo (el bioma de una región), con su propio valor.
+		for i in range(1, _stroke_targets.size()):
+			var t: Array = _stroke_targets[i]
+			var m2: ShaderMaterial = base.duplicate() as ShaderMaterial
+			for k in ["rect_min", "rect_size", "p0", "p1", "brush_radius"]:
+				m2.set_shader_parameter(k, m.get_shader_parameter(k))
+			m2.set_shader_parameter("value", float(int(t[1])) / 255.0)
+			(t[0] as PaintLayer).dab(m2, Rect2(min_pt, rect_sz))
 	elif base == _mat_shape:
 		m.set_shader_parameter("mode", int(SHAPE_MODES[tool]))
 		m.set_shader_parameter("snap", _snap_tex)
@@ -286,26 +336,42 @@ func end_stroke() -> void:
 	if not _stroke_has or _stroke_layer == null:
 		_stroke_layer = null
 		return
-	var layer: PaintLayer = _stroke_layer
+	var targets: Array = _stroke_targets
 	var rect: Rect2i = _stroke_dirty.intersection(Rect2i(Vector2i.ZERO, map_size))
 	_stroke_layer = null
+	_stroke_targets = []
 	_stroke_has = false
 	_last_px = Vector2(-1, -1)
 	if rect.size.x <= 0 or rect.size.y <= 0:
 		return
-	var before: Image = layer.crop_mirror(rect)
-	var after: Image = await layer.read_region(rect)
-	if after == null:
+	var befores: Array = []
+	for t in targets:
+		befores.append((t[0] as PaintLayer).crop_mirror(rect))
+	var items: Array = []
+	for i in targets.size():
+		var layer: PaintLayer = targets[i][0]
+		var after: Image = await layer.read_region(rect)
+		if after == null:
+			continue
+		items.append({"t": "paint", "layer": _layer_name(layer), "rect": rect, "before": befores[i], "after": after})
+	if items.is_empty():
 		return
 	stroke_count += 1
-	_push({"t": "paint", "layer": _layer_name(layer), "rect": rect, "before": before, "after": after})
-	_after_layer_change(layer)
+	if items.size() == 1:
+		_push(items[0])
+	else:
+		_push({"t": "multi", "items": items, "stroke": true})
+	for t in targets:
+		_after_layer_change(t[0])
 
 func _after_layer_change(layer: PaintLayer) -> void:
 	if layer == height:
 		_compute_stats()
 	elif layer == realm:
 		_compute_centroids()
+	elif layer == area:
+		_compute_area_shapes()
+	layer_changed.emit(_layer_name(layer))
 
 # ---------------------------------------------------------------- historial
 
@@ -356,7 +422,8 @@ func _apply(e: Dictionary, forward: bool) -> void:
 	if t == "paint":
 		var l: PaintLayer = _layer_by_name(e["layer"])
 		var img: Image = e["after"] if forward else e["before"]
-		stroke_count = maxi(stroke_count + (1 if forward else -1), 0)
+		if not bool(e.get("in_stroke", false)):
+			stroke_count = maxi(stroke_count + (1 if forward else -1), 0)
 		await l.restore_region(e["rect"], img)
 		_after_layer_change(l)
 	elif t == "meta":
@@ -365,8 +432,13 @@ func _apply(e: Dictionary, forward: bool) -> void:
 	elif t == "multi":
 		var items: Array = e["items"]
 		var order: Array = items if forward else _reversed(items)
+		if bool(e.get("stroke", false)):
+			stroke_count = maxi(stroke_count + (1 if forward else -1), 0)
 		for it in order:
-			await _apply(it, forward)
+			var sub: Dictionary = it
+			if bool(e.get("stroke", false)):
+				sub["in_stroke"] = true
+			await _apply(sub, forward)
 
 func _reversed(a: Array) -> Array:
 	var r: Array = a.duplicate()
@@ -374,21 +446,25 @@ func _reversed(a: Array) -> Array:
 	return r
 
 func _meta_snapshot() -> Dictionary:
-	return {"realms": realms.duplicate(true), "places": places.duplicate(true), "next_place": _next_place_id}
+	return {"realms": realms.duplicate(true), "places": places.duplicate(true), "areas": areas.duplicate(true), "next_place": _next_place_id}
 
 func _set_meta(snap: Dictionary) -> void:
 	var rs: Array = snap["realms"]
 	var ps: Array = snap["places"]
 	realms = rs.duplicate(true)
 	places = ps.duplicate(true)
+	var ars: Array = snap.get("areas", [])
+	areas = ars.duplicate(true)
 	_next_place_id = int(snap["next_place"])
 	realms_changed.emit()
 	places_changed.emit()
+	areas_changed.emit()
 
 func _commit_meta(before: Dictionary) -> void:
 	_push({"t": "meta", "before": before, "after": _meta_snapshot()})
 	realms_changed.emit()
 	places_changed.emit()
+	areas_changed.emit()
 
 # ---------------------------------------------------------------- reinos
 
@@ -441,6 +517,59 @@ func delete_realm(id: int) -> void:
 	]})
 	realms_changed.emit()
 	_compute_centroids()
+
+# ---------------------------------------------------------------- regiones con nombre
+
+func area_by_id(id: int) -> Dictionary:
+	for a in areas:
+		if int(a["id"]) == id:
+			return a
+	return {}
+
+func add_area(kind: String, name: String = "") -> int:
+	var used: Dictionary = {}
+	for a in areas:
+		used[int(a["id"])] = true
+	var id: int = 1
+	while used.has(id) and id < 255:
+		id += 1
+	if used.has(id):
+		return -1
+	var before: Dictionary = _meta_snapshot()
+	var t: Array = Catalogo.tipo_region(kind)
+	var nm: String = name if name.strip_edges() != "" else Nombres.region(kind, rng)
+	areas.append({"id": id, "name": nm, "kind": kind, "biome": int(t[3])})
+	_commit_meta(before)
+	return id
+
+func update_area(id: int, key: String, value: Variant) -> void:
+	var a: Dictionary = area_by_id(id)
+	if a.is_empty() or (typeof(a[key]) == typeof(value) and a[key] == value):
+		return
+	var before: Dictionary = _meta_snapshot()
+	a[key] = value
+	_commit_meta(before)
+
+## Borra la región y su contorno (el bioma que pintó se queda). Un solo paso del historial.
+func delete_area(id: int) -> void:
+	var a: Dictionary = area_by_id(id)
+	if a.is_empty():
+		return
+	var before_meta: Dictionary = _meta_snapshot()
+	var before_img: Image = area.mirror.duplicate()
+	var m := _mat("res://shaders/id_remap.gdshader")
+	m.set_shader_parameter("snap", area.snapshot_texture())
+	m.set_shader_parameter("from_id", id)
+	m.set_shader_parameter("to_id", 0)
+	var after_img: Image = await area.apply_full(m)
+	areas.erase(a)
+	var full := Rect2i(Vector2i.ZERO, map_size)
+	_push({"t": "multi", "items": [
+		{"t": "paint", "layer": "area", "rect": full, "before": before_img, "after": after_img},
+		{"t": "meta", "before": before_meta, "after": _meta_snapshot()},
+	]})
+	areas_changed.emit()
+	_compute_area_shapes()
 
 # ---------------------------------------------------------------- lugares
 
@@ -517,6 +646,53 @@ func _compute_stats() -> void:
 		if v > top:
 			top = v
 	stats_changed.emit(float(land) / float(maxi(data.size(), 1)), float(top) / 255.0)
+
+## Centro, orientación (eje mayor) y largo de cada región, para rotular su nombre a lo largo.
+func _compute_area_shapes() -> void:
+	var small: Image = _small(area, Image.INTERPOLATE_NEAREST)
+	var w: int = small.get_width()
+	var h: int = small.get_height()
+	var data: PackedByteArray = small.get_data()
+	var acc: Dictionary = {}
+	for i in data.size():
+		var id: int = data[i]
+		if id == 0:
+			continue
+		var x: float = float(i % w) + 0.5
+		var y: float = float(i / w) + 0.5
+		if not acc.has(id):
+			acc[id] = PackedFloat64Array([0, 0, 0, 0, 0, 0])
+		var a: PackedFloat64Array = acc[id]
+		a[0] += 1.0
+		a[1] += x
+		a[2] += y
+		a[3] += x * x
+		a[4] += y * y
+		a[5] += x * y
+		acc[id] = a
+	var out: Dictionary = {}
+	var long_side: float = float(maxi(w, h))
+	for id in acc.keys():
+		var a: PackedFloat64Array = acc[id]
+		var n: float = a[0]
+		var mx: float = a[1] / n
+		var my: float = a[2] / n
+		var cxx: float = a[3] / n - mx * mx
+		var cyy: float = a[4] / n - my * my
+		var cxy: float = a[5] / n - mx * my
+		var angle: float = 0.5 * atan2(2.0 * cxy, cxx - cyy)
+		var tr: float = cxx + cyy
+		var det: float = cxx * cyy - cxy * cxy
+		var l1: float = tr * 0.5 + sqrt(maxf(tr * tr * 0.25 - det, 0.0))
+		# Largo de una banda uniforme con esa varianza: sqrt(12 λ).
+		var length: float = sqrt(12.0 * maxf(l1, 0.0)) / long_side
+		# Texto siempre legible (nunca boca abajo).
+		if angle > PI * 0.5:
+			angle -= PI
+		elif angle < -PI * 0.5:
+			angle += PI
+		out[id] = {"uv": Vector2(mx / float(w), my / float(h)), "angle": angle, "length": length}
+	area_shapes_changed.emit(out)
 
 func _compute_centroids() -> void:
 	var small: Image = _small(realm, Image.INTERPOLATE_NEAREST)

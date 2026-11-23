@@ -18,6 +18,10 @@ var map_zoom: float = 1.0
 var places: Array = []
 var realms: Array = []
 var centroids: Dictionary = {}
+var areas: Array = []
+var area_shapes: Dictionary = {}
+var show_area_names: bool = true
+var water_ink: Color = Color(0.20, 0.32, 0.46)
 var selected_place: int = -1
 var show_place_names: bool = true
 var show_realm_names: bool = true
@@ -25,12 +29,16 @@ var ink: Color = Estilo.TINTA
 var paper: Color = Estilo.PAPEL
 
 var _realm_font: FontVariation
+var _area_font: FontVariation
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_realm_font = FontVariation.new()
 	_realm_font.base_font = Estilo.F_NEGRITA
 	_realm_font.spacing_glyph = 6
+	_area_font = FontVariation.new()
+	_area_font.base_font = preload("res://fonts/Inter-Italic.ttf")
+	_area_font.spacing_glyph = 3
 
 func set_view(pos: Vector2, screen_size: Vector2, zoom: float) -> void:
 	map_pos = pos
@@ -55,6 +63,8 @@ func hide_ring() -> void:
 		queue_redraw()
 
 func _draw() -> void:
+	if show_area_names:
+		_draw_area_names()
 	if show_realm_names:
 		_draw_realm_names()
 	_draw_places()
@@ -67,6 +77,34 @@ func _draw() -> void:
 			draw_line(ring_center - Vector2(0, 5), ring_center + Vector2(0, 5), c, 2.0)
 	_draw_north(Vector2(40, size.y - 46))
 	_draw_zoom_tag()
+
+# ---------------------------------------------------------------- regiones con nombre
+
+## Cada región, rotulada a lo largo de su eje mayor: cursiva espaciada, del tamaño que quepa en su largo.
+func _draw_area_names() -> void:
+	var long_screen: float = maxf(map_screen_size.x, map_screen_size.y)
+	for a in areas:
+		var id: int = int(a["id"])
+		if not area_shapes.has(id):
+			continue
+		var sh: Dictionary = area_shapes[id]
+		var uv: Vector2 = sh["uv"]
+		var angle: float = sh["angle"]
+		var length_px: float = float(sh["length"]) * long_screen
+		var txt: String = str(a["name"]).to_upper()
+		var w10: float = _area_font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
+		var fs: int = int(clampf(length_px * 0.8 / maxf(w10, 1.0) * 10.0, 10.0, 30.0))
+		var t: Array = Catalogo.tipo_region(str(a["kind"]))
+		var water: bool = t[2]
+		var col: Color = water_ink if water else ink
+		var tw: float = _area_font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		# Si aun así no cabe, se dobla en recto (casi horizontal) para que se lea.
+		var p: Vector2 = uv_to_screen(uv)
+		draw_set_transform(p, angle if absf(angle) < 1.2 else 0.0, Vector2.ONE)
+		var at := Vector2(-tw * 0.5, fs * 0.35)
+		draw_string_outline(_area_font, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(paper, 0.7))
+		draw_string(_area_font, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(col, 0.92))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 # ---------------------------------------------------------------- reinos
 
