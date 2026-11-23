@@ -1,6 +1,10 @@
 shader_type canvas_item;
 
 uniform float seed = 42.0;
+// Escala de la textura para que el ruido no se estire en mapas apaisados (ancho/alto, el lado corto = 1).
+uniform vec2 aspect_scale = vec2(1.0, 1.0);
+// 0 = continente generado · 1 = océano (para dibujar desde cero)
+uniform int mode = 0;
 
 float hash(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21) + seed);
@@ -45,11 +49,17 @@ float ridged(vec2 p) {
 
 void fragment() {
 	vec2 uv = UV;
-	float dist = length((uv - 0.5) * vec2(1.85, 2.0));
-	float continent = fbm(uv * 4.5) - dist * 0.65 + 0.18;
-	// Las cordilleras solo donde una máscara de baja frecuencia lo permite: cadenas, no un macizo nevado entero.
-	float range_mask = smoothstep(0.36, 0.60, fbm(uv * 2.2 + vec2(7.3, 1.9)));
-	float mountains = ridged(uv * 9.0) * smoothstep(0.05, 0.45, continent) * range_mask * 0.40;
-	float h = clamp(0.5 + continent * 0.30 + mountains, 0.02, 0.98);
-	COLOR = vec4(h, h, h, 1.0);
+	vec2 nuv = uv * aspect_scale;
+	if (mode == 1) {
+		float sea = 0.38 + (fbm(nuv * 3.0) - 0.5) * 0.06;
+		COLOR = vec4(sea, sea, sea, 1.0);
+	} else {
+		float dist = length((uv - 0.5) * vec2(1.85, 2.0));
+		float continent = fbm(nuv * 4.5) - dist * 0.65 + 0.18;
+		// Las cordilleras solo donde una máscara de baja frecuencia lo permite: cadenas, no un macizo nevado entero.
+		float range_mask = smoothstep(0.36, 0.60, fbm(nuv * 2.2 + vec2(7.3, 1.9)));
+		float mountains = ridged(nuv * 9.0) * smoothstep(0.05, 0.45, continent) * range_mask * 0.40;
+		float h = clamp(0.5 + continent * 0.30 + mountains, 0.02, 0.98);
+		COLOR = vec4(h, h, h, 1.0);
+	}
 }

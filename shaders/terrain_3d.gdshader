@@ -4,7 +4,16 @@ render_mode cull_back, diffuse_lambert, specular_schlick_ggx;
 uniform sampler2D height_tex : filter_linear, repeat_disable;
 uniform float sea_level = 0.5;
 uniform float height_scale = 2.6;
-uniform float terrain_size = 12.0;
+// Tamaño de la malla en unidades del mundo (ancho, fondo): los mapas apaisados no son cuadrados.
+uniform vec2 terrain_size = vec2(12.0, 12.0);
+uniform sampler2D biome_tex : filter_nearest, repeat_disable;
+uniform sampler2D realm_tex : filter_nearest, repeat_disable;
+uniform sampler2D biome_pal : source_color, filter_nearest, repeat_disable;
+uniform sampler2D realm_pal : source_color, filter_nearest, repeat_disable;
+uniform float biome_desat = 0.0;
+uniform vec3 biome_tint : source_color = vec3(0.95, 0.92, 0.84);
+uniform float biome_tint_amt = 0.0;
+uniform bool show_realms = true;
 
 uniform vec3 col_deep_sea : source_color = vec3(0.12, 0.20, 0.30);
 uniform vec3 col_shallow_sea : source_color = vec3(0.32, 0.47, 0.59);
@@ -12,6 +21,17 @@ uniform vec3 col_land_low : source_color = vec3(0.88, 0.84, 0.74);
 uniform vec3 col_land_mid : source_color = vec3(0.64, 0.62, 0.52);
 uniform vec3 col_cliff : source_color = vec3(0.38, 0.36, 0.34);
 uniform vec3 col_snow : source_color = vec3(0.96, 0.96, 0.95);
+
+int id_at(sampler2D tex, vec2 uv) {
+	return int(round(texture(tex, uv).r * 255.0));
+}
+
+vec3 biome_color(int id) {
+	vec3 c = texelFetch(biome_pal, ivec2(id, 0), 0).rgb;
+	float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+	c = mix(c, vec3(l), biome_desat);
+	return mix(c, biome_tint * (0.55 + 0.55 * l), biome_tint_amt);
+}
 
 void vertex() {
 	float h = texture(height_tex, UV).r;
@@ -44,12 +64,12 @@ void fragment() {
 
 		float dx = ((tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl)) * 0.25;
 		float dz = ((bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr)) * 0.25;
-		float step_world = terrain_size * t.x * 2.0;
+		vec2 step_world = terrain_size * t * 2.0;
 
 		vec3 n_obj = normalize(vec3(
-			-dx * height_scale,
-			step_world,
-			-dz * height_scale
+			-dx * height_scale / step_world.x,
+			1.0,
+			-dz * height_scale / step_world.y
 		));
 		NORMAL = normalize((VIEW_MATRIX * MODEL_MATRIX * vec4(n_obj, 0.0)).xyz);
 
@@ -57,6 +77,16 @@ void fragment() {
 		float slope = 1.0 - n_obj.y;
 
 		vec3 land = mix(col_land_low, col_land_mid, smoothstep(0.08, 0.55, elev));
+		int bid = id_at(biome_tex, UV);
+		if (bid > 0) {
+			land = mix(biome_color(bid), land, smoothstep(0.55, 0.95, elev) * 0.6);
+		}
+		if (show_realms) {
+			int rid = id_at(realm_tex, UV);
+			if (rid > 0) {
+				land = mix(land, texelFetch(realm_pal, ivec2(rid, 0), 0).rgb, 0.22);
+			}
+		}
 		land = mix(land, col_cliff, smoothstep(0.18, 0.52, slope));
 		land = mix(land, col_snow, smoothstep(0.68, 0.90, elev) * (1.0 - smoothstep(0.35, 0.65, slope)));
 

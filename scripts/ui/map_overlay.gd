@@ -1,7 +1,8 @@
 extends Control
 
-## Lo que va encima del mapa en 2D, en coordenadas de pantalla: el anillo del pincel mientras dibujas,
-## la flecha del norte y la escala de zoom. No recibe toques (MOUSE_FILTER_IGNORE).
+## Lo que va encima del mapa en 2D, en coordenadas de pantalla: nombres de reinos, lugares con su símbolo y su
+## nombre (que aparecen según el zoom, como en un atlas), el anillo del pincel, el norte y el zoom.
+## No recibe toques (MOUSE_FILTER_IGNORE).
 
 var ring_visible: bool = false
 var ring_center: Vector2 = Vector2.ZERO
@@ -9,8 +10,37 @@ var ring_radius: float = 20.0
 var ring_subtracts: bool = false
 var zoom_pct: int = 100
 
+## Dónde está el mapa en pantalla: esquina, tamaño en pantalla (ya con zoom) y zoom.
+var map_pos: Vector2 = Vector2.ZERO
+var map_screen_size: Vector2 = Vector2(100, 100)
+var map_zoom: float = 1.0
+
+var places: Array = []
+var realms: Array = []
+var centroids: Dictionary = {}
+var selected_place: int = -1
+var show_place_names: bool = true
+var show_realm_names: bool = true
+var ink: Color = Estilo.TINTA
+var paper: Color = Estilo.PAPEL
+
+var _realm_font: FontVariation
+
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_realm_font = FontVariation.new()
+	_realm_font.base_font = Estilo.F_NEGRITA
+	_realm_font.spacing_glyph = 6
+
+func set_view(pos: Vector2, screen_size: Vector2, zoom: float) -> void:
+	map_pos = pos
+	map_screen_size = screen_size
+	map_zoom = zoom
+	zoom_pct = int(round(zoom * 100.0))
+	queue_redraw()
+
+func uv_to_screen(uv: Vector2) -> Vector2:
+	return map_pos + uv * map_screen_size
 
 func show_ring(center: Vector2, radius: float, subtracts: bool) -> void:
 	ring_visible = true
@@ -24,26 +54,156 @@ func hide_ring() -> void:
 		ring_visible = false
 		queue_redraw()
 
-func set_zoom(pct: int) -> void:
-	if pct != zoom_pct:
-		zoom_pct = pct
-		queue_redraw()
-
 func _draw() -> void:
+	if show_realm_names:
+		_draw_realm_names()
+	_draw_places()
 	if ring_visible:
-		# Doble anillo (papel por fuera, tinta por dentro) para que se vea sobre mar y sobre tierra.
 		draw_arc(ring_center, ring_radius + 1.5, 0.0, TAU, 72, Estilo.PAPEL, 2.0, true)
 		draw_arc(ring_center, ring_radius, 0.0, TAU, 72, Estilo.TINTA, 1.5, true)
 		var c: Color = Estilo.ACENTO
 		draw_line(ring_center - Vector2(5, 0), ring_center + Vector2(5, 0), c, 2.0)
 		if not ring_subtracts:
 			draw_line(ring_center - Vector2(0, 5), ring_center + Vector2(0, 5), c, 2.0)
-
 	_draw_north(Vector2(40, size.y - 46))
 	_draw_zoom_tag()
 
+# ---------------------------------------------------------------- reinos
+
+func _draw_realm_names() -> void:
+	for r in realms:
+		var id: int = int(r["id"])
+		if not centroids.has(id):
+			continue
+		var c: Dictionary = centroids[id]
+		var area: float = c["area"]
+		var uv: Vector2 = c["uv"]
+		var p: Vector2 = uv_to_screen(uv)
+		var extent: float = sqrt(area) * minf(map_screen_size.x, map_screen_size.y)
+		var fs: int = int(clampf(extent * 0.085, 11.0, 30.0))
+		var kind: String = r["kind"]
+		var nm: String = r["name"]
+		var txt: String = (kind + " DE " + nm).to_upper()
+		var col: Color = r["color"]
+		var tw: float = _realm_font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		var at: Vector2 = _free_spot(p, tw, fs)
+		draw_string_outline(_realm_font, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 5, Color(paper, 0.75))
+		draw_string(_realm_font, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col.darkened(0.35))
+
+## Donde poner el nombre de un reino tapando los menos lugares posibles: prueba alturas alrededor del centro
+## (el centro gana si empata).
+func _free_spot(center: Vector2, tw: float, fs: int) -> Vector2:
+	var offsets: Array[float] = [0.0, 1.2, -1.2, 2.2, -2.2, 3.2, -3.2]
+	var best: Vector2 = center + Vector2(-tw * 0.5, fs * 0.35)
+	var best_hits: int = 1 << 20
+	for o in offsets:
+		var at: Vector2 = center + Vector2(-tw * 0.5, fs * 0.35 + o * fs)
+		var box := Rect2(at + Vector2(-6, -fs - 6), Vector2(tw + 12, fs + 14))
+		var hits: int = 0
+		for pl in places:
+			var uv: Vector2 = pl["uv"]
+			var sp: Vector2 = uv_to_screen(uv)
+			if box.has_point(sp):
+				hits += 3 if str(pl["kind"]) == "capital" else 1
+		if hits < best_hits:
+			best_hits = hits
+			best = at
+		if hits == 0:
+			break
+	return best
+
+# ---------------------------------------------------------------- lugares
+
+func _draw_places() -> void:
+	for p in places:
+		var kind: String = p["kind"]
+		var uv: Vector2 = p["uv"]
+		var at: Vector2 = uv_to_screen(uv)
+		if at.x < -40 or at.y < -40 or at.x > size.x + 40 or at.y > size.y + 40:
+			continue
+		var id: int = int(p["id"])
+		if id == selected_place:
+			draw_circle(at, 15.0, Color(Estilo.ACENTO, 0.25))
+			draw_arc(at, 15.0, 0.0, TAU, 40, Estilo.ACENTO, 2.0, true)
+		_draw_symbol(kind, at)
+		var t: Array = Catalogo.tipo_lugar(kind)
+		var min_zoom: float = t[2]
+		if show_place_names and (map_zoom >= min_zoom or id == selected_place):
+			_draw_place_name(kind, str(p["name"]), at)
+
+func _draw_place_name(kind: String, nm: String, at: Vector2) -> void:
+	var f: Font = Estilo.F_SEMI
+	var fs: int = 12
+	var txt: String = nm
+	if kind == "capital":
+		f = Estilo.F_GROTESCA
+		fs = 17
+		txt = nm.to_upper()
+	elif kind == "ciudad":
+		f = Estilo.versalitas()
+		fs = 13
+		txt = nm.to_upper()
+	elif kind == "aldea" or kind == "ruinas" or kind == "mina":
+		f = Estilo.F_TEXTO
+		fs = 11
+	var pos: Vector2 = at + Vector2(11, fs * 0.36)
+	draw_string_outline(f, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(paper, 0.9))
+	draw_string(f, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, ink)
+
+func _draw_symbol(kind: String, c: Vector2) -> void:
+	var k: Color = ink
+	var w: Color = paper
+	match kind:
+		"capital":
+			draw_rect(Rect2(c - Vector2(7, 7), Vector2(14, 14)), k)
+			draw_rect(Rect2(c - Vector2(4, 4), Vector2(8, 8)), w)
+			draw_rect(Rect2(c - Vector2(2, 2), Vector2(4, 4)), k)
+		"ciudad":
+			draw_circle(c, 6.5, k)
+			draw_circle(c, 3.2, w)
+		"pueblo":
+			draw_circle(c, 4.5, k)
+		"aldea":
+			draw_circle(c, 3.6, w)
+			draw_arc(c, 3.6, 0.0, TAU, 20, k, 1.6, true)
+		"castillo":
+			draw_rect(Rect2(c + Vector2(-6, -4), Vector2(12, 10)), k)
+			for i in 3:
+				draw_rect(Rect2(c + Vector2(-6 + i * 4.5, -8), Vector2(3, 4)), k)
+			draw_rect(Rect2(c + Vector2(-1.5, 1), Vector2(3, 5)), w)
+		"puerto":
+			draw_circle(c + Vector2(0, -6), 2.4, w)
+			draw_arc(c + Vector2(0, -6), 2.4, 0.0, TAU, 16, k, 1.5, true)
+			draw_line(c + Vector2(0, -3.5), c + Vector2(0, 6), k, 1.8)
+			draw_arc(c + Vector2(0, 1), 5.5, 0.2, PI - 0.2, 14, k, 1.8, true)
+			draw_line(c + Vector2(-3, -1), c + Vector2(3, -1), k, 1.6)
+		"templo":
+			draw_colored_polygon(PackedVector2Array([c + Vector2(-7, -2), c + Vector2(0, -8), c + Vector2(7, -2)]), k)
+			draw_rect(Rect2(c + Vector2(-6, -1), Vector2(12, 7)), k)
+			for i in 3:
+				draw_rect(Rect2(c + Vector2(-4 + i * 3.2, 0.5), Vector2(1.6, 4.5)), w)
+		"torre":
+			draw_rect(Rect2(c + Vector2(-3, -7), Vector2(6, 14)), k)
+			draw_rect(Rect2(c + Vector2(-4.5, -9), Vector2(9, 3)), k)
+		"ruinas":
+			draw_polyline(PackedVector2Array([c + Vector2(-6, -2), c + Vector2(-6, 6), c + Vector2(1, 6)]), k, 1.8)
+			draw_polyline(PackedVector2Array([c + Vector2(6, 2), c + Vector2(6, -6), c + Vector2(-1, -6)]), k, 1.8)
+		"mina":
+			draw_line(c + Vector2(-6, -6), c + Vector2(6, 6), k, 2.0)
+			draw_line(c + Vector2(6, -6), c + Vector2(-6, 6), k, 2.0)
+			draw_line(c + Vector2(-8, -4), c + Vector2(-4, -8), k, 2.4)
+			draw_line(c + Vector2(4, -8), c + Vector2(8, -4), k, 2.4)
+		"batalla":
+			draw_line(c + Vector2(-7, -7), c + Vector2(7, 7), k, 1.8)
+			draw_line(c + Vector2(7, -7), c + Vector2(-7, 7), k, 1.8)
+			draw_line(c + Vector2(-6, 2), c + Vector2(-2, 6), k, 1.8)
+			draw_line(c + Vector2(6, 2), c + Vector2(2, 6), k, 1.8)
+		_:
+			draw_circle(c, 4.0, k)
+
+# ---------------------------------------------------------------- norte y zoom
+
 func _draw_north(at: Vector2) -> void:
-	# Rosa mínima: una aguja partida (mitad tinta, mitad papel) y una N en grotesca.
 	var h: float = 22.0
 	var w: float = 8.0
 	var top: Vector2 = at + Vector2(0, -h)

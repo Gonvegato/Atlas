@@ -1,13 +1,14 @@
 extends Control
 
-## ATLAS. — la pantalla principal, con la cara «C» de la familia: cabecera de papel con el nombre en grotesca y su
-## punto del acento, banda de tinta con la herramienta elegida en un bloque del acento, la mesa con el mapa y, a la
-## derecha, el panel con las cifras en bloques de borde grueso.
+## ATLAS. — la pantalla principal, con la cara «C» de la familia: cabecera de papel con el nombre en grotesca,
+## banda de tinta con las secciones (la elegida en un bloque del acento, con su cuenta) y, a la derecha, el panel
+## de la sección. Secciones: Relieve · Biomas · Político · Lugares · Mundo.
 
 const HEADER_H: int = 84
 const TABS_H: int = 52
-const PANEL_W: int = 332
+const PANEL_W: int = 340
 const MAP_MAT: float = 14.0
+const PLACE_HIT_PX: float = 20.0
 
 const MapOverlay = preload("res://scripts/ui/map_overlay.gd")
 
@@ -23,9 +24,59 @@ const MapOverlay = preload("res://scripts/ui/map_overlay.gd")
 @onready var cam_pivot: Node3D = $Workspace/View3DContainer/SubViewport3D/CameraPivot
 @onready var cam_3d: Camera3D = $Workspace/View3DContainer/SubViewport3D/CameraPivot/Camera3D
 
+const SECTIONS = [["relieve", "RELIEVE"], ["biomas", "BIOMAS"], ["politico", "POLÍTICO"], ["lugares", "LUGARES"], ["mundo", "MUNDO"]]
+
+## [id, nombre, qué hace]
+const TOOLS = [
+	["land", "TIERRA", "Levanta tierra suave."],
+	["mountain", "CORDILLERA", "Levanta montañas con crestas."],
+	["sea", "MAR", "Hunde la tierra bajo el mar."],
+	["river", "RÍO", "Talla un cauce estrecho."],
+	["valley", "VALLE", "Baja la tierra hasta el río: el cauce en medio y las orillas suaves."],
+	["canyon", "CAÑÓN", "Corta un cauce hondo con paredes casi verticales."],
+	["smooth", "SUAVIZAR", "Redondea lo que toca: costas, cauces, picos. Repasa para más."],
+	["cliff", "ACANTILADO", "Hace escalones: rellanos planos y paredes. Elige cuántos abajo."],
+	["plateau", "MESETA", "Aplana a la altura del punto donde empiezas el trazo."],
+]
+
+const SIZES = [["PEQUEÑO", 1024], ["MEDIANO", 2048], ["GRANDE", 3072], ["ENORME", 4096]]
+const SHAPES = [["CUADRADO", Vector2(1, 1)], ["3:2", Vector2(3, 2)], ["APAISADO 2:1", Vector2(2, 1)], ["VERTICAL 2:3", Vector2(2, 3)]]
+
+const THEMES = [
+	{
+		"name": "EDITORIAL",
+		"deep": Color(0.24, 0.33, 0.43), "shallow": Color(0.42, 0.53, 0.64),
+		"low": Color(0.95, 0.92, 0.84), "mid": Color(0.86, 0.82, 0.72), "high": Color(0.66, 0.63, 0.57),
+		"snow": Color(0.98, 0.97, 0.94), "ink": Color(0.10, 0.11, 0.13),
+		"desat": 0.45, "tint": Color(0.95, 0.92, 0.84), "tint_amt": 0.30
+	},
+	{
+		"name": "PERGAMINO",
+		"deep": Color(0.55, 0.48, 0.38), "shallow": Color(0.73, 0.66, 0.53),
+		"low": Color(0.93, 0.87, 0.73), "mid": Color(0.82, 0.74, 0.58), "high": Color(0.60, 0.50, 0.38),
+		"snow": Color(0.96, 0.93, 0.86), "ink": Color(0.22, 0.15, 0.10),
+		"desat": 0.75, "tint": Color(0.86, 0.74, 0.55), "tint_amt": 0.50
+	},
+	{
+		"name": "FANTASÍA",
+		"deep": Color(0.09, 0.22, 0.38), "shallow": Color(0.22, 0.52, 0.66),
+		"low": Color(0.45, 0.62, 0.38), "mid": Color(0.62, 0.60, 0.38), "high": Color(0.48, 0.44, 0.42),
+		"snow": Color(0.96, 0.97, 0.99), "ink": Color(0.08, 0.10, 0.12),
+		"desat": 0.0, "tint": Color(1, 1, 1), "tint_amt": 0.0
+	}
+]
+
+# --- estado
+var section: String = "relieve"
 var current_tool: String = "mountain"
+var current_biome: int = 2
+var current_realm: int = -1
+var realm_erase: bool = false
+var place_kind: String = "ciudad"
+var selected_place: int = -1
 var brush_radius: float = 38.0
-var brush_strength: float = 0.022
+var brush_strength: float = 0.5
+var cliff_steps: float = 10.0
 var sea_level: float = 0.5
 var sun_azimuth: float = 315.0
 var relief_mult: float = 1.0
@@ -35,76 +86,78 @@ var yaw: float = 0.45
 var pitch: float = -0.62
 var cam_dist: float = 13.5
 var current_theme_idx: int = 0
-var is_painting: bool = false
+var new_size_idx: int = 1
+var new_shape_idx: int = 0
+var new_mode: int = 0
+var show_symbols: bool = true
+var show_realms: bool = true
+var _stroke_kind: String = ""
+var _drag_place: int = -1
+var _drag_before: Dictionary = {}
+var _drag_moved: bool = false
+var _last_pan_pos: Vector2 = Vector2.ZERO
+var _armed: String = ""
 
 var mat_2d: ShaderMaterial
 var mat_3d: ShaderMaterial
 var overlay: Control
+var biome_pal_tex: ImageTexture
 
-# Interfaz
+# --- interfaz
 var btn_mode_3d: Button
 var btn_undo: Button
 var btn_redo: Button
 var lbl_world: Label
-var tool_bar: HBoxContainer
 var lbl_hint: Label
-var tool_buttons: Dictionary = {}
-var theme_buttons: Array[Button] = []
+var tab_buttons: Dictionary = {}
+var sections_ui: Dictionary = {}
+var brush_box: VBoxContainer
+var strength_row: Control
+var steps_row: Control
+var sec_relief_3d: Control
+var tool_chips: Array[Button] = []
 var lbl_tool_name: Label
+var lbl_tool_desc: Label
 var val_size: Label
 var val_strength: Label
+var val_steps: Label
 var val_sea: Label
 var val_sun: Label
 var val_relief: Label
 var val_land: Label
 var val_water: Label
 var val_strokes: Label
-var sec_brush: Control
-var sec_relief: Control
-
-const TOOLS = [
-	["TIERRA", "land"],
-	["CORDILLERA", "mountain"],
-	["MAR", "sea"],
-	["RÍO", "river"],
-]
-
-const THEMES = [
-	{
-		"name": "EDITORIAL",
-		"deep": Color(0.24, 0.33, 0.43),
-		"shallow": Color(0.42, 0.53, 0.64),
-		"low": Color(0.95, 0.92, 0.84),
-		"mid": Color(0.86, 0.82, 0.72),
-		"high": Color(0.66, 0.63, 0.57),
-		"snow": Color(0.98, 0.97, 0.94),
-		"ink": Color(0.10, 0.11, 0.13)
-	},
-	{
-		"name": "PERGAMINO",
-		"deep": Color(0.55, 0.48, 0.38),
-		"shallow": Color(0.73, 0.66, 0.53),
-		"low": Color(0.93, 0.87, 0.73),
-		"mid": Color(0.82, 0.74, 0.58),
-		"high": Color(0.60, 0.50, 0.38),
-		"snow": Color(0.96, 0.93, 0.86),
-		"ink": Color(0.22, 0.15, 0.10)
-	},
-	{
-		"name": "FANTASÍA",
-		"deep": Color(0.09, 0.22, 0.38),
-		"shallow": Color(0.22, 0.52, 0.66),
-		"low": Color(0.45, 0.62, 0.38),
-		"mid": Color(0.62, 0.60, 0.38),
-		"high": Color(0.48, 0.44, 0.42),
-		"snow": Color(0.96, 0.97, 0.99),
-		"ink": Color(0.08, 0.10, 0.12)
-	}
-]
+var lbl_map_px: Label
+var lbl_quality_note: Label
+var biome_buttons: Array[Button] = []
+var lbl_biome_name: Label
+var theme_buttons: Array[Button] = []
+var realm_list: VBoxContainer
+var realm_editor: VBoxContainer
+var realm_name_edit: LineEdit
+var realm_kind_chips: Array[Button] = []
+var realm_color_buttons: Array[Button] = []
+var realm_mode_chips: Array[Button] = []
+var lbl_realm_count: Label
+var lbl_realm_hint: Label
+var place_kind_chips: Array[Button] = []
+var place_editor: VBoxContainer
+var place_name_edit: LineEdit
+var lbl_place_count: Label
+var size_chips: Array[Button] = []
+var shape_chips: Array[Button] = []
+var mode_chips: Array[Button] = []
+var btn_create: Button
+var extend_buttons: Dictionary = {}
+var btn_quality: Button
+var chk_symbols: Button
+var chk_realms: Button
+var chk_names: Button
 
 func _ready() -> void:
 	workspace.offset_top = HEADER_H + TABS_H
 	workspace.offset_right = -PANEL_W
+	biome_pal_tex = Catalogo.textura_biomas()
 	_build_ui()
 	_setup_materials()
 	_connect_signals()
@@ -114,46 +167,48 @@ func _ready() -> void:
 	_apply_sun()
 	_update_3d_camera()
 	_select_tool(current_tool)
+	_select_biome(current_biome)
+	_select_section("relieve")
 	await get_tree().process_frame
 	_center_map()
 	view_2d_root.resized.connect(_center_map)
-	# Las cifras del mundo inicial se leen cuando ya está en pantalla (nunca durante _ready).
-	get_tree().create_timer(0.6).timeout.connect(func(): engine.refresh_stats())
 
-# ---------------------------------------------------------------- mapa y 3D
+# ================================================================ mapa y 3D
 
 func _setup_materials() -> void:
 	mat_2d = ShaderMaterial.new()
 	mat_2d.shader = load("res://shaders/map_2d.gdshader")
+	mat_2d.set_shader_parameter("biome_pal", biome_pal_tex)
 	map_canvas.material = mat_2d
-
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(12.0, 12.0)
-	plane.subdivide_width = 140
-	plane.subdivide_depth = 140
-	terrain_mesh.mesh = plane
 
 	mat_3d = ShaderMaterial.new()
 	mat_3d.shader = load("res://shaders/terrain_3d.gdshader")
+	mat_3d.set_shader_parameter("biome_pal", biome_pal_tex)
 	terrain_mesh.material_override = mat_3d
+	_rebuild_realm_palette()
 
-	engine.heightmap_ready.connect(func(tex: Texture2D):
-		mat_2d.set_shader_parameter("height_tex", tex)
-		mat_3d.set_shader_parameter("height_tex", tex)
-	)
+func _on_layers_ready(size: Vector2i) -> void:
+	for m in [mat_2d, mat_3d]:
+		m.set_shader_parameter("height_tex", engine.height.get_texture())
+		m.set_shader_parameter("biome_tex", engine.biome.get_texture())
+		m.set_shader_parameter("realm_tex", engine.realm.get_texture())
+	var long_side: float = float(maxi(size.x, size.y))
+	var world := Vector2(size) / long_side * 12.0
+	var plane := PlaneMesh.new()
+	plane.size = world
+	plane.subdivide_width = int(round(220.0 * world.x / 12.0))
+	plane.subdivide_depth = int(round(220.0 * world.y / 12.0))
+	terrain_mesh.mesh = plane
+	mat_3d.set_shader_parameter("terrain_size", world)
+	lbl_map_px.text = "%s × %s PX" % [Estilo.miles(size.x), Estilo.miles(size.y)]
+	lbl_world.text = "MUNDO Nº %04d · %s" % [engine.world_seed, Estilo.fecha_corta()]
+	_center_map()
+	_refresh_quality()
 
 func _connect_signals() -> void:
-	input_ctrl.stroke_started.connect(func(pos: Vector2, pressure: float):
-		is_painting = true
-		engine.begin_stroke()
-		_on_paint(pos, pressure)
-	)
-	input_ctrl.stroke_moved.connect(_on_paint)
-	input_ctrl.stroke_ended.connect(func():
-		is_painting = false
-		overlay.hide_ring()
-		engine.end_stroke()
-	)
+	input_ctrl.stroke_started.connect(_on_stroke_started)
+	input_ctrl.stroke_moved.connect(_on_stroke_moved)
+	input_ctrl.stroke_ended.connect(_on_stroke_ended)
 	input_ctrl.pan_changed.connect(func(d: Vector2):
 		map_offset += d
 		_apply_2d_transform()
@@ -165,7 +220,7 @@ func _connect_signals() -> void:
 		else:
 			# center ya viene en coordenadas locales del Workspace (las de gui_input).
 			var old_zoom: float = map_zoom
-			map_zoom = clampf(map_zoom * factor, 0.5, 10.0)
+			map_zoom = clampf(map_zoom * factor, 0.5, 16.0)
 			map_offset = center - (center - map_offset) * (map_zoom / old_zoom)
 			_apply_2d_transform()
 	)
@@ -174,6 +229,7 @@ func _connect_signals() -> void:
 		pitch = clampf(pitch - d.y * 0.007, -1.45, -0.15)
 		_update_3d_camera()
 	)
+	engine.layers_ready.connect(_on_layers_ready)
 	engine.history_changed.connect(func(can_undo: bool, can_redo: bool):
 		btn_undo.disabled = not can_undo
 		btn_redo.disabled = not can_redo
@@ -185,26 +241,142 @@ func _connect_signals() -> void:
 		val_water.text = "%d %%" % (100 - land_pct)
 		val_strokes.text = Estilo.miles(engine.stroke_count)
 	)
+	engine.realms_changed.connect(_on_realms_changed)
+	engine.places_changed.connect(_on_places_changed)
+	engine.realm_centroids_changed.connect(func(c: Dictionary):
+		overlay.centroids = c
+		overlay.queue_redraw()
+	)
 
 func _on_workspace_gui_input(event: InputEvent) -> void:
 	input_ctrl.handle_input(event)
 
-## pos llega en coordenadas locales del Workspace. View2D ocupa el Workspace entero desde (0, 0),
-## así que el mapa está en map_offset con escala map_zoom.
-func _on_paint(pos: Vector2, pressure: float) -> void:
-	var uv: Vector2 = (pos - map_offset) / (map_canvas.size * map_zoom)
-	var effective_radius: float = brush_radius * (0.6 if current_tool == "river" else 1.0)
-	var effective_strength: float = brush_strength * pressure * (1.35 if current_tool == "river" else 1.0)
-	engine.paint_uv(uv, current_tool, effective_radius, effective_strength)
-	var screen_r: float = effective_radius / float(engine.resolution) * map_canvas.size.x * map_zoom
-	overlay.show_ring(pos, screen_r, current_tool == "sea" or current_tool == "river")
+func _pos_to_uv(pos: Vector2) -> Vector2:
+	return (pos - map_offset) / (map_canvas.size * map_zoom)
+
+func _brush_px_on_screen(r: float) -> float:
+	return r / float(engine.map_size.x) * map_canvas.size.x * map_zoom
+
+## Radio real de la herramienta (en píxeles del mapa) según el deslizador.
+func _tool_radius() -> float:
+	var r: float = brush_radius * float(maxi(engine.map_size.x, engine.map_size.y)) / 1024.0
+	match current_tool:
+		"river":
+			return r * 0.6
+		"valley":
+			return r * 1.8
+		"canyon":
+			return r * 1.1
+	return r
+
+func _on_stroke_started(pos: Vector2, pressure: float) -> void:
+	if not engine.world_ready:
+		return
+	_stroke_kind = ""
+	var uv: Vector2 = _pos_to_uv(pos)
+	match section:
+		"relieve":
+			_stroke_kind = "paint"
+			engine.begin_stroke(current_tool, 0, uv)
+		"biomas":
+			_stroke_kind = "paint"
+			engine.begin_stroke("biome", current_biome, uv)
+		"politico":
+			if current_realm <= 0 and not realm_erase:
+				_flash_realm_hint()
+				return
+			_stroke_kind = "paint"
+			engine.begin_stroke("realm", 0 if realm_erase else current_realm, uv)
+		"lugares":
+			_place_down(pos, uv)
+			return
+		_:
+			_stroke_kind = "pan"
+			_last_pan_pos = pos
+			return
+	_on_stroke_moved(pos, pressure)
+
+func _on_stroke_moved(pos: Vector2, pressure: float) -> void:
+	match _stroke_kind:
+		"paint":
+			var uv: Vector2 = _pos_to_uv(pos)
+			var r: float = _tool_radius() if section == "relieve" else brush_radius * float(maxi(engine.map_size.x, engine.map_size.y)) / 1024.0
+			var s: float = _tool_strength(pressure)
+			engine.paint_uv(uv, r, s, cliff_steps)
+			var subtracts: bool = section == "relieve" and current_tool in ["sea", "river", "valley", "canyon"]
+			overlay.show_ring(pos, _brush_px_on_screen(r), subtracts)
+		"place":
+			if _drag_place > 0:
+				var uv2: Vector2 = _pos_to_uv(pos).clamp(Vector2.ZERO, Vector2.ONE)
+				_drag_moved = true
+				engine.move_place_live(_drag_place, uv2)
+		"pan":
+			map_offset += pos - _last_pan_pos
+			_last_pan_pos = pos
+			_apply_2d_transform()
+
+func _on_stroke_ended() -> void:
+	match _stroke_kind:
+		"paint":
+			overlay.hide_ring()
+			engine.end_stroke()
+		"place":
+			if _drag_place > 0 and _drag_moved:
+				engine.commit_place_move(_drag_before)
+	_stroke_kind = ""
+	_drag_place = -1
+	_drag_moved = false
+
+## Fuerza según la herramienta: los pinceles que suman usan incrementos pequeños; los que mezclan, alfa.
+func _tool_strength(pressure: float) -> float:
+	var f: float = brush_strength
+	match current_tool:
+		"land", "mountain", "sea":
+			return lerpf(0.006, 0.05, f) * pressure
+		"river":
+			return lerpf(0.006, 0.05, f) * pressure * 1.35
+		"valley", "canyon":
+			return lerpf(0.15, 0.7, f)
+		_:
+			return lerpf(0.05, 0.5, f) * pressure
+
+func _place_down(pos: Vector2, uv: Vector2) -> void:
+	_stroke_kind = "place"
+	var hit: int = _hit_place(pos)
+	if hit > 0:
+		_select_place(hit)
+		_drag_place = hit
+		_drag_before = engine.meta_snapshot()
+		_drag_moved = false
+		return
+	if uv.x < 0.0 or uv.y < 0.0 or uv.x > 1.0 or uv.y > 1.0:
+		return
+	var id: int = engine.add_place(place_kind, uv)
+	_select_place(id)
+
+func _hit_place(pos: Vector2) -> int:
+	var best: int = -1
+	var best_d: float = PLACE_HIT_PX
+	for p in engine.places:
+		var uv: Vector2 = p["uv"]
+		var d: float = overlay.uv_to_screen(uv).distance_to(pos)
+		if d < best_d:
+			best_d = d
+			best = int(p["id"])
+	return best
 
 func _center_map() -> void:
 	var ws_size: Vector2 = view_2d_root.size
-	if ws_size.x <= 0.0 or ws_size.y <= 0.0:
+	if ws_size.x <= 0.0 or ws_size.y <= 0.0 or engine == null:
 		return
-	var target_dim: float = minf(ws_size.x, ws_size.y) - (MAP_MAT + 3.0) * 2.0 - 48.0
-	map_canvas.size = Vector2(target_dim, target_dim)
+	var aspect: float = float(engine.map_size.x) / float(engine.map_size.y)
+	var avail: Vector2 = ws_size - Vector2.ONE * ((MAP_MAT + 3.0) * 2.0 + 48.0)
+	var w: float = avail.x
+	var h: float = w / aspect
+	if h > avail.y:
+		h = avail.y
+		w = h * aspect
+	map_canvas.size = Vector2(w, h)
 	map_zoom = 1.0
 	map_offset = (ws_size - map_canvas.size) * 0.5
 	_apply_2d_transform()
@@ -212,7 +384,7 @@ func _center_map() -> void:
 func _apply_2d_transform() -> void:
 	map_canvas.scale = Vector2.ONE * map_zoom
 	map_canvas.position = map_offset
-	overlay.set_zoom(int(round(map_zoom * 100.0)))
+	overlay.set_view(map_offset, map_canvas.size * map_zoom, map_zoom)
 
 func _update_3d_camera() -> void:
 	cam_pivot.rotation = Vector3(pitch, yaw, 0.0)
@@ -227,24 +399,52 @@ func _toggle_3d() -> void:
 		SubViewport.UPDATE_ALWAYS if in_3d else SubViewport.UPDATE_DISABLED
 	)
 	btn_mode_3d.text = "VOLVER AL MAPA  ←" if in_3d else "VER RELIEVE 3D  →"
-	tool_bar.visible = not in_3d
-	lbl_hint.text = "UN DEDO GIRA · DOS DEDOS ACERCAN" if in_3d else "LÁPIZ DIBUJA · DOS DEDOS MUEVEN Y ACERCAN"
-	sec_brush.visible = not in_3d
-	sec_relief.visible = in_3d
+	sec_relief_3d.visible = in_3d
+	_update_hint()
+
+func _update_hint() -> void:
+	if input_ctrl.is_3d_mode:
+		lbl_hint.text = "UN DEDO GIRA · DOS DEDOS ACERCAN"
+		return
+	match section:
+		"lugares":
+			lbl_hint.text = "TOCA PARA PONER · ARRASTRA PARA MOVER"
+		"mundo":
+			lbl_hint.text = "UN DEDO MUEVE · DOS DEDOS ACERCAN"
+		_:
+			lbl_hint.text = "LÁPIZ DIBUJA · DOS DEDOS MUEVEN Y ACERCAN"
 
 func _apply_theme(idx: int) -> void:
 	current_theme_idx = idx
 	var t: Dictionary = THEMES[idx]
-	for k in [["col_deep_sea", "deep"], ["col_shallow_sea", "shallow"], ["col_land_low", "low"], ["col_land_mid", "mid"], ["col_snow", "snow"]]:
+	for k in [["col_deep_sea", "deep"], ["col_shallow_sea", "shallow"], ["col_land_low", "low"], ["col_land_mid", "mid"], ["col_snow", "snow"], ["biome_tint", "tint"]]:
 		var c: Color = t[k[1]]
 		mat_2d.set_shader_parameter(k[0], c)
 		mat_3d.set_shader_parameter(k[0], c)
+	for k in [["biome_desat", "desat"], ["biome_tint_amt", "tint_amt"]]:
+		var v: float = t[k[1]]
+		mat_2d.set_shader_parameter(k[0], v)
+		mat_3d.set_shader_parameter(k[0], v)
 	var high: Color = t["high"]
 	var ink: Color = t["ink"]
 	mat_2d.set_shader_parameter("col_land_high", high)
 	mat_2d.set_shader_parameter("col_ink", ink)
+	overlay.ink = ink
+	overlay.queue_redraw()
 	for i in theme_buttons.size():
 		_paint_filter(theme_buttons[i], i == idx)
+	_refresh_biome_swatches()
+
+## El color de un bioma tal y como lo pinta el estilo elegido (la misma cuenta que el shader).
+func _styled_biome_color(c: Color) -> Color:
+	var t: Dictionary = THEMES[current_theme_idx]
+	var l: float = c.r * 0.299 + c.g * 0.587 + c.b * 0.114
+	var desat: float = t["desat"]
+	var tint: Color = t["tint"]
+	var amt: float = t["tint_amt"]
+	var out: Color = c.lerp(Color(l, l, l), desat)
+	var tinted := Color(tint.r * (0.55 + 0.55 * l), tint.g * (0.55 + 0.55 * l), tint.b * (0.55 + 0.55 * l))
+	return out.lerp(tinted, amt)
 
 func _apply_sun() -> void:
 	var az: float = deg_to_rad(sun_azimuth)
@@ -261,31 +461,205 @@ func _cardinal(deg: float) -> String:
 	var i: int = int(round(fposmod(deg, 360.0) / 45.0)) % 8
 	return names[i]
 
+## Un mundo nuevo con el tamaño y la forma elegidos en Mundo (o los actuales).
 func _new_world() -> void:
+	var long_side: int = SIZES[new_size_idx][1]
+	var shape: Vector2 = SHAPES[new_shape_idx][1]
+	var size := Vector2i(long_side, long_side)
+	if shape.x > shape.y:
+		size.y = int(round(long_side * shape.y / shape.x))
+	elif shape.y > shape.x:
+		size.x = int(round(long_side * shape.x / shape.y))
 	var s: int = randi_range(1, 9999)
-	lbl_world.text = "MUNDO Nº %04d · %s" % [s, Estilo.fecha_corta()]
-	engine.regenerate_world(s)
+	selected_place = -1
+	current_realm = -1
+	engine.create_world(size, s, new_mode)
 
-# ---------------------------------------------------------------- interfaz
+## Botones que borran trabajo sin vuelta atrás: el primer toque pregunta, el segundo hace.
+func _confirm(key: String, b: Button, text_ready: String, action: Callable) -> void:
+	if _armed == key:
+		_armed = ""
+		b.text = text_ready
+		action.call()
+		return
+	_armed = key
+	b.text = "¿SEGURO? TOCA OTRA VEZ"
+	get_tree().create_timer(3.0).timeout.connect(func():
+		if _armed == key:
+			_armed = ""
+			b.text = text_ready
+	)
+
+# ================================================================ selección
+
+func _select_section(id: String) -> void:
+	section = id
+	for k in tab_buttons.keys():
+		var b: Button = tab_buttons[k]
+		if str(k) == id:
+			Estilo.pintar_boton(b, Estilo.SOBRE_ACENTO, Estilo.ACENTO, Estilo.ACENTO.darkened(0.15), 20, 0)
+		else:
+			Estilo.pintar_boton(b, Estilo.PAPEL, Estilo.TINTA, Color("1C1B19"), 20, 0)
+	for k in sections_ui.keys():
+		var c: Control = sections_ui[k]
+		c.visible = (str(k) == id)
+	brush_box.visible = id in ["relieve", "biomas", "politico"]
+	_refresh_brush_rows()
+	_update_hint()
+
+func _refresh_brush_rows() -> void:
+	strength_row.visible = section == "relieve"
+	steps_row.visible = section == "relieve" and current_tool == "cliff"
 
 func _select_tool(tool_id: String) -> void:
 	current_tool = tool_id
-	for k in tool_buttons.keys():
-		var b: Button = tool_buttons[k]
-		var active: bool = (str(k) == tool_id)
-		if active:
-			Estilo.pintar_boton(b, Estilo.SOBRE_ACENTO, Estilo.ACENTO, Estilo.ACENTO.darkened(0.15), 22, 0)
-		else:
-			Estilo.pintar_boton(b, Estilo.PAPEL, Estilo.TINTA, Color("1C1B19"), 22, 0)
-	for item in TOOLS:
-		if item[1] == tool_id:
-			lbl_tool_name.text = item[0]
+	for i in TOOLS.size():
+		var item: Array = TOOLS[i]
+		var on: bool = item[0] == tool_id
+		_paint_filter(tool_chips[i], on)
+		if on:
+			lbl_tool_name.text = item[1]
+			lbl_tool_desc.text = item[2]
+	_refresh_brush_rows()
+
+func _select_biome(id: int) -> void:
+	current_biome = id
+	for i in biome_buttons.size():
+		_paint_filter(biome_buttons[i], i == id)
+	lbl_biome_name.text = "AUTOMÁTICO" if id == 0 else str(Catalogo.BIOMAS[id - 1][0])
 
 func _paint_filter(b: Button, on: bool) -> void:
 	if on:
-		Estilo.pintar_boton(b, Estilo.PAPEL, Estilo.TINTA, Estilo.TINTA, 14, 10, Estilo.TINTA, 2)
+		Estilo.pintar_boton(b, Estilo.PAPEL, Estilo.TINTA, Estilo.TINTA, 12, 9, Estilo.TINTA, 2)
 	else:
-		Estilo.pintar_boton(b, Estilo.TINTA, Color(0, 0, 0, 0), Color(Estilo.TINTA, 0.08), 14, 10, Estilo.TINTA, 2)
+		Estilo.pintar_boton(b, Estilo.TINTA, Color(0, 0, 0, 0), Color(Estilo.TINTA, 0.08), 12, 9, Estilo.TINTA, 2)
+
+# ================================================================ reinos y lugares
+
+func _rebuild_realm_palette() -> void:
+	var img := Image.create(64, 1, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	for r in engine.realms:
+		var c: Color = r["color"]
+		img.set_pixel(int(r["id"]), 0, c)
+	var tex := ImageTexture.create_from_image(img)
+	if mat_2d != null:
+		mat_2d.set_shader_parameter("realm_pal", tex)
+		mat_3d.set_shader_parameter("realm_pal", tex)
+
+func _on_realms_changed() -> void:
+	_rebuild_realm_palette()
+	if engine.realm_by_id(current_realm).is_empty():
+		current_realm = -1
+	overlay.realms = engine.realms
+	overlay.queue_redraw()
+	_set_tab_count("politico", engine.realms.size())
+	lbl_realm_count.text = "%d REINOS" % engine.realms.size() if engine.realms.size() != 1 else "1 REINO"
+	for c in realm_list.get_children():
+		c.queue_free()
+	for r in engine.realms:
+		var id: int = int(r["id"])
+		var col: Color = r["color"]
+		var b := Estilo.boton("%s · %s" % [str(r["name"]).to_upper(), str(r["kind"])], 12, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 9)
+		b.icon = _swatch(col)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		b.clip_text = true
+		b.pressed.connect(func(): _select_realm(id))
+		realm_list.add_child(b)
+		_paint_filter(b, id == current_realm and not realm_erase)
+	_refresh_realm_editor()
+
+func _select_realm(id: int) -> void:
+	current_realm = id
+	realm_erase = false
+	_on_realms_changed()
+
+func _refresh_realm_editor() -> void:
+	var r: Dictionary = engine.realm_by_id(current_realm)
+	realm_editor.visible = not r.is_empty()
+	for i in realm_mode_chips.size():
+		_paint_filter(realm_mode_chips[i], (i == 1) == realm_erase)
+	if r.is_empty():
+		return
+	if not realm_name_edit.has_focus():
+		realm_name_edit.text = str(r["name"])
+	var kind: String = r["kind"]
+	for i in realm_kind_chips.size():
+		_paint_filter(realm_kind_chips[i], Catalogo.TIPOS_REINO[i] == kind)
+	var col: Color = r["color"]
+	for i in realm_color_buttons.size():
+		var c: Color = Catalogo.COLORES_REINO[i]
+		var on: bool = c.is_equal_approx(col)
+		var sb := Estilo.caja(c, Estilo.TINTA if on else Color(c, 0.0), 3 if on else 0)
+		var b: Button = realm_color_buttons[i]
+		b.add_theme_stylebox_override("normal", sb)
+		b.add_theme_stylebox_override("hover", sb)
+		b.add_theme_stylebox_override("pressed", sb)
+
+func _flash_realm_hint() -> void:
+	lbl_realm_hint.add_theme_color_override("font_color", Estilo.ACENTO)
+	get_tree().create_timer(1.2).timeout.connect(func():
+		lbl_realm_hint.add_theme_color_override("font_color", Estilo.GRIS)
+	)
+
+func _on_places_changed() -> void:
+	overlay.places = engine.places
+	if engine.place_by_id(selected_place).is_empty():
+		selected_place = -1
+	overlay.selected_place = selected_place
+	overlay.queue_redraw()
+	_set_tab_count("lugares", engine.places.size())
+	lbl_place_count.text = "%d LUGARES" % engine.places.size() if engine.places.size() != 1 else "1 LUGAR"
+	_refresh_place_editor()
+
+func _select_place(id: int) -> void:
+	selected_place = id
+	overlay.selected_place = id
+	overlay.queue_redraw()
+	_refresh_place_editor()
+
+func _refresh_place_editor() -> void:
+	var p: Dictionary = engine.place_by_id(selected_place)
+	place_editor.visible = not p.is_empty()
+	var kind: String = place_kind if p.is_empty() else str(p["kind"])
+	for i in place_kind_chips.size():
+		_paint_filter(place_kind_chips[i], Catalogo.TIPOS_LUGAR[i][0] == kind)
+	if not p.is_empty() and not place_name_edit.has_focus():
+		place_name_edit.text = str(p["name"])
+
+func _set_tab_count(id: String, n: int) -> void:
+	var b: Button = tab_buttons[id]
+	var base: String = ""
+	for s in SECTIONS:
+		if s[0] == id:
+			base = s[1]
+	b.text = base if n == 0 else "%s %d" % [base, n]
+
+func _swatch(c: Color) -> ImageTexture:
+	var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	img.fill(Estilo.TINTA)
+	img.fill_rect(Rect2i(2, 2, 12, 12), c)
+	return ImageTexture.create_from_image(img)
+
+func _refresh_biome_swatches() -> void:
+	for i in biome_buttons.size():
+		if i == 0:
+			continue
+		var c: Color = Catalogo.BIOMAS[i - 1][1]
+		biome_buttons[i].icon = _swatch(_styled_biome_color(c))
+
+func _refresh_quality() -> void:
+	if btn_quality == null:
+		return
+	_paint_filter(btn_quality, engine.hdr)
+	btn_quality.text = "ALTA PRECISIÓN · 16 BITS" if engine.hdr else "PRECISIÓN NORMAL · 8 BITS"
+	if engine.hdr_fallback:
+		lbl_quality_note.text = "El último arranque con alta precisión no terminó: se ha vuelto a 8 bits. Puedes volver a probar."
+	else:
+		lbl_quality_note.text = "Relieve más fino al ampliar (sin escalones). Si el móvil no la aguanta, ATLAS vuelve solo a 8 bits."
+
+# ================================================================ construcción de la interfaz
 
 func _build_ui() -> void:
 	var bg := ColorRect.new()
@@ -318,10 +692,8 @@ func _build_header() -> void:
 	row.add_theme_constant_override("separation", 0)
 	header.add_child(row)
 
-	# «ATLAS.»: el nombre en grotesca, con el punto del acento.
 	var name_box := HBoxContainer.new()
 	name_box.add_theme_constant_override("separation", 0)
-	name_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	name_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	name_box.add_child(Estilo.etiqueta("ATLAS", 54, Estilo.TINTA, Estilo.grotesca_prieta()))
 	name_box.add_child(Estilo.etiqueta(".", 54, Estilo.ACENTO, Estilo.F_GROTESCA))
@@ -339,7 +711,7 @@ func _build_header() -> void:
 	var transparent := Color(0, 0, 0, 0)
 	var pressed_bg := Color(Estilo.TINTA, 0.07)
 	var b_new := Estilo.boton("+ NUEVO MUNDO", 13, Estilo.ACENTO, transparent, pressed_bg, 10, 12)
-	b_new.pressed.connect(_new_world)
+	b_new.pressed.connect(func(): _select_section("mundo"))
 	links.add_child(b_new)
 
 	btn_undo = Estilo.boton("DESHACER", 13, Estilo.TINTA, transparent, pressed_bg, 10, 12)
@@ -392,28 +764,24 @@ func _build_tabs() -> void:
 	row.add_theme_constant_override("separation", 0)
 	band.add_child(row)
 
-	tool_bar = HBoxContainer.new()
-	tool_bar.add_theme_constant_override("separation", 0)
-	row.add_child(tool_bar)
-	for item in TOOLS:
-		var b := Estilo.boton(item[0], 13, Estilo.PAPEL, Estilo.TINTA, Color("1C1B19"), 22, 0)
+	for item in SECTIONS:
+		var id: String = item[0]
+		var b := Estilo.boton(item[1], 13, Estilo.PAPEL, Estilo.TINTA, Color("1C1B19"), 20, 0)
 		b.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		b.custom_minimum_size = Vector2(0, TABS_H)
-		var tool_id: String = item[1]
-		b.pressed.connect(func(): _select_tool(tool_id))
-		tool_bar.add_child(b)
-		tool_buttons[tool_id] = b
+		b.pressed.connect(func(): _select_section(id))
+		row.add_child(b)
+		tab_buttons[id] = b
 
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(spacer)
 
-	lbl_hint = Estilo.etiqueta("LÁPIZ DIBUJA · DOS DEDOS MUEVEN Y ACERCAN", 11, Color(Estilo.PAPEL, 0.55))
+	lbl_hint = Estilo.etiqueta("", 11, Color(Estilo.PAPEL, 0.55))
 	lbl_hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(lbl_hint)
 
 func _build_map_frame() -> void:
-	# Paspartú de papel con filete de tinta, detrás del mapa: se mueve y escala con él.
 	var frame := Panel.new()
 	frame.show_behind_parent = true
 	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -425,7 +793,7 @@ func _build_map_frame() -> void:
 	frame.add_theme_stylebox_override("panel", Estilo.caja(Estilo.PAPEL, Estilo.TINTA, 3))
 	map_canvas.add_child(frame)
 
-# ---------------------------------------------------------------- panel de la derecha
+# ---------------------------------------------------------------- panel
 
 func _build_panel() -> void:
 	var panel := Panel.new()
@@ -447,108 +815,394 @@ func _build_panel() -> void:
 	var margin := MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for side in ["margin_left", "margin_right"]:
-		margin.add_theme_constant_override(side, 24)
-	margin.add_theme_constant_override("margin_top", 20)
+		margin.add_theme_constant_override(side, 22)
+	margin.add_theme_constant_override("margin_top", 18)
 	margin.add_theme_constant_override("margin_bottom", 24)
 	scroll.add_child(margin)
 
 	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 22)
+	col.add_theme_constant_override("separation", 20)
 	margin.add_child(col)
 
-	# --- Pincel (2D)
-	var brush := VBoxContainer.new()
-	brush.add_theme_constant_override("separation", 10)
-	sec_brush = brush
-	col.add_child(brush)
-	lbl_tool_name = _title(brush, "Pincel", "CORDILLERA")
-	var blocks := _blocks(brush, [["38", "PX · TAMAÑO"], ["73 %", "FUERZA"]])
-	val_size = blocks[0]
-	val_strength = blocks[1]
-	_slider_row(brush, "TAMAÑO", 10.0, 95.0, 1.0, brush_radius, func(v: float):
-		brush_radius = v
-		val_size.text = str(int(v))
-	)
-	_slider_row(brush, "FUERZA", 0.006, 0.05, 0.001, brush_strength, func(v: float):
-		brush_strength = v
-		val_strength.text = "%d %%" % int(round((v - 0.006) / (0.05 - 0.006) * 100.0))
-	)
-	val_size.text = str(int(brush_radius))
-	val_strength.text = "%d %%" % int(round((brush_strength - 0.006) / (0.05 - 0.006) * 100.0))
+	_build_relief_3d(col)
+	_build_section_relieve(col)
+	_build_section_biomas(col)
+	_build_section_politico(col)
+	_build_section_lugares(col)
+	_build_section_mundo(col)
+	_build_brush(col)
 
-	# --- Relieve (3D)
+	var foot := VBoxContainer.new()
+	foot.add_theme_constant_override("separation", 2)
+	col.add_child(foot)
+	foot.add_child(Estilo.filete(1, Color(Estilo.TINTA, 0.2)))
+	foot.add_child(Estilo.etiqueta("ATLAS · hecho en casa", 13, Estilo.GRIS, Estilo.F_SEMI))
+	var ver: String = str(ProjectSettings.get_setting("application/config/version", ""))
+	foot.add_child(Estilo.etiqueta(ver, 12, Estilo.GRIS_CLARO, Estilo.F_TEXTO))
+
+func _section_box(parent: Control, id: String) -> VBoxContainer:
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	parent.add_child(v)
+	sections_ui[id] = v
+	return v
+
+func _note(parent: Control, text: String) -> Label:
+	var l := Estilo.etiqueta(text, 13, Estilo.GRIS, Estilo.F_TEXTO)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.custom_minimum_size = Vector2(PANEL_W - 70, 0)
+	parent.add_child(l)
+	return l
+
+func _chips(parent: Control, labels: Array, on_pick: Callable, size: int = 12) -> Array[Button]:
+	var flow := HFlowContainer.new()
+	flow.add_theme_constant_override("h_separation", 6)
+	flow.add_theme_constant_override("v_separation", 6)
+	parent.add_child(flow)
+	var out: Array[Button] = []
+	for i in labels.size():
+		var b := Estilo.boton(str(labels[i]), size, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 9)
+		var idx: int = i
+		b.pressed.connect(func(): on_pick.call(idx))
+		flow.add_child(b)
+		out.append(b)
+	return out
+
+func _toggle_chip(parent: Control, text: String, on: bool, on_toggle: Callable) -> Button:
+	var b := Estilo.boton(text, 11, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 9)
+	_paint_filter(b, on)
+	b.pressed.connect(func():
+		var now: bool = not bool(b.get_meta("on", on))
+		b.set_meta("on", now)
+		_paint_filter(b, now)
+		on_toggle.call(now)
+	)
+	b.set_meta("on", on)
+	parent.add_child(b)
+	return b
+
+func _line_edit(parent: Control, on_submit: Callable) -> LineEdit:
+	var e := LineEdit.new()
+	e.add_theme_font_override("font", Estilo.F_SEMI)
+	e.add_theme_font_size_override("font_size", 17)
+	e.add_theme_color_override("font_color", Estilo.TINTA)
+	e.add_theme_color_override("caret_color", Estilo.ACENTO)
+	var sb := Estilo.caja(Estilo.CRUDO, Estilo.TINTA, 0, 10, 10)
+	sb.border_width_bottom = 2
+	e.add_theme_stylebox_override("normal", sb)
+	var sbf := sb.duplicate() as StyleBoxFlat
+	sbf.border_color = Estilo.ACENTO
+	e.add_theme_stylebox_override("focus", sbf)
+	e.text_submitted.connect(func(t: String):
+		on_submit.call(t)
+		e.release_focus()
+	)
+	e.focus_exited.connect(func(): on_submit.call(e.text))
+	parent.add_child(e)
+	return e
+
+func _accent_button(parent: Control, text: String) -> Button:
+	var b := Estilo.boton(text, 12, Estilo.ACENTO, Color(0, 0, 0, 0), Color(0, 0, 0, 0.06), 0, 8)
+	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	parent.add_child(b)
+	return b
+
+func _accent_link(parent: Control, text: String, action: Callable) -> Button:
+	var b := _accent_button(parent, text)
+	b.pressed.connect(action)
+	return b
+
+func _build_relief_3d(col: Control) -> void:
 	var relief := VBoxContainer.new()
 	relief.add_theme_constant_override("separation", 10)
 	relief.visible = false
-	sec_relief = relief
+	sec_relief_3d = relief
 	col.add_child(relief)
-	val_relief = _title(relief, "Relieve", "× 1,0")
+	val_relief = _title(relief, "Relieve 3D", "× 1,0")
 	_slider_row(relief, "EXAGERACIÓN", 0.4, 2.2, 0.1, relief_mult, func(v: float):
 		relief_mult = v
 		mat_3d.set_shader_parameter("height_scale", 2.6 * v)
 		val_relief.text = "× " + ("%.1f" % v).replace(".", ",")
 	)
+	relief.add_child(Estilo.filete(2))
 
-	col.add_child(Estilo.filete(2))
+func _build_section_relieve(col: Control) -> void:
+	var v := _section_box(col, "relieve")
+	lbl_tool_name = _title(v, "Relieve", "")
+	var labels: Array = []
+	for t in TOOLS:
+		labels.append(t[1])
+	tool_chips = _chips(v, labels, func(i: int): _select_tool(TOOLS[i][0]))
+	lbl_tool_desc = _note(v, "")
 
-	# --- Mar y sol
-	var sea_sun := VBoxContainer.new()
-	sea_sun.add_theme_constant_override("separation", 10)
-	col.add_child(sea_sun)
-	_title(sea_sun, "Mar y sol", "")
-	val_sea = _slider_row(sea_sun, "NIVEL DEL MAR", 0.30, 0.70, 0.01, sea_level, func(v: float):
-		sea_level = v
-		mat_2d.set_shader_parameter("sea_level", v)
-		mat_3d.set_shader_parameter("sea_level", v)
-		engine.set_sea_level(v)
-		val_sea.text = "%d %%" % int(round(v * 100.0))
+func _build_section_biomas(col: Control) -> void:
+	var v := _section_box(col, "biomas")
+	lbl_biome_name = _title(v, "Biomas", "")
+	var opts := HFlowContainer.new()
+	opts.add_theme_constant_override("h_separation", 6)
+	v.add_child(opts)
+	chk_symbols = _toggle_chip(opts, "SÍMBOLOS", show_symbols, func(on: bool):
+		show_symbols = on
+		mat_2d.set_shader_parameter("show_symbols", on)
+	)
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 6)
+	grid.add_theme_constant_override("v_separation", 6)
+	v.add_child(grid)
+	var names: Array = ["AUTOMÁTICO"]
+	for b in Catalogo.BIOMAS:
+		names.append(b[0])
+	for i in names.size():
+		var b := Estilo.boton(str(names[i]), 10, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 8, 8)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		b.custom_minimum_size = Vector2((PANEL_W - 3 - 44 - 6) / 2, 44)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.add_theme_constant_override("h_separation", 6)
+		if i == 0:
+			b.icon = _swatch(Estilo.PAPEL)
+		var idx: int = i
+		b.pressed.connect(func(): _select_biome(idx))
+		grid.add_child(b)
+		biome_buttons.append(b)
+	_note(v, "«Automático» borra el bioma: el color vuelve a salir de la altura.")
+
+func _build_section_politico(col: Control) -> void:
+	var v := _section_box(col, "politico")
+	lbl_realm_count = _title(v, "Política", "0 REINOS")
+	_accent_link(v, "+ NUEVO REINO", func():
+		var id: int = engine.add_realm()
+		if id > 0:
+			_select_realm(id)
+	)
+	realm_list = VBoxContainer.new()
+	realm_list.add_theme_constant_override("separation", 6)
+	v.add_child(realm_list)
+	lbl_realm_hint = _note(v, "Elige un reino y pinta su territorio. Las fronteras salen solas donde se tocan dos reinos.")
+
+	var opts := HFlowContainer.new()
+	opts.add_theme_constant_override("h_separation", 6)
+	v.add_child(opts)
+	chk_realms = _toggle_chip(opts, "FRONTERAS", show_realms, func(on: bool):
+		show_realms = on
+		mat_2d.set_shader_parameter("show_realms", on)
+		mat_3d.set_shader_parameter("show_realms", on)
+		overlay.show_realm_names = on
+		overlay.queue_redraw()
+	)
+
+	realm_editor = VBoxContainer.new()
+	realm_editor.add_theme_constant_override("separation", 10)
+	v.add_child(realm_editor)
+	realm_editor.add_child(Estilo.filete(2))
+	realm_editor.add_child(Estilo.etiqueta("NOMBRE", 11, Estilo.GRIS))
+	realm_name_edit = _line_edit(realm_editor, func(t: String):
+		if t.strip_edges() != "":
+			engine.update_realm(current_realm, "name", t.strip_edges())
+	)
+	_accent_link(realm_editor, "OTRO NOMBRE →", func():
+		engine.update_realm(current_realm, "name", Nombres.reino(engine.rng))
+	)
+	realm_mode_chips = _chips(realm_editor, ["PINTAR TERRITORIO", "BORRAR TERRITORIO"], func(i: int):
+		realm_erase = (i == 1)
+		_on_realms_changed()
+	, 11)
+	realm_editor.add_child(Estilo.etiqueta("TIPO", 11, Estilo.GRIS))
+	realm_kind_chips = _chips(realm_editor, Catalogo.TIPOS_REINO, func(i: int):
+		engine.update_realm(current_realm, "kind", Catalogo.TIPOS_REINO[i])
+	, 11)
+	realm_editor.add_child(Estilo.etiqueta("COLOR", 11, Estilo.GRIS))
+	var colors := HFlowContainer.new()
+	colors.add_theme_constant_override("h_separation", 6)
+	colors.add_theme_constant_override("v_separation", 6)
+	realm_editor.add_child(colors)
+	for i in Catalogo.COLORES_REINO.size():
+		var b := Button.new()
+		b.focus_mode = Control.FOCUS_NONE
+		b.custom_minimum_size = Vector2(38, 38)
+		var idx: int = i
+		b.pressed.connect(func(): engine.update_realm(current_realm, "color", Catalogo.COLORES_REINO[idx]))
+		colors.add_child(b)
+		realm_color_buttons.append(b)
+	var b_del := _accent_button(realm_editor, "ELIMINAR ESTE REINO")
+	b_del.pressed.connect(func():
+		_confirm("realm_del", b_del, "ELIMINAR ESTE REINO", func(): engine.delete_realm(current_realm))
+	)
+
+func _build_section_lugares(col: Control) -> void:
+	var v := _section_box(col, "lugares")
+	lbl_place_count = _title(v, "Lugares", "0 LUGARES")
+	var labels: Array = []
+	for t in Catalogo.TIPOS_LUGAR:
+		labels.append(t[1])
+	place_kind_chips = _chips(v, labels, func(i: int):
+		var kind: String = Catalogo.TIPOS_LUGAR[i][0]
+		if selected_place > 0:
+			engine.update_place(selected_place, "kind", kind)
+		place_kind = kind
+		_refresh_place_editor()
+	, 11)
+	_note(v, "Toca el mapa para poner uno del tipo elegido; toca uno para editarlo y arrástralo para moverlo. Los nombres pequeños aparecen al acercarte.")
+	var opts := HFlowContainer.new()
+	v.add_child(opts)
+	chk_names = _toggle_chip(opts, "NOMBRES", true, func(on: bool):
+		overlay.show_place_names = on
+		overlay.queue_redraw()
+	)
+
+	place_editor = VBoxContainer.new()
+	place_editor.add_theme_constant_override("separation", 10)
+	v.add_child(place_editor)
+	place_editor.add_child(Estilo.filete(2))
+	place_editor.add_child(Estilo.etiqueta("NOMBRE", 11, Estilo.GRIS))
+	place_name_edit = _line_edit(place_editor, func(t: String):
+		if t.strip_edges() != "":
+			engine.update_place(selected_place, "name", t.strip_edges())
+	)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	place_editor.add_child(row)
+	_accent_link(row, "OTRO NOMBRE →", func():
+		var p: Dictionary = engine.place_by_id(selected_place)
+		if not p.is_empty():
+			engine.update_place(selected_place, "name", Nombres.lugar(str(p["kind"]), engine.rng))
+	)
+	var b_del := _accent_button(row, "ELIMINAR")
+	b_del.pressed.connect(func():
+		engine.delete_place(selected_place)
+		selected_place = -1
+	)
+	var b_done := _accent_link(row, "LISTO", func(): _select_place(-1))
+	b_done.add_theme_color_override("font_color", Estilo.TINTA)
+
+func _build_section_mundo(col: Control) -> void:
+	var v := _section_box(col, "mundo")
+	_title(v, "Nuevo mundo", "")
+	v.add_child(Estilo.etiqueta("TAMAÑO (LADO MAYOR)", 11, Estilo.GRIS))
+	var size_labels: Array = []
+	for s in SIZES:
+		size_labels.append("%s · %s" % [s[0], Estilo.miles(s[1])])
+	size_chips = _chips(v, size_labels, func(i: int):
+		new_size_idx = i
+		for k in size_chips.size():
+			_paint_filter(size_chips[k], k == i)
+	, 11)
+	v.add_child(Estilo.etiqueta("FORMA", 11, Estilo.GRIS))
+	var shape_labels: Array = []
+	for s in SHAPES:
+		shape_labels.append(s[0])
+	shape_chips = _chips(v, shape_labels, func(i: int):
+		new_shape_idx = i
+		for k in shape_chips.size():
+			_paint_filter(shape_chips[k], k == i)
+	, 11)
+	v.add_child(Estilo.etiqueta("EMPEZAR CON", 11, Estilo.GRIS))
+	mode_chips = _chips(v, ["UN CONTINENTE", "OCÉANO VACÍO"], func(i: int):
+		new_mode = i
+		for k in mode_chips.size():
+			_paint_filter(mode_chips[k], k == i)
+	, 11)
+	for k in size_chips.size():
+		_paint_filter(size_chips[k], k == new_size_idx)
+	for k in shape_chips.size():
+		_paint_filter(shape_chips[k], k == new_shape_idx)
+	for k in mode_chips.size():
+		_paint_filter(mode_chips[k], k == new_mode)
+	btn_create = Estilo.boton("CREAR MUNDO  →", 15, Estilo.SOBRE_ACENTO, Estilo.ACENTO, Estilo.ACENTO.darkened(0.15), 18, 14)
+	btn_create.add_theme_font_override("font", Estilo.F_GROTESCA)
+	btn_create.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	btn_create.pressed.connect(func(): _confirm("create", btn_create, "CREAR MUNDO  →", _new_world))
+	v.add_child(btn_create)
+	_note(v, "Borra el mundo actual (aún no se guarda en el móvil). «Enorme» usa mucha memoria.")
+
+	v.add_child(Estilo.filete(2))
+	_title(v, "Ampliar lienzo", "")
+	lbl_map_px = Estilo.etiqueta("", 11, Estilo.GRIS)
+	v.add_child(lbl_map_px)
+	var dirs := GridContainer.new()
+	dirs.columns = 2
+	dirs.add_theme_constant_override("h_separation", 6)
+	dirs.add_theme_constant_override("v_separation", 6)
+	v.add_child(dirs)
+	for d in [["N", "↑ AL NORTE"], ["S", "↓ AL SUR"], ["O", "← AL OESTE"], ["E", "→ AL ESTE"]]:
+		var key: String = d[0]
+		var label: String = d[1]
+		var b := Estilo.boton(label, 11, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 10, Estilo.TINTA, 2)
+		b.custom_minimum_size = Vector2((PANEL_W - 3 - 44 - 6) / 2, 0)
+		b.pressed.connect(func(): _confirm("ext_" + key, b, label, func(): engine.extend(key)))
+		dirs.add_child(b)
+		extend_buttons[key] = b
+	_note(v, "Añade la mitad del tamaño en mar por ese lado (hasta 4.096 px). Lo pintado se queda igual; el historial se vacía.")
+
+	v.add_child(Estilo.filete(2))
+	_title(v, "Mar y sol", "")
+	val_sea = _slider_row(v, "NIVEL DEL MAR", 0.30, 0.70, 0.01, sea_level, func(x: float):
+		sea_level = x
+		mat_2d.set_shader_parameter("sea_level", x)
+		mat_3d.set_shader_parameter("sea_level", x)
+		engine.sea_level = x
+		engine.set_sea_level(x)
+		val_sea.text = "%d %%" % int(round(x * 100.0))
 	)
 	val_sea.text = "%d %%" % int(round(sea_level * 100.0))
-	val_sun = _slider_row(sea_sun, "LUZ DESDE", 0.0, 359.0, 1.0, sun_azimuth, func(v: float):
-		sun_azimuth = v
+	val_sun = _slider_row(v, "LUZ DESDE", 0.0, 359.0, 1.0, sun_azimuth, func(x: float):
+		sun_azimuth = x
 		_apply_sun()
 	)
 
-	col.add_child(Estilo.filete(2))
+	v.add_child(Estilo.filete(2))
+	_title(v, "Estilo del mapa", "")
+	var names: Array = []
+	for t in THEMES:
+		names.append(t["name"])
+	theme_buttons = _chips(v, names, func(i: int): _apply_theme(i))
 
-	# --- Estilo del mapa
-	var style := VBoxContainer.new()
-	style.add_theme_constant_override("separation", 12)
-	col.add_child(style)
-	_title(style, "Estilo del mapa", "")
-	var chips := HFlowContainer.new()
-	chips.add_theme_constant_override("h_separation", 8)
-	chips.add_theme_constant_override("v_separation", 8)
-	style.add_child(chips)
-	for i in THEMES.size():
-		var t: Dictionary = THEMES[i]
-		var b := Estilo.boton(str(t["name"]), 12, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 14, 10)
-		var idx: int = i
-		b.pressed.connect(func(): _apply_theme(idx))
-		chips.add_child(b)
-		theme_buttons.append(b)
-
-	col.add_child(Estilo.filete(2))
-
-	# --- Este mundo
-	var world := VBoxContainer.new()
-	world.add_theme_constant_override("separation", 12)
-	col.add_child(world)
-	_title(world, "Este mundo", "")
-	var wb := _blocks(world, [["—", "TIERRA"], ["—", "MAR"], ["0", "TRAZOS"]])
+	v.add_child(Estilo.filete(2))
+	_title(v, "Este mundo", "")
+	var wb := _blocks(v, [["—", "TIERRA"], ["—", "MAR"], ["0", "TRAZOS"]])
 	val_land = wb[0]
 	val_water = wb[1]
 	val_strokes = wb[2]
 
-	# --- Pie, como en las hermanas: «ATLAS · hecho en casa» y la versión en gris.
-	var foot := VBoxContainer.new()
-	foot.add_theme_constant_override("separation", 2)
-	col.add_child(foot)
-	foot.add_child(Estilo.filete(1, Color(Estilo.TINTA, 0.2)))
-	var made := Estilo.etiqueta("ATLAS · hecho en casa", 13, Estilo.GRIS, Estilo.F_SEMI)
-	foot.add_child(made)
-	var ver: String = str(ProjectSettings.get_setting("application/config/version", ""))
-	foot.add_child(Estilo.etiqueta(ver, 12, Estilo.GRIS_CLARO, Estilo.F_TEXTO))
+	v.add_child(Estilo.filete(2))
+	_title(v, "Calidad", "")
+	var q := HFlowContainer.new()
+	v.add_child(q)
+	btn_quality = Estilo.boton("", 11, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 9)
+	btn_quality.pressed.connect(func():
+		await engine.set_high_precision(not engine.hdr)
+		_refresh_quality()
+	)
+	q.add_child(btn_quality)
+	lbl_quality_note = _note(v, "")
+
+func _build_brush(col: Control) -> void:
+	brush_box = VBoxContainer.new()
+	brush_box.add_theme_constant_override("separation", 10)
+	col.add_child(brush_box)
+	brush_box.add_child(Estilo.filete(2))
+	_title(brush_box, "Pincel", "")
+	var blocks := _blocks(brush_box, [["38", "TAMAÑO"], ["50 %", "FUERZA"]])
+	val_size = blocks[0]
+	val_strength = blocks[1]
+	_slider_row(brush_box, "TAMAÑO", 6.0, 160.0, 1.0, brush_radius, func(x: float):
+		brush_radius = x
+		val_size.text = str(int(x))
+	)
+	var str_val: Label = _slider_row(brush_box, "FUERZA", 0.0, 1.0, 0.01, brush_strength, func(x: float):
+		brush_strength = x
+		val_strength.text = "%d %%" % int(round(x * 100.0))
+	)
+	strength_row = str_val.get_parent().get_parent() as Control
+	val_steps = _slider_row(brush_box, "ESCALONES", 3.0, 24.0, 1.0, cliff_steps, func(x: float):
+		cliff_steps = x
+		val_steps.text = str(int(x))
+	)
+	steps_row = val_steps.get_parent().get_parent() as Control
+	val_steps.text = str(int(cliff_steps))
+	val_size.text = str(int(brush_radius))
+	val_strength.text = "%d %%" % int(round(brush_strength * 100.0))
 
 ## El título de un bloque (TituloC): grotesca a la izquierda y, a la derecha, su dato en el acento.
 func _title(parent: Control, text: String, right: String) -> Label:
@@ -559,15 +1213,13 @@ func _title(parent: Control, text: String, right: String) -> Label:
 	row.add_child(t)
 	var r := Estilo.etiqueta(right, 12, Estilo.ACENTO)
 	r.size_flags_vertical = Control.SIZE_SHRINK_END
-	r.add_theme_constant_override("line_spacing", 0)
 	row.add_child(r)
 	return r
 
 ## Bloques de cifras (BloquesCifras): borde de 3 px; el primero en el acento, el tercero en el azul de la familia.
 func _blocks(parent: Control, items: Array) -> Array[Label]:
 	var outer := PanelContainer.new()
-	var frame_sb := Estilo.caja(Estilo.TINTA, Estilo.TINTA, 3, 3, 3)
-	outer.add_theme_stylebox_override("panel", frame_sb)
+	outer.add_theme_stylebox_override("panel", Estilo.caja(Estilo.TINTA, Estilo.TINTA, 3, 3, 3))
 	parent.add_child(outer)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 3)

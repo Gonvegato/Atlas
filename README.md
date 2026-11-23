@@ -2,6 +2,56 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.3.0
+
+Cinco secciones en la banda de tinta, cada una con su panel: **Relieve · Biomas · Político · Lugares · Mundo** (con la cuenta de
+reinos y lugares al lado, como las hermanas).
+
+- **Relieve**: además de Tierra, Cordillera, Mar y Río,
+  - **Valle**: baja la tierra hasta el río; el cauce queda bajo el agua y las orillas, secas justo por encima, suben suaves hasta
+    el terreno. Repasar ensancha la llanura del río sin inundarla.
+  - **Cañón**: cauce hondo con paredes casi verticales.
+  - **Suavizar**: redondea costas, cauces y picos.
+  - **Acantilado**: rellanos planos y paredes (eliges cuántos escalones).
+  - **Meseta**: aplana a la altura del punto donde empiezas.
+  - Cada herramienta dice qué hace debajo de los botones.
+- **Biomas** (25, cada uno con su color y su símbolo): pradera, bosque, bosque viejo, taiga, selva, sabana, estepa, desierto,
+  desierto de roca, tierras rojas, tundra, glaciar, pantano, manglar, brezal, monte bajo, cultivos, volcánico, salar, bosque en
+  flor, bosque encantado, bosque de cristal, bosque de hongos, bosque muerto y tierras malditas. Se dibujan a tinta: árboles,
+  coníferas, selva, acacias, hierba, dunas, pantano, grietas, parcelas, cristales, hongos, hielo y árboles secos. Las lindes
+  son orgánicas y los colores cambian con el estilo (Editorial, Pergamino, Fantasía). «Automático» los borra.
+- **Político**: reinos con nombre (inventado, o el tuyo), tipo (reino, imperio, república, ducado, condado, principado, califato,
+  teocracia, clanes, liga, tribus, marca) y color heráldico. Pintas su territorio; las fronteras salen solas donde se tocan, con
+  una banda del color del reino. El nombre («IMPERIO DE KARTHMOR») va en el centro del territorio sin tapar las capitales.
+  Borrar un reino borra su territorio (y se puede deshacer).
+- **Lugares**: capital, ciudad, pueblo, aldea, castillo, puerto, templo, torre, ruinas, mina y batalla, cada uno con su símbolo y
+  un nombre inventado que se puede cambiar. Se tocan para editarlos y se arrastran para moverlos. Los nombres pequeños aparecen al
+  acercarte, como en un atlas.
+- **Mundo**:
+  - Mundo nuevo de 1.024, 2.048, 3.072 o 4.096 px de lado mayor, cuadrado, 3:2, apaisado 2:1 o vertical 2:3, empezando con un
+    continente o con océano vacío.
+  - **Ampliar lienzo** hacia cualquier lado (la mitad más de mar, hasta 4.096 px).
+  - Mar y sol, estilo, cifras y calidad.
+  - Lo que borra trabajo pide un segundo toque.
+- **Calidad**:
+  - El mapa de 2.048 px por defecto (antes 1.024).
+  - **Alta precisión**: el relieve se guarda en coma flotante de 16 bits (`use_hdr_2d` en el SubViewport), sin escalones al
+    ampliar.
+  - Si un arranque con alta precisión no llega a completarse (por ejemplo, porque la GPU se cuelga), el siguiente vuelve solo a
+    8 bits y lo avisa en Mundo → Calidad. Se puede volver a probar.
+  - Zoom hasta ×16.
+- **Historial único** para todo (trazos de relieve, biomas y reinos, reinos y lugares). Guarda solo la zona tocada de cada trazo
+  (40 pasos, hasta 96 MB).
+- **3D**: biomas y reinos también en el relieve, y mapas no cuadrados.
+
+### Arreglos
+
+- Si el lápiz mandaba varios movimientos en el mismo fotograma, solo se pintaba el último y quedaban huecos. Ahora se pintan
+  todos.
+- El último trozo de cada trazo se perdía (se escondía el pincel antes de dibujarse).
+- Al terminar un trazo ya no se lee el mapa entero de la GPU: solo la zona tocada.
+
+
 ## 0.2.0
 
 - **La cara de la familia («C»)**: las mismas letras que las hermanas (Bricolage Grotesque ExtraBold para el nombre, los títulos y las
