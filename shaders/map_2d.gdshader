@@ -1,6 +1,6 @@
 shader_type canvas_item;
 
-uniform sampler2D height_tex : filter_linear, repeat_clamp;
+uniform sampler2D height_tex : filter_linear, repeat_disable;
 uniform float sea_level = 0.5;
 uniform float relief_strength = 16.0;
 uniform vec3 sun_dir = vec3(-0.6, -0.5, 0.62);

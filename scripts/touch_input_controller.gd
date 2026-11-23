@@ -50,8 +50,10 @@ func _handle_touch(e: InputEventScreenTouch) -> void:
 				stroke_active = false
 				stroke_ended.emit()
 			if touches.size() == 2:
-				var pts := touches.values()
-				last_pinch_dist = pts[0].distance_to(pts[1])
+				var pts: Array = touches.values()
+				var p0: Vector2 = pts[0]
+				var p1: Vector2 = pts[1]
+				last_pinch_dist = p0.distance_to(p1)
 	else:
 		touches.erase(e.index)
 		if touches.is_empty():
@@ -83,11 +85,13 @@ func _handle_drag(e: InputEventScreenDrag) -> void:
 		_process_pinch()
 
 func _process_pinch() -> void:
-	var pts := touches.values()
-	var dist: float = pts[0].distance_to(pts[1])
+	var pts: Array = touches.values()
+	var p0: Vector2 = pts[0]
+	var p1: Vector2 = pts[1]
+	var dist: float = p0.distance_to(p1)
 	if last_pinch_dist > 10.0:
-		var factor := dist / last_pinch_dist
-		var center: Vector2 = (pts[0] + pts[1]) * 0.5
+		var factor: float = dist / last_pinch_dist
+		var center: Vector2 = (p0 + p1) * 0.5
 		zoom_changed.emit(factor, center)
 	last_pinch_dist = dist
 

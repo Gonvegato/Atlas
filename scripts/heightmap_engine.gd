@@ -44,14 +44,18 @@ func _setup_viewport() -> void:
 	mat_sub = ShaderMaterial.new()
 	mat_sub.shader = load("res://shaders/height_brush_sub.gdshader")
 
+	var full_size := Vector2(resolution, resolution)
+
 	snapshot_rect = TextureRect.new()
-	snapshot_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	snapshot_rect.position = Vector2.ZERO
+	snapshot_rect.size = full_size
 	snapshot_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	snapshot_rect.visible = false
 	viewport.add_child(snapshot_rect)
 
 	init_rect = ColorRect.new()
-	init_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	init_rect.position = Vector2.ZERO
+	init_rect.size = full_size
 	init_rect.material = mat_init
 	viewport.add_child(init_rect)
 
@@ -93,20 +97,23 @@ func paint_uv(uv: Vector2, tool: String, radius_px: float, strength: float) -> v
 	var curr_px := uv * float(resolution)
 	var prev_px := curr_px if last_px.x < 0.0 else last_px
 
+	var min_pt := Vector2(minf(prev_px.x, curr_px.x), minf(prev_px.y, curr_px.y)) - Vector2(radius_px + 2.0, radius_px + 2.0)
+	var max_pt := Vector2(maxf(prev_px.x, curr_px.x), maxf(prev_px.y, curr_px.y)) + Vector2(radius_px + 2.0, radius_px + 2.0)
+	var rect_sz := max_pt - min_pt
+
 	var is_sub := (tool == "sea" or tool == "river")
 	var mat := mat_sub if is_sub else mat_add
+	mat.set_shader_parameter("rect_min", min_pt)
+	mat.set_shader_parameter("rect_size", rect_sz)
 	mat.set_shader_parameter("p0", prev_px)
 	mat.set_shader_parameter("p1", curr_px)
 	mat.set_shader_parameter("brush_radius", radius_px)
 	mat.set_shader_parameter("strength", strength)
 	mat.set_shader_parameter("brush_mode", 1 if (tool == "mountain" or tool == "river") else 0)
 
-	var min_pt := Vector2(minf(prev_px.x, curr_px.x), minf(prev_px.y, curr_px.y)) - Vector2(radius_px + 2.0, radius_px + 2.0)
-	var max_pt := Vector2(maxf(prev_px.x, curr_px.x), maxf(prev_px.y, curr_px.y)) + Vector2(radius_px + 2.0, radius_px + 2.0)
-
 	brush_rect.material = mat
 	brush_rect.position = min_pt
-	brush_rect.size = max_pt - min_pt
+	brush_rect.size = rect_sz
 	brush_rect.visible = true
 	viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 	last_px = curr_px

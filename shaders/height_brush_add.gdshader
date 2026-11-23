@@ -1,6 +1,8 @@
 shader_type canvas_item;
 render_mode blend_add;
 
+uniform vec2 rect_min = vec2(0.0, 0.0);
+uniform vec2 rect_size = vec2(100.0, 100.0);
 uniform vec2 p0 = vec2(512.0, 512.0);
 uniform vec2 p1 = vec2(512.0, 512.0);
 uniform float brush_radius = 40.0;
@@ -40,7 +42,8 @@ float ridged(vec2 p) {
 }
 
 void fragment() {
-	vec2 pa = FRAGCOORD.xy - p0;
+	vec2 px = rect_min + UV * rect_size;
+	vec2 pa = px - p0;
 	vec2 ba = p1 - p0;
 	float seg = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0001), 0.0, 1.0);
 	float d = length(pa - ba * seg) / max(brush_radius, 1.0);
@@ -50,7 +53,7 @@ void fragment() {
 	float amount = strength * falloff;
 
 	if (brush_mode == 1) {
-		vec2 world_uv = FRAGCOORD.xy / map_size;
+		vec2 world_uv = px / map_size;
 		amount *= ridged(world_uv * noise_scale) * 1.85;
 	}
 	COLOR = vec4(amount, amount, amount, 1.0);

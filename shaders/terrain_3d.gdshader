@@ -1,7 +1,7 @@
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 
-uniform sampler2D height_tex : filter_linear, repeat_clamp;
+uniform sampler2D height_tex : filter_linear, repeat_disable;
 uniform float sea_level = 0.5;
 uniform float height_scale = 2.6;
 uniform float terrain_size = 12.0;

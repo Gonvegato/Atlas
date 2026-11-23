@@ -133,8 +133,8 @@ func _on_workspace_gui_input(event: InputEvent) -> void:
 func _on_paint(screen_pos: Vector2, pressure: float) -> void:
 	var local_pos: Vector2 = map_canvas.get_global_transform_with_canvas().affine_inverse() * screen_pos
 	var uv := local_pos / map_canvas.size
-	var effective_radius := brush_radius * (0.6 if current_tool == "river" else 1.0)
-	var effective_strength := brush_strength * pressure * (1.35 if current_tool == "river" else 1.0)
+	var effective_radius: float = brush_radius * (0.6 if current_tool == "river" else 1.0)
+	var effective_strength: float = brush_strength * pressure * (1.35 if current_tool == "river" else 1.0)
 	engine.paint_uv(uv, current_tool, effective_radius, effective_strength)
 
 func _apply_2d_transform() -> void:
