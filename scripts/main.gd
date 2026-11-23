@@ -178,6 +178,15 @@ var toast_panel: PanelContainer
 var toast_label: Label
 var _toast_tween: Tween
 var _raw_centroids: Dictionary = {}
+# --- cuenta de la familia
+var nube: FamiliaNube
+var cuenta_box: VBoxContainer
+var lbl_nube_estado: Label
+var nube_obras: Array = []
+var nube_mapas: Array = []
+var upload_timer: Timer
+var new_obra: String = ""
+var new_obra_opt: OptionButton
 
 # --- interfaz
 var btn_mode_3d: Button
@@ -514,6 +523,14 @@ func _connect_signals() -> void:
 	engine.dirty_changed.connect(_schedule_save)
 	engine.saved.connect(_on_saved)
 	engine.map_loaded.connect(_on_map_loaded)
+	nube = FamiliaNube.new()
+	add_child(nube)
+	nube.sesion_cambiada.connect(func(_d: bool): _refresh_cuenta(true))
+	upload_timer = Timer.new()
+	upload_timer.one_shot = true
+	upload_timer.wait_time = 20.0
+	upload_timer.timeout.connect(_upload_now)
+	add_child(upload_timer)
 	engine.realms_changed.connect(func(): _refresh_route.call_deferred())
 	engine.history_changed.connect(func(can_undo: bool, can_redo: bool):
 		btn_undo.disabled = not can_undo
@@ -1043,6 +1060,8 @@ func _new_world() -> void:
 	route_pts.clear()
 	await engine.save_map(_view_extra())
 	await engine.create_world(size, s, 1 if new_mode == 2 else new_mode)
+	if new_obra != "":
+		_set_obra(new_obra, false)
 	map_name_edit.text = engine.map_name
 	_refresh_route()
 	if new_mode == 2:
@@ -1088,6 +1107,7 @@ func _select_section(id: String) -> void:
 	overlay.queue_redraw()
 	if id == "mundo":
 		_refresh_maps_list()
+		_refresh_cuenta(false)
 	mat_2d.set_shader_parameter("show_area_edges", id == "regiones")
 	_refresh_brush_rows()
 	_update_hint()
@@ -2209,6 +2229,9 @@ func _on_saved(ok: bool) -> void:
 	lbl_save_state.text = ("GUARDADO · %02d:%02d" % [t["hour"], t["minute"]]) if ok else "NO SE PUDO GUARDAR"
 	if not ok:
 		_toast("No se pudo guardar el mapa. Se volverá a intentar con el próximo cambio.")
+	elif nube != null and nube.dentro:
+		# A la cuenta, un poco después (si sigues pintando, se espera a que pares).
+		upload_timer.start()
 	if section == "mundo":
 		_refresh_maps_list()
 
@@ -2216,7 +2239,10 @@ func _notification(what: int) -> void:
 	if engine == null or not engine.world_ready:
 		return
 	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
-		engine.save_map(_view_extra())
+		await engine.save_map(_view_extra())
+		if nube != null and nube.dentro and not upload_timer.is_stopped():
+			upload_timer.stop()
+			_upload_now()
 	elif what == NOTIFICATION_WM_CLOSE_REQUEST:
 		await engine.save_map(_view_extra())
 		get_tree().quit()
@@ -2252,6 +2278,153 @@ func _set_sea_level(x: float) -> void:
 	_world3d_dirty = true
 	_places3d_dirty = true
 
+# ---------------------------------------------------------------- cuenta de la familia
+
+func _obra_titulo(id: String) -> String:
+	for o in nube_obras:
+		if o["id"] == id:
+			return str(o["t"])
+	return ""
+
+## Enlaza el mapa abierto con una novela de Nova. Si el mapa aún tiene su nombre de serie, toma el de la novela.
+func _set_obra(id: String, save: bool = true) -> void:
+	engine.map_obra = id
+	engine.map_obra_t = _obra_titulo(id)
+	if id != "" and engine.map_name.begins_with("Mundo nº"):
+		engine.map_name = "Mapa de " + engine.map_obra_t
+		map_name_edit.text = engine.map_name
+		lbl_world.text = engine.map_name.to_upper()
+	if save:
+		_do_save()
+
+func _upload_now() -> void:
+	if not nube.dentro or not engine.world_ready:
+		return
+	lbl_nube_estado.text = "SUBIENDO A LA CUENTA…"
+	var e: String = await nube.sube_mapa(engine.map_id, {"t": engine.map_name, "obra": engine.map_obra,
+		"w": engine.map_size.x, "h": engine.map_size.y})
+	var t: Dictionary = Time.get_time_dict_from_system()
+	lbl_nube_estado.text = ("EN LA CUENTA · %02d:%02d" % [t["hour"], t["minute"]]) if e == "" else e.to_upper()
+	if e != "":
+		_toast(e)
+
+## [reload]: volver a pedir novelas y mapas a la cuenta.
+func _refresh_cuenta(reload: bool = false) -> void:
+	if cuenta_box == null:
+		return
+	for c in cuenta_box.get_children():
+		c.queue_free()
+	lbl_nube_estado = Estilo.etiqueta("", 11, Estilo.GRIS)
+	if not nube.dentro:
+		cuenta_box.add_child(_note_label("Entra con tu usuario y contraseña de la familia (los de Polaris y Nova) y tus mapas irán a la cuenta, con su novela, y a tu Google Drive."))
+		var u := _line_edit(cuenta_box, func(_t: String): pass)
+		u.placeholder_text = "Usuario"
+		var pw := _line_edit(cuenta_box, func(_t: String): pass)
+		pw.placeholder_text = "Contraseña"
+		pw.secret = true
+		var b := Estilo.boton("ENTRAR  →", 14, Estilo.SOBRE_ACENTO, Estilo.ACENTO, Estilo.ACENTO.darkened(0.15), 18, 12)
+		b.add_theme_font_override("font", Estilo.F_GROTESCA)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		cuenta_box.add_child(b)
+		cuenta_box.add_child(lbl_nube_estado)
+		b.pressed.connect(func():
+			lbl_nube_estado.text = "ENTRANDO…"
+			var e: String = await nube.entrar(u.text, pw.text)
+			if e != "":
+				lbl_nube_estado.text = e.to_upper()
+		)
+		_refresh_new_obra()
+		return
+	var row := HBoxContainer.new()
+	cuenta_box.add_child(row)
+	var who := Estilo.etiqueta("DENTRO COMO " + nube.usuario.to_upper(), 11, Estilo.TINTA)
+	who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(who)
+	var out := _accent_button(row, "SALIR")
+	out.pressed.connect(func(): _confirm("salir", out, "SALIR", func(): nube.salir()))
+	cuenta_box.add_child(_caption("NOVELA DE ESTE MAPA"))
+	var ob := _option_button()
+	cuenta_box.add_child(ob)
+	cuenta_box.add_child(lbl_nube_estado)
+	var sync := HFlowContainer.new()
+	sync.add_theme_constant_override("h_separation", 14)
+	cuenta_box.add_child(sync)
+	_accent_link(sync, "SUBIR AHORA", _upload_now)
+	_accent_link(sync, "ACTUALIZAR", func(): _refresh_cuenta(true))
+	cuenta_box.add_child(_caption("MAPAS EN LA CUENTA"))
+	var cloud := VBoxContainer.new()
+	cloud.add_theme_constant_override("separation", 6)
+	cuenta_box.add_child(cloud)
+	if reload or nube_obras.is_empty():
+		lbl_nube_estado.text = "LEYENDO LA CUENTA…"
+		nube_obras = await nube.obras()
+		nube_mapas = await nube.mapas()
+		if not is_instance_valid(lbl_nube_estado):
+			return
+		lbl_nube_estado.text = "%d NOVELAS · %d MAPAS EN LA CUENTA" % [nube_obras.size(), nube_mapas.size()]
+	ob.add_item("NINGUNA")
+	ob.set_item_metadata(0, "")
+	for o in nube_obras:
+		ob.add_item(str(o["t"]).to_upper())
+		ob.set_item_metadata(ob.item_count - 1, str(o["id"]))
+		if str(o["id"]) == engine.map_obra:
+			ob.select(ob.item_count - 1)
+	ob.item_selected.connect(func(i: int): _set_obra(str(ob.get_item_metadata(i))))
+	var local: Dictionary = {}
+	for m in engine.list_maps():
+		local[m["id"]] = float(m["saved_at"])
+	for m in nube_mapas:
+		var mid: String = m["id"]
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", 6)
+		cloud.add_child(line)
+		var nov: String = _obra_titulo(str(m["obra"]))
+		var lb := Estilo.etiqueta("%s%s" % [str(m["t"]).to_upper(), (" · " + nov.to_upper()) if nov != "" else ""], 11, Estilo.TINTA)
+		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lb.clip_text = true
+		lb.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		line.add_child(lb)
+		# Bajar si no está en este dispositivo o si el de la cuenta es más nuevo.
+		var newer: bool = not local.has(mid) or float(m["ul"]) / 1000.0 > float(local[mid]) + 5.0
+		if mid == engine.map_id:
+			line.add_child(Estilo.etiqueta("ABIERTO", 11, Estilo.GRIS))
+		elif newer:
+			var bb := _accent_button(line, "BAJAR")
+			bb.pressed.connect(func():
+				bb.text = "BAJANDO…"
+				var e: String = await nube.baja_mapa(m)
+				if e != "":
+					_toast(e)
+					bb.text = "BAJAR"
+					return
+				await engine.save_map(_view_extra())
+				await engine.load_map(mid)
+				_refresh_maps_list()
+			)
+		else:
+			var ab := _accent_button(line, "ABRIR")
+			ab.pressed.connect(func():
+				await engine.save_map(_view_extra())
+				await engine.load_map(mid)
+			)
+	if nube_mapas.is_empty():
+		cloud.add_child(_note_label("Ninguno todavía: se suben solos al guardar."))
+	_refresh_new_obra()
+
+func _refresh_new_obra() -> void:
+	if new_obra_opt == null:
+		return
+	new_obra_opt.clear()
+	new_obra_opt.add_item("NINGUNA")
+	new_obra_opt.set_item_metadata(0, "")
+	for o in nube_obras:
+		new_obra_opt.add_item(str(o["t"]).to_upper())
+		new_obra_opt.set_item_metadata(new_obra_opt.item_count - 1, str(o["id"]))
+		if str(o["id"]) == new_obra:
+			new_obra_opt.select(new_obra_opt.item_count - 1)
+	new_obra_opt.get_parent().get_child(new_obra_opt.get_index() - 1).visible = nube.dentro
+	new_obra_opt.visible = nube.dentro
+
 func _refresh_maps_list() -> void:
 	if maps_list == null:
 		return
@@ -2264,7 +2437,8 @@ func _refresh_maps_list() -> void:
 		var line := HBoxContainer.new()
 		line.add_theme_constant_override("separation", 6)
 		maps_list.add_child(line)
-		var txt: String = "%s · %s×%s · %02d.%02d.%02d" % [str(m["name"]).to_upper(), Estilo.miles(sz.x), Estilo.miles(sz.y), d["day"], d["month"], int(d["year"]) % 100]
+		var nov: String = str(m.get("obra_t", ""))
+		var txt: String = "%s%s · %s×%s · %02d.%02d.%02d" % [str(m["name"]).to_upper(), (" · " + nov.to_upper()) if nov != "" else "", Estilo.miles(sz.x), Estilo.miles(sz.y), d["day"], d["month"], int(d["year"]) % 100]
 		var b := Estilo.boton(txt, 11, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 10, 8)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2288,6 +2462,11 @@ func _refresh_maps_list() -> void:
 
 func _build_section_mundo(col: Control) -> void:
 	var v := _section_box(col, "mundo")
+	_title(v, "Cuenta de la familia", "")
+	cuenta_box = VBoxContainer.new()
+	cuenta_box.add_theme_constant_override("separation", 10)
+	v.add_child(cuenta_box)
+	v.add_child(Estilo.filete(2))
 	_title(v, "Este mapa", "")
 	map_name_edit = _line_edit(v, func(t: String):
 		if t.strip_edges() != "" and t.strip_edges() != engine.map_name:
@@ -2332,6 +2511,10 @@ func _build_section_mundo(col: Control) -> void:
 		for k in shape_chips.size():
 			_paint_filter(shape_chips[k], k == i)
 	, 11)
+	v.add_child(_caption("PARA LA NOVELA"))
+	new_obra_opt = _option_button()
+	new_obra_opt.item_selected.connect(func(i: int): new_obra = str(new_obra_opt.get_item_metadata(i)))
+	v.add_child(new_obra_opt)
 	v.add_child(Estilo.etiqueta("EMPEZAR CON", 11, Estilo.GRIS))
 	mode_chips = _chips(v, ["UN CONTINENTE", "OCÉANO VACÍO", "DIBUJAR A MANO"], func(i: int):
 		new_mode = i
@@ -2351,7 +2534,8 @@ func _build_section_mundo(col: Control) -> void:
 	v.add_child(btn_create)
 	var gr := HFlowContainer.new()
 	v.add_child(gr)
-	_toggle_chip(gr, "EL LIENZO CRECE AL DIBUJAR EN EL BORDE", grow_canvas, func(on: bool): grow_canvas = on)
+	_toggle_chip(gr, "LIENZO QUE CRECE", grow_canvas, func(on: bool): grow_canvas = on)
+	_note(v, "Con «Lienzo que crece», si dibujas tierra junto al borde el mapa se amplía solo por ese lado.")
 	_note(v, "El mapa actual queda guardado en «Mis mapas». «Gigante» y «Colosal» usan mucha memoria (hasta ~1 GB) y tardan más en guardarse.")
 
 	v.add_child(Estilo.filete(2))

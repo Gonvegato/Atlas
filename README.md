@@ -2,6 +2,22 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.10.0
+
+- **Los mapas de las novelas, en la cuenta de la familia**: Mundo → «Cuenta de la familia».
+  - Se entra con el usuario y la contraseña de Polaris y Nova (una vez; la sesión se guarda cifrada en el dispositivo).
+  - Cada mapa se enlaza con una de tus novelas de Nova («Novela de este mapa» y «Para la novela» al crear uno) y, si aún tenía
+    su nombre de serie, toma el de la novela («Mapa de …»).
+  - Al guardar, unos segundos después, el mapa sube solo: el archivo `.atlas` a tu Google Drive (`Familia/atlas/`, con las
+    claves de Drive que ya pusiste en Polaris), la miniatura a `familia_img` y la ficha a `familia/atlas/<mapa>` con el
+    contrato de la familia (campo a campo con `m/<campo>`, `u` y `familia_sello/atlas`; borrar es poner `b`).
+  - «Mapas en la cuenta»: los mapas de tus otros dispositivos, con su novela; se bajan y se abren desde ahí.
+  - Probado contra el emulador oficial de Firebase con las reglas de `Familia-Revista/nube/reglas.json` y un Google Drive de
+    pruebas.
+- **Entrar sola desde Polaris**, pendiente de dos pasos que están en `docs/FIRMA-Y-FAMILIA.md`: la clave de la familia como
+  secretos del repositorio y el parche de `Familia-Revista` (`docs/familia-revista-atlas.patch`).
+
+
 ## 0.9.0
 
 - **Contorno que se rellena**: con «Contorno» (en el panel o en la barra rápida sobre el mapa) dibujas el borde con el lápiz

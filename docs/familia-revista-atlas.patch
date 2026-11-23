@@ -1,0 +1,47 @@
+From 421a074044271e0606b5d07e3a17fb70e1ec0b11 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 23 Nov 2026 17:52:46 +0000
+Subject: [PATCH] ATLAS en la familia: com.gonzalo.atlas en LaFamilia.APPS y en
+ <queries>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Para que las hermanas le pasen la sesión a ATLAS (los mapas de las novelas) cuando lleve la firma de la familia.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Q4uywhUgM7xxGyHxzLhmXJ
+---
+ familia/src/main/AndroidManifest.xml                   | 2 ++
+ familia/src/main/java/com/gonzalo/familia/LaFamilia.kt | 2 +-
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/familia/src/main/AndroidManifest.xml b/familia/src/main/AndroidManifest.xml
+index f8c0863..3096954 100644
+--- a/familia/src/main/AndroidManifest.xml
++++ b/familia/src/main/AndroidManifest.xml
+@@ -12,6 +12,8 @@
+         <package android:name="com.gonzalo.gamerate" />
+         <package android:name="com.gonzalo.mostaza" />
+         <package android:name="com.gonzalo.cobre" />
++        <!-- ATLAS: los mapas de las novelas (repositorio Gonvegato/Atlas, en Godot) -->
++        <package android:name="com.gonzalo.atlas" />
+     </queries>
+     <application>
+         <!-- Entrar una vez: la app que ya tiene la cuenta se la da a sus hermanas (solo a las que llevan la firma de la familia) -->
+diff --git a/familia/src/main/java/com/gonzalo/familia/LaFamilia.kt b/familia/src/main/java/com/gonzalo/familia/LaFamilia.kt
+index 52bbf1c..e118de5 100644
+--- a/familia/src/main/java/com/gonzalo/familia/LaFamilia.kt
++++ b/familia/src/main/java/com/gonzalo/familia/LaFamilia.kt
+@@ -35,7 +35,7 @@ object LaFamilia {
+     val SESHATS = listOf(SESHAT, SESKOBO)
+ 
+     /** Las apps de la familia (sus paquetes). */
+-    val APPS = listOf("com.gonzalo.hiedra", SESHAT, SESKOBO, "com.gonzalo.cobalto", "com.gonzalo.gamerate", "com.gonzalo.mostaza", "com.gonzalo.cobre", "com.gonzalo.ammit")
++    val APPS = listOf("com.gonzalo.hiedra", SESHAT, SESKOBO, "com.gonzalo.cobalto", "com.gonzalo.gamerate", "com.gonzalo.mostaza", "com.gonzalo.cobre", "com.gonzalo.ammit", "com.gonzalo.atlas")
+ 
+     /**
+      * El paquete de la app que hace de [paquete] en este móvil: para Seshat, la que esté instalada (la normal o SesKobo; si estuvieran
+-- 
+2.43.0
+
