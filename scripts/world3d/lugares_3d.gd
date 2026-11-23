@@ -6,6 +6,10 @@ extends Node3D
 ## murallas, en cuatro colores (azul, rojo, verde, amarillo). Cada lugar toma el color de su reino (el más
 ## parecido de los cuatro). Cada edificio se asienta a la altura del terreno en su sitio y no se pisan entre sí.
 ## Algunas piezas de asedio siguen siendo del Castle Kit de Kenney (CC0).
+##
+## Aldeas, pueblos, ciudades, capitales y puertos salen del trazado procedural de Asentamiento según su tamaño
+## (calles, plaza, murallas, arrabales y afueras). Todo se dibuja agrupado: una MultiMesh por modelo, así que una
+## capital de 300 edificios cuesta lo mismo que unas pocas piezas.
 
 const KAY := "res://assets/kaykit/buildings/%s/building_%s_%s.gltf"
 const KAY_NEUTRAL := "res://assets/kaykit/buildings/neutral/%s.gltf"
@@ -22,6 +26,12 @@ var _sea: float = 0.5
 var _world: Vector2 = Vector2(12, 12)
 var _hs: float = 2.6
 var _rng := RandomNumberGenerator.new()
+## Modelo → transformaciones (en el espacio de este nodo), para agrupar en MultiMesh al final.
+var _batch: Dictionary = {}
+var _mesh_cache: Dictionary = {}
+## Calles y plazas para el suelo del relieve (L8: 0 nada, ~0,5 calle de grava, 1 plaza empedrada).
+var road_img: Image
+var road_count: int = 0
 
 func clear() -> void:
 	for c in get_children():
@@ -35,9 +45,22 @@ func unit_for(world: Vector2) -> float:
 func radius_uv(kind: String, world: Vector2) -> float:
 	return float(RADIUS.get(kind, 1.2)) * unit_for(world) * 1.7 / maxf(world.x, world.y)
 
+## Igual, para un lugar concreto (los asentamientos, según su tamaño).
+func radius_uv_place(p: Dictionary, world: Vector2) -> float:
+	var kind: String = str(p["kind"])
+	if Asentamiento.has_size(kind):
+		var plan: Dictionary = Asentamiento.generate(kind, Asentamiento.size_of(p), int(p["id"]))
+		return float(plan["radius"]) * unit_for(world) / maxf(world.x, world.y)
+	return radius_uv(kind, world)
+
 ## Devuelve la posición 3D de cada lugar (id → Vector3) para poner su nombre encima.
 func build(places: Array, height_img: Image, realm_img: Image, realms: Array, sea_level: float, world: Vector2, height_scale: float) -> Dictionary:
 	clear()
+	_batch.clear()
+	var long: int = maxi(height_img.get_width(), height_img.get_height())
+	var mk: float = clampf(float(long) / 2.0, 512.0, 2048.0) / float(long)
+	road_img = Image.create(maxi(int(height_img.get_width() * mk), 1), maxi(int(height_img.get_height() * mk), 1), false, Image.FORMAT_L8)
+	road_count = 0
 	_height = height_img
 	_sea = sea_level
 	_world = world
@@ -54,6 +77,13 @@ func build(places: Array, height_img: Image, realm_img: Image, realms: Array, se
 		root.position = base
 		add_child(root)
 		var placed: Array = []
+		if Asentamiento.has_size(kind):
+			var sz: int = Asentamiento.size_of(p)
+			var plan: Dictionary = Asentamiento.generate(kind, sz, int(p["id"]))
+			_build_plan(root, uv, col, plan, u, kind == "puerto")
+			_draw_roads(uv, plan, u)
+			out[int(p["id"])] = base + Vector3(0, u * (2.2 + float(sz) * 0.18), 0)
+			continue
 		match kind:
 			"capital":
 				_put(root, uv, _kay(col, "castle"), Vector2.ZERO, u * 1.25, placed, 1.1)
@@ -103,7 +133,148 @@ func build(places: Array, height_img: Image, realm_img: Image, realms: Array, se
 			_:
 				_cluster(root, uv, col, ["home_A", "home_B"], u * 0.3, u * 0.9, u * 0.9, placed)
 		out[int(p["id"])] = base + Vector3(0, u * (3.4 if kind == "capital" else 2.0), 0)
+	_flush()
 	return out
+
+## Un asentamiento a partir de su trazado. Lo que cae en el agua no se construye (salvo la carga de un puerto).
+func _build_plan(root: Node3D, uv: Vector2, col: String, plan: Dictionary, u: float, port: bool) -> void:
+	for b in plan["buildings"]:
+		var nm: String = b[0]
+		var pos: Vector2 = b[1]
+		var off: Vector2 = pos * u
+		var path: String = _kay(col, nm)
+		var lift: float = 0.0
+		if nm == "windmill" or nm == "watermill":
+			lift = u * float(b[3]) * 0.5
+		elif nm == "lumbermill":
+			lift = u * float(b[3]) * 0.24
+		_put_at(root, uv, path, off, u * float(b[3]), PI * 0.5 - float(b[2]), lift)
+	var walls: Dictionary = plan["walls"]
+	if not walls.is_empty():
+		_walls_plan(root, uv, walls, u, col)
+	if port:
+		for i in 6:
+			var a: float = _rng.randf() * TAU
+			var r: float = float(plan["core"]) * u * _rng.randf_range(0.7, 1.2)
+			var off := Vector2(cos(a), sin(a)) * r
+			var prop: String = ["crate_A_big", "barrel", "crate_long_A", "sack", "barrel", "crate_B_big"][i]
+			_put_at(root, uv, KAY_PROP % prop, off, u * 1.2, _rng.randf() * TAU, 0.0, true)
+
+## Las calles y la plaza del trazado, en road_img.
+func _draw_roads(uv: Vector2, plan: Dictionary, u: float) -> void:
+	var rw: int = road_img.get_width()
+	var rh: int = road_img.get_height()
+	# Unidades de edificio → píxeles de la máscara.
+	var k: float = u / maxf(_world.x, _world.y) * float(maxi(rw, rh))
+	var c := Vector2(uv.x * rw, uv.y * rh)
+	var half: float = maxf(Asentamiento.ROAD_HW * k, 1.0)
+	var street := Color(0.5, 0.5, 0.5)
+	for pts in plan["roads"]:
+		var arr: Array = pts
+		for i in range(arr.size() - 1):
+			var a: Vector2 = c + (arr[i] as Vector2) * k
+			var b: Vector2 = c + (arr[i + 1] as Vector2) * k
+			var n: int = maxi(int(a.distance_to(b) / maxf(half * 0.6, 0.5)), 1)
+			for j in n + 1:
+				var p: Vector2 = a.lerp(b, float(j) / float(n))
+				var r := Rect2i(Vector2i(p - Vector2(half, half)), Vector2i(int(half * 2.0) + 1, int(half * 2.0) + 1))
+				road_img.fill_rect(r.intersection(Rect2i(0, 0, rw, rh)), street)
+	var pr: float = float(plan["plaza"]) * k
+	if pr >= 1.0:
+		for y in range(int(c.y - pr), int(c.y + pr) + 1):
+			var dy: float = float(y) + 0.5 - c.y
+			var dx: float = sqrt(maxf(pr * pr - dy * dy, 0.0))
+			var r := Rect2i(int(c.x - dx), y, int(dx * 2.0) + 1, 1)
+			road_img.fill_rect(r.intersection(Rect2i(0, 0, rw, rh)), Color.WHITE)
+	road_count += 1
+
+## Una pieza en [off] (unidades del mundo desde el centro) a la altura del terreno de su sitio, a la cola del lote.
+func _put_at(root: Node3D, uv: Vector2, path: String, off: Vector2, scale: float, rot_y: float, lift: float = 0.0, allow_water: bool = false) -> void:
+	var puv: Vector2 = uv + off / _world
+	if not allow_water and _wet(puv):
+		return
+	var g: Vector3 = _ground(puv)
+	var xf := Transform3D(Basis(Vector3.UP, rot_y).scaled(Vector3.ONE * scale), Vector3(root.position.x + off.x, g.y + lift, root.position.z + off.y))
+	if not _batch.has(path):
+		_batch[path] = []
+	(_batch[path] as Array).append(xf)
+
+func _wet(uv: Vector2) -> bool:
+	var w: int = _height.get_width()
+	var h: int = _height.get_height()
+	var px := Vector2i(clampi(int(uv.x * w), 0, w - 1), clampi(int(uv.y * h), 0, h - 1))
+	return _height.get_pixelv(px).r <= _sea + 0.002
+
+## Muralla en anillo (algo irregular) con una puerta donde entra cada calle y torres cada pocos tramos. Cada
+## tramo se estira a lo que mide su cuerda, así el anillo cierra aunque el radio cambie.
+func _walls_plan(root: Node3D, uv: Vector2, walls: Dictionary, scale: float, col: String) -> void:
+	var gates: Array = walls["gates"]
+	var verts: Array = Asentamiento.wall_ring(walls)
+	for i in verts.size():
+		verts[i] = (verts[i] as Vector2) * scale
+	var n: int = verts.size()
+	var gate_idx: Dictionary = {}
+	for ga in gates:
+		gate_idx[posmod(int(floor(fposmod(float(ga), TAU) / TAU * n)), n)] = true
+	for i in n:
+		var a: Vector2 = verts[i]
+		var b: Vector2 = verts[(i + 1) % n]
+		var mid: Vector2 = (a + b) * 0.5
+		var d: Vector2 = b - a
+		var path: String = KAY_NEUTRAL % ("wall_straight_gate" if gate_idx.has(i) else "wall_straight")
+		var puv: Vector2 = uv + mid / _world
+		var g: Vector3 = _ground(puv)
+		var basis := Basis(Vector3.UP, -atan2(d.y, d.x)) * Basis.from_scale(Vector3(d.length() / 2.0 + scale * 0.04, scale, scale))
+		var xf := Transform3D(basis, Vector3(root.position.x + mid.x, g.y, root.position.z + mid.y))
+		if not _batch.has(path):
+			_batch[path] = []
+		(_batch[path] as Array).append(xf)
+		if i % 3 == 1 and not gate_idx.has(i):
+			_put_at(root, uv, _kay(col, "tower_A"), b, scale * 0.7, 0.0, 0.0, true)
+
+## Cada modelo del lote, en una MultiMeshInstance3D sin sombras.
+func _flush() -> void:
+	for path in _batch.keys():
+		var mesh: Mesh = _mesh_of(str(path))
+		if mesh == null:
+			continue
+		var xfs: Array = _batch[path]
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = mesh
+		mm.instance_count = xfs.size()
+		for i in xfs.size():
+			mm.set_instance_transform(i, xfs[i])
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mmi)
+	_batch.clear()
+
+## La malla del modelo (los de KayKit tienen una), con sus materiales sin sombras recibidas.
+func _mesh_of(path: String) -> Mesh:
+	if _mesh_cache.has(path):
+		return _mesh_cache[path]
+	var mesh: Mesh = null
+	var sc: PackedScene = _scene(path)
+	if sc != null:
+		var n: Node = sc.instantiate()
+		var found: Array = n.find_children("*", "MeshInstance3D", true, false)
+		if not found.is_empty():
+			var mi: MeshInstance3D = found[0]
+			mesh = mi.mesh
+			for si in mesh.get_surface_count():
+				var m: Material = mesh.surface_get_material(si)
+				if m == null and mi.get_active_material(si) != null:
+					if mesh == mi.mesh:
+						mesh = mi.mesh.duplicate()
+					m = mi.get_active_material(si)
+					mesh.surface_set_material(si, m)
+				if m is BaseMaterial3D:
+					(m as BaseMaterial3D).disable_receive_shadows = true
+		n.free()
+	_mesh_cache[path] = mesh
+	return mesh
 
 func _kay(col: String, name: String) -> String:
 	return KAY % [col, name, col]

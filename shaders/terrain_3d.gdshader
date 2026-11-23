@@ -14,6 +14,11 @@ uniform float biome_desat = 0.0;
 uniform vec3 biome_tint : source_color = vec3(0.95, 0.92, 0.84);
 uniform float biome_tint_amt = 0.0;
 uniform bool show_realms = true;
+// Fundido entre biomas (píxeles del mapa): el suelo se mezcla con los biomas vecinos en ese radio.
+uniform float biome_blend = 16.0;
+// Calles y plazas de los asentamientos (0 nada, ~0,5 calle, 1 plaza).
+uniform sampler2D road_tex : filter_linear, repeat_disable;
+uniform bool has_roads = false;
 // Suelos con textura (CC0 de Poly Haven, assets/terrain/suelos.png como Texture2DArray). biome_data es la misma
 // paleta de biomas SIN source_color: su fila 3 guarda índices de capa, que no deben pasar por la conversión de color.
 uniform sampler2DArray ground_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
@@ -85,6 +90,32 @@ vec3 ground_triplanar(float layer, vec3 p, vec3 n) {
 	return x * w.x + y * w.y + z * w.z;
 }
 
+// El suelo texturizado de un bioma (sus dos capas mezcladas con ruido y teñido con su color).
+vec3 biome_ground(int gid, vec2 wp, float n1, float elev, vec3 auto_land) {
+	float l1 = 13.0;
+	float l2 = 0.0;
+	float m = 0.35;
+	if (gid > 0) {
+		vec4 d = texelFetch(biome_data, ivec2(gid, 3), 0);
+		l1 = round(d.r * 255.0);
+		l2 = round(d.g * 255.0);
+		m = d.b;
+	} else if (elev > 0.3) {
+		l1 = 16.0;
+		l2 = 0.0;
+		m = 0.45;
+	}
+	vec3 g = ground(l1, wp);
+	if (m > 0.01) {
+		float k = smoothstep(1.0 - m - 0.12, 1.0 - m + 0.12, n1);
+		g = mix(g, ground(l2, wp), k);
+	}
+	float lum = dot(g, vec3(0.2126, 0.7152, 0.0722));
+	vec3 base_col = gid > 0 ? biome_color(gid) : auto_land;
+	float tint_k = gid > 0 ? ground_tint * 1.4 : ground_tint;
+	return mix(g, base_col * lum * 2.2, tint_k);
+}
+
 void vertex() {
 	// Media de 5 muestras a medio paso de malla: la malla tiene menos vértices que píxeles el mapa y, sin esto,
 	// las crestas finas salen con dientes y parpadean al girar.
@@ -138,7 +169,11 @@ void fragment() {
 		if (fn_obj.y < 0.0) {
 			fn_obj = -fn_obj;
 		}
-		n_obj = normalize(mix(n_obj, fn_obj, facets));
+		// Solo las montañas van por caras: en laderas suaves, valles y cañones las filas de la malla con normales
+		// distintas se leían como escalones.
+		float elev_f = clamp((v_h - sea_level) * 2.6, 0.0, 1.0);
+		float rough = smoothstep(0.42, 0.62, elev_f) * smoothstep(0.10, 0.30, 1.0 - n_obj.y);
+		n_obj = normalize(mix(n_obj, fn_obj, facets * rough * 0.7));
 		NORMAL = normalize((VIEW_MATRIX * MODEL_MATRIX * vec4(n_obj, 0.0)).xyz);
 
 		// La altura de la geometría (la del vértice), para que las franjas sigan a las caras.
@@ -154,40 +189,69 @@ void fragment() {
 			vec2 wp = UV * terrain_size;
 			float n1 = vnoise(wp * 1.4);
 			float n2 = vnoise(wp * 0.33 + 7.0);
-			// Bioma con el punto desplazado por ruido: lindes irregulares, no en escalera.
+			// Bioma con el punto desplazado por ruido (lindes irregulares) y fundido con los vecinos: 7 muestras en un
+			// disco de radio biome_blend; los biomas repetidos se suman y cada bioma distinto se texturiza una vez.
 			vec2 bsz = vec2(textureSize(biome_tex, 0));
 			vec2 wuv = UV + (vec2(vnoise(wp * 3.1), vnoise(wp * 3.1 + 11.0)) - 0.5) * 4.0 / bsz;
-			int gid = id_at(biome_tex, wuv);
-			float l1 = 13.0;
-			float l2 = 0.0;
-			float m = 0.35;
-			if (gid > 0) {
-				vec4 d = texelFetch(biome_data, ivec2(gid, 3), 0);
-				l1 = round(d.r * 255.0);
-				l2 = round(d.g * 255.0);
-				m = d.b;
-			} else if (elev > 0.3) {
-				l1 = 16.0;
-				l2 = 0.0;
-				m = 0.45;
+			int ids[7];
+			float ws[7];
+			int nid = 0;
+			float rot = vnoise(wp * 5.3) * 6.2831853;
+			for (int k = 0; k < 7; k++) {
+				float rk = k == 0 ? 0.0 : (k < 4 ? 0.5 : 1.0);
+				float ak = rot + float(k) * 2.0943951 + (k >= 4 ? 1.0471976 : 0.0);
+				vec2 suv = wuv + vec2(cos(ak), sin(ak)) * rk * biome_blend / bsz;
+				int sid = id_at(biome_tex, k == 0 ? wuv : suv);
+				float wk = k == 0 ? 2.0 : (k < 4 ? 1.2 : 0.7);
+				if (biome_blend < 1.0 && k > 0) {
+					break;
+				}
+				bool found = false;
+				for (int j = 0; j < 7; j++) {
+					if (j >= nid) break;
+					if (ids[j] == sid) {
+						ws[j] += wk;
+						found = true;
+						break;
+					}
+				}
+				if (!found) {
+					ids[nid] = sid;
+					ws[nid] = wk;
+					nid++;
+				}
 			}
-			vec3 g = ground(l1, wp);
-			if (m > 0.01) {
-				float k = smoothstep(1.0 - m - 0.12, 1.0 - m + 0.12, n1);
-				g = mix(g, ground(l2, wp), k);
+			int gid = ids[0];
+			vec3 g = vec3(0.0);
+			float wsum = 0.0;
+			float best_w = 0.0;
+			for (int j = 0; j < 7; j++) {
+				if (j >= nid) break;
+				g += biome_ground(ids[j], wp, n1, elev, land) * ws[j];
+				wsum += ws[j];
+				if (ws[j] > best_w) {
+					best_w = ws[j];
+					gid = ids[j];
+				}
 			}
+			g /= wsum;
 			// Arena en la orilla.
 			float beach = smoothstep(0.03, 0.006, coast_dist) * (gid > 0 ? 0.6 : 1.0);
 			g = mix(g, ground(5.0, wp), beach);
-			// El estilo del mapa: un poco del color del bioma sobre las luces de la textura, y más saturación.
-			float lum = dot(g, vec3(0.2126, 0.7152, 0.0722));
-			vec3 base_col = gid > 0 ? biome_color(gid) : land;
-			float tint_k = gid > 0 ? ground_tint * 1.4 : ground_tint;
-			g = mix(g, base_col * lum * 2.2, tint_k);
 			float lum2 = dot(g, vec3(0.2126, 0.7152, 0.0722));
 			g = max(mix(vec3(lum2), g, ground_saturation), vec3(0.0));
 			g = max((g - 0.18) * ground_contrast + 0.18, vec3(0.0));
 			g *= ground_gain * (0.9 + 0.2 * n2);
+			// Calles de tierra apisonada y plazas empedradas: con su textura, pero sin la saturación del suelo.
+			if (has_roads) {
+				float rd = texture(road_tex, UV + (vec2(vnoise(wp * 40.0), vnoise(wp * 40.0 + 5.0)) - 0.5) * 0.0006).r;
+				float street = smoothstep(0.22, 0.42, rd);
+				float plz = smoothstep(0.72, 0.9, rd);
+				float gl = dot(ground(14.0, wp * 1.6), vec3(0.2126, 0.7152, 0.0722));
+				float pl = dot(ground(18.0, wp * 2.2), vec3(0.2126, 0.7152, 0.0722));
+				g = mix(g, vec3(0.74, 0.64, 0.50) * (0.55 + gl * 0.9), street * 0.9);
+				g = mix(g, vec3(0.70, 0.68, 0.64) * (0.5 + pl * 1.0), plz * 0.95);
+			}
 
 			// Montaña estilizada: roca cálida (con el detalle de luces de la textura), paredes más oscuras y casquetes de
 			// nieve con el borde irregular pero nítido. Por caras, como los modelos low-poly.
@@ -200,10 +264,10 @@ void fragment() {
 				float rl = dot(ground_triplanar(19.0, p3, n_obj), vec3(0.2126, 0.7152, 0.0722));
 				vec3 rock = mix(rock_col, cliff_col, smoothstep(0.38, 0.62, slope)) * (0.7 + rl * 1.1);
 				// Estratos en las paredes empinadas (cañones, escarpes): franjas de ocre y rojizo según la altura.
-				float band = fract(p3.y * 7.0 + (n1 - 0.5) * 0.35);
-				vec3 strata = mix(vec3(0.80, 0.55, 0.36), vec3(0.60, 0.36, 0.26), smoothstep(0.42, 0.58, band));
-				strata = mix(strata, vec3(0.88, 0.74, 0.55), smoothstep(0.86, 0.96, band));
-				rock = mix(rock, strata * (0.75 + rl * 0.8), smoothstep(0.42, 0.62, slope) * 0.75);
+				// Bandas suaves (seno, no escalón) y onduladas, para que no parezcan peldaños.
+				float band = sin((p3.y * 7.0 + (n1 - 0.5) * 0.6 + (n2 - 0.5) * 0.4) * 6.2831853) * 0.5 + 0.5;
+				vec3 strata = mix(vec3(0.78, 0.55, 0.37), vec3(0.64, 0.40, 0.29), band);
+				rock = mix(rock, strata * (0.75 + rl * 0.8), smoothstep(0.50, 0.70, slope) * 0.5);
 				g = mix(g, rock, rockw);
 			}
 			float sn = elev + (n1 - 0.5) * 0.1;
@@ -223,6 +287,9 @@ void fragment() {
 			}
 		}
 		if (!use_ground) {
+			if (has_roads) {
+				land = mix(land, vec3(0.62, 0.56, 0.46), smoothstep(0.22, 0.42, texture(road_tex, UV).r) * 0.85);
+			}
 			land = mix(land, col_cliff, smoothstep(0.18, 0.52, slope));
 			land = mix(land, col_snow, smoothstep(0.68, 0.90, elev) * (1.0 - smoothstep(0.35, 0.65, slope)));
 		}

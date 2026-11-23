@@ -314,7 +314,7 @@ func begin_stroke(tool: String, value: int, start_uv: Vector2) -> void:
 		_snap_tex = height.snapshot_texture()
 		_target_h = height.sample_mirror(Vector2i(start_uv * Vector2(map_size)))
 
-func paint_uv(uv: Vector2, radius_px: float, strength: float, steps: float = 10.0) -> void:
+func paint_uv(uv: Vector2, radius_px: float, strength: float, steps: float = 7.0) -> void:
 	if not world_ready or _stroke_layer == null:
 		return
 	if uv.x < -0.05 or uv.x > 1.05 or uv.y < -0.05 or uv.y > 1.05:
@@ -1058,13 +1058,16 @@ func add_place(kind: String, uv: Vector2) -> int:
 	var before: Dictionary = _meta_snapshot()
 	var id: int = _next_place_id
 	_next_place_id += 1
-	places.append({"id": id, "kind": kind, "name": Nombres.lugar(kind, rng), "uv": uv})
+	var np: Dictionary = {"id": id, "kind": kind, "name": Nombres.lugar(kind, rng), "uv": uv}
+	if Asentamiento.has_size(kind):
+		np["size"] = int(Asentamiento.DEFAULT_SIZE[kind])
+	places.append(np)
 	_commit_meta(before)
 	return id
 
 func update_place(id: int, key: String, value: Variant) -> void:
 	var p: Dictionary = place_by_id(id)
-	if p.is_empty() or (typeof(p[key]) == typeof(value) and p[key] == value):
+	if p.is_empty() or (p.has(key) and typeof(p[key]) == typeof(value) and p[key] == value):
 		return
 	var before: Dictionary = _meta_snapshot()
 	p[key] = value

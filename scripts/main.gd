@@ -40,7 +40,7 @@ const TOOLS = [
 	["valley", "VALLE", "Baja la tierra hasta el río: el cauce en medio y las orillas suaves."],
 	["canyon", "CAÑÓN", "Corta un cauce hondo con paredes casi verticales."],
 	["smooth", "SUAVIZAR", "Redondea lo que toca: costas, cauces, picos. Repasa para más."],
-	["cliff", "ACANTILADO", "Hace escalones: rellanos planos y paredes. Elige cuántos abajo."],
+	["cliff", "ACANTILADO", "Recoge la ladera en una sola pared empinada (pásalo por una cuesta o una costa). Elige lo vertical abajo."],
 	["plateau", "MESETA", "Aplana a la altura del punto donde empiezas el trazo."],
 ]
 
@@ -88,7 +88,14 @@ var _place_label_pos: Dictionary = {}
 var selected_place: int = -1
 var brush_radius: float = 38.0
 var brush_strength: float = 0.5
-var cliff_steps: float = 10.0
+var cliff_steps: float = 7.0
+## Fundido entre biomas, 0-1 (se guarda con el mapa). El radio en píxeles crece con el tamaño del mapa.
+var biome_blend: float = 0.5
+var blend_slider: HSlider
+var place_size_box: VBoxContainer
+var place_size_slider: HSlider
+var place_size_val: Label
+var place_size_note: Label
 var sea_level: float = 0.5
 var sun_azimuth: float = 315.0
 var relief_mult: float = 1.0
@@ -478,14 +485,16 @@ func _on_layers_ready(size: Vector2i) -> void:
 		m.set_shader_parameter("biome_tex", engine.biome.get_texture())
 		m.set_shader_parameter("realm_tex", engine.realm.get_texture())
 	mat_2d.set_shader_parameter("area_tex", engine.area.get_texture())
+	_apply_blend()
 	_world3d_dirty = true
 	_places3d_dirty = true
 	var long_side: float = float(maxi(size.x, size.y))
 	var world := Vector2(size) / long_side * 12.0
 	var plane := PlaneMesh.new()
 	plane.size = world
-	# Un vértice cada ~4 píxeles del mapa (512 en uno de 2.048), hasta 768 por lado.
-	var subdiv: float = clampf(long_side / 4.0, 256.0, 768.0)
+	# Un vértice cada ~3 píxeles del mapa (683 en uno de 2.048), hasta 900 por lado: con menos, las paredes de
+	# cañones y acantilados salían en dientes de sierra.
+	var subdiv: float = clampf(long_side / 3.0, 256.0, 900.0)
 	plane.subdivide_width = int(round(subdiv * world.x / 12.0))
 	plane.subdivide_depth = int(round(subdiv * world.y / 12.0))
 	terrain_mesh.mesh = plane
@@ -935,7 +944,7 @@ func _rebuild_3d() -> void:
 			var exclude: Array = []
 			for p in engine.places:
 				var puv: Vector2 = p["uv"]
-				exclude.append(Vector3(puv.x, puv.y, places3d.radius_uv(str(p["kind"]), world)))
+				exclude.append(Vector3(puv.x, puv.y, places3d.radius_uv_place(p, world)))
 			n = vegetation.build(engine.biome.mirror, engine.height.mirror, sea_level, world, hs, engine.world_seed, exclude)
 		else:
 			vegetation.clear()
@@ -943,6 +952,9 @@ func _rebuild_3d() -> void:
 	if _places3d_dirty:
 		_places3d_dirty = false
 		_place_label_pos = places3d.build(engine.places, engine.height.mirror, engine.realm.mirror, engine.realms, sea_level, world, hs)
+		mat_3d.set_shader_parameter("has_roads", places3d.road_count > 0)
+		if places3d.road_count > 0:
+			mat_3d.set_shader_parameter("road_tex", ImageTexture.create_from_image(places3d.road_img))
 	_refresh_labels_3d()
 
 func _uv_to_3d(uv: Vector2, lift: float) -> Vector3:
@@ -1368,6 +1380,16 @@ func _refresh_place_editor() -> void:
 		_paint_filter(place_kind_chips[i], Catalogo.TIPOS_LUGAR[i][0] == kind)
 	if not p.is_empty() and not place_name_edit.has_focus():
 		place_name_edit.text = str(p["name"])
+	var sized: bool = not p.is_empty() and Asentamiento.has_size(kind)
+	place_size_box.visible = sized
+	if sized:
+		var sz: int = Asentamiento.size_of(p)
+		place_size_slider.set_value_no_signal(sz)
+		place_size_val.text = "%d / 10" % sz
+		var nm: String = Asentamiento.size_name(kind, sz)
+		place_size_note.text = "%s · unos %s edificios. Se genera solo: calles, plaza%s y afueras." % [
+			nm.substr(0, 1).to_upper() + nm.substr(1), Estilo.miles(Asentamiento.count_for(kind, sz)),
+			", murallas, arrabales" if Asentamiento.has_walls(kind, sz) else ""]
 
 func _set_tab_count(id: String, n: int) -> void:
 	var b: Button = tab_buttons[id]
@@ -1797,6 +1819,16 @@ func _build_section_biomas(col: Control) -> void:
 		grid.add_child(b)
 		biome_buttons.append(b)
 	_note(v, "«Automático» borra el bioma: el color vuelve a salir de la altura.")
+	var bl: Label
+	bl = _slider_row(v, "FUNDIDO ENTRE BIOMAS", 0.0, 1.0, 0.05, biome_blend, func(x: float):
+		biome_blend = x
+		bl.text = "%d %%" % int(round(x * 100.0))
+		_apply_blend()
+		_schedule_save()
+	)
+	blend_slider = bl.get_parent().get_parent().get_child(1) as HSlider
+	bl.text = "%d %%" % int(round(biome_blend * 100.0))
+	_note(v, "Mezcla los colores, los árboles y el suelo en la linde de dos biomas. A cero, la linde es nítida.")
 
 func _build_section_politico(col: Control) -> void:
 	var v := _section_box(col, "politico")
@@ -2038,6 +2070,18 @@ func _build_section_lugares(col: Control) -> void:
 		if t.strip_edges() != "":
 			engine.update_place(selected_place, "name", t.strip_edges())
 	)
+	# Tamaño de aldeas, pueblos, ciudades, capitales y puertos: el trazado se genera según él.
+	place_size_box = VBoxContainer.new()
+	place_size_box.add_theme_constant_override("separation", 4)
+	place_editor.add_child(place_size_box)
+	place_size_val = _slider_row(place_size_box, "TAMAÑO", 1.0, 10.0, 1.0, 5.0, func(x: float):
+		var p: Dictionary = engine.place_by_id(selected_place)
+		if p.is_empty():
+			return
+		engine.update_place(selected_place, "size", int(x))
+	)
+	place_size_slider = place_size_val.get_parent().get_parent().get_child(1) as HSlider
+	place_size_note = _note(place_size_box, "")
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 16)
 	place_editor.add_child(row)
@@ -2221,7 +2265,19 @@ func _calibrate_km() -> void:
 # ---------------------------------------------------------------- mapas guardados
 
 func _view_extra() -> Dictionary:
-	return {"theme": current_theme_idx, "sun": sun_azimuth, "relief": relief_mult}
+	return {"theme": current_theme_idx, "sun": sun_azimuth, "relief": relief_mult, "blend": biome_blend}
+
+## Radio del fundido en píxeles del mapa: hasta ~80 px en un mapa de 2048 (proporcional en los demás).
+func _blend_px() -> float:
+	return biome_blend * 80.0 * float(maxi(engine.map_size.x, engine.map_size.y)) / 2048.0
+
+func _apply_blend() -> void:
+	var px: float = _blend_px()
+	mat_2d.set_shader_parameter("biome_blend", px)
+	mat_3d.set_shader_parameter("biome_blend", px)
+	if vegetation != null:
+		vegetation.blend_px = px
+	_world3d_dirty = true
 
 func _schedule_save() -> void:
 	if engine.world_ready:
@@ -2267,6 +2323,12 @@ func _on_map_loaded() -> void:
 	_apply_sun()
 	relief_mult = float(ex.get("relief", relief_mult))
 	mat_3d.set_shader_parameter("height_scale", 2.6 * relief_mult)
+	biome_blend = float(ex.get("blend", 0.5))
+	if blend_slider != null:
+		blend_slider.set_value_no_signal(biome_blend)
+		var bl: Label = blend_slider.get_parent().get_child(0).get_child(1) as Label
+		bl.text = "%d %%" % int(round(biome_blend * 100.0))
+	_apply_blend()
 	_set_sea_level(engine.sea_level)
 	map_name_edit.text = engine.map_name
 	_refresh_route()
@@ -2641,7 +2703,7 @@ func _build_brush(col: Control) -> void:
 		val_strength.text = "%d %%" % int(round(x * 100.0))
 	)
 	strength_row = str_val.get_parent().get_parent() as Control
-	val_steps = _slider_row(brush_box, "ESCALONES", 3.0, 24.0, 1.0, cliff_steps, func(x: float):
+	val_steps = _slider_row(brush_box, "PARED VERTICAL", 1.0, 10.0, 1.0, cliff_steps, func(x: float):
 		cliff_steps = x
 		val_steps.text = str(int(x))
 	)

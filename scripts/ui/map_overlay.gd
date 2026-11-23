@@ -41,6 +41,10 @@ var paper: Color = Estilo.PAPEL
 var _realm_font: FontVariation
 ## Rectángulos ya ocupados por rótulos en este dibujo (los que chocan no se pintan).
 var _taken: Array[Rect2] = []
+## Trazados de los asentamientos ("id:tipo:tamaño" → plan de Asentamiento), para no regenerarlos en cada dibujo.
+var _plans: Dictionary = {}
+## Unidades de edificio por lado largo del mapa (la misma escala que el 3D: 0,07 de 12).
+const TOWN_UNIT := 0.07 / 12.0
 const PLACE_ORDER = {"capital": 0, "ciudad": 1, "castillo": 2, "puerto": 3, "templo": 4, "pueblo": 5, "torre": 6, "batalla": 7, "ruinas": 8, "mina": 9, "aldea": 10}
 var _area_font: FontVariation
 
@@ -80,6 +84,7 @@ func _draw() -> void:
 	# Primero se decide qué rótulos de lugares caben (son lo más importante); luego reinos y regiones buscan hueco
 	# sin pisarlos y se pintan debajo.
 	var layout: Array = _layout_places()
+	_draw_towns()
 	_draw_routes()
 	if show_area_names:
 		_draw_area_names()
@@ -265,6 +270,73 @@ func ui_scale() -> float:
 	return clampf(0.5 + 0.5 * map_zoom, 0.6, 1.25)
 
 ## [lugar, posición en pantalla, ¿lleva nombre?]; deja en _taken los símbolos y nombres que se pintarán.
+## Px de pantalla que mide una casa con el zoom actual.
+func town_unit_px() -> float:
+	return TOWN_UNIT * maxf(map_screen_size.x, map_screen_size.y)
+
+func _plan_for(p: Dictionary) -> Dictionary:
+	var kind: String = str(p["kind"])
+	var sz: int = Asentamiento.size_of(p)
+	var key: String = "%d:%s:%d" % [int(p["id"]), kind, sz]
+	if not _plans.has(key):
+		if _plans.size() > 200:
+			_plans.clear()
+		_plans[key] = Asentamiento.generate(kind, sz, int(p["id"]))
+	return _plans[key]
+
+## Al acercarse, cada asentamiento muestra su planta: calles, plaza, manzanas y muralla (como en un plano antiguo).
+func _draw_towns() -> void:
+	var up: float = town_unit_px()
+	if up < 2.2:
+		return
+	var a: float = clampf((up - 2.2) / 1.5, 0.0, 1.0)
+	for p in places:
+		var kind: String = str(p["kind"])
+		if not Asentamiento.has_size(kind):
+			continue
+		var plan: Dictionary = _plan_for(p)
+		var c: Vector2 = uv_to_screen(p["uv"])
+		var rad: float = float(plan["radius"]) * up
+		if c.x < -rad or c.y < -rad or c.x > size.x + rad or c.y > size.y + rad:
+			continue
+		var road_w: float = maxf(Asentamiento.ROAD_HW * 2.0 * up, 1.0)
+		for pts in plan["roads"]:
+			var line := PackedVector2Array()
+			for q in pts:
+				line.append(c + (q as Vector2) * up)
+			draw_polyline(line, Color(ink, 0.30 * a), road_w + 2.0, true)
+		for pts in plan["roads"]:
+			var line := PackedVector2Array()
+			for q in pts:
+				line.append(c + (q as Vector2) * up)
+			draw_polyline(line, Color(paper.darkened(0.06), a), road_w, true)
+		var pr: float = float(plan["plaza"]) * up
+		if pr > 1.0:
+			draw_circle(c, pr, Color(paper.darkened(0.08), a))
+			draw_arc(c, pr, 0.0, TAU, 32, Color(ink, 0.35 * a), 1.0, true)
+		for b in plan["buildings"]:
+			var nm: String = b[0]
+			var q: Vector2 = c + (b[1] as Vector2) * up
+			var hs: float = up * float(b[3]) * (0.42 if nm.begins_with("home") else 0.5)
+			if nm == "castle":
+				hs = up * float(b[3]) * 0.9
+			var ang: float = float(b[2])
+			var ax := Vector2(cos(ang), sin(ang)) * hs
+			var ay := Vector2(-ax.y, ax.x)
+			var poly := PackedVector2Array([q - ax - ay, q + ax - ay, q + ax + ay, q - ax + ay])
+			var fill: Color = ink if nm.begins_with("home") else (Estilo.ACENTO.darkened(0.35) if nm == "castle" or nm == "church" else ink.lerp(Estilo.ACENTO, 0.45))
+			draw_colored_polygon(poly, Color(fill, 0.82 * a))
+		var walls: Dictionary = plan["walls"]
+		if not walls.is_empty():
+			var ring := PackedVector2Array()
+			var verts: Array = Asentamiento.wall_ring(walls)
+			for q in verts:
+				ring.append(c + (q as Vector2) * up)
+			ring.append(ring[0])
+			draw_polyline(ring, Color(ink, 0.9 * a), maxf(up * 0.38, 1.5), true)
+			for i in range(1, verts.size(), 3):
+				draw_circle(c + (verts[(i + 1) % verts.size()] as Vector2) * up, maxf(up * 0.36, 1.4), Color(ink, 0.9 * a))
+
 func _layout_places() -> Array:
 	var k: float = ui_scale()
 	var order: Array = places.duplicate()
@@ -313,7 +385,12 @@ func _draw_places(layout: Array) -> void:
 		if int(p["id"]) == selected_place:
 			draw_circle(Vector2.ZERO, 15.0, Color(Estilo.ACENTO, 0.25))
 			draw_arc(Vector2.ZERO, 15.0, 0.0, TAU, 40, Estilo.ACENTO, 2.0, true)
-		_draw_symbol(str(p["kind"]), Vector2.ZERO)
+		# Con la planta a la vista, el símbolo se queda en un punto (no tapa la plaza).
+		if Asentamiento.has_size(str(p["kind"])) and town_unit_px() >= 3.0 and int(p["id"]) != selected_place:
+			draw_circle(Vector2.ZERO, 3.5, ink)
+			draw_circle(Vector2.ZERO, 2.0, paper)
+		else:
+			_draw_symbol(str(p["kind"]), Vector2.ZERO)
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	for e in layout:
 		if not bool(e[2]):

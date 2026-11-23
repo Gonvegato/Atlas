@@ -143,6 +143,10 @@ func clear() -> void:
 
 ## Planta la vegetación. world: tamaño de la malla (ancho, fondo); height_scale: el del shader del terreno.
 ## [exclude]: zonas sin plantas (las ciudades), Vector3(u, v, radio en uv).
+## Fundido entre biomas (píxeles del mapa): cada planta toma el bioma de un punto cercano al azar, así que en
+## la linde los bosques se aclaran y las especies de los dos lados se mezclan.
+var blend_px: float = 0.0
+
 func build(biome_img: Image, height_img: Image, sea_level: float, world: Vector2, height_scale: float, seed: int, exclude: Array = []) -> int:
 	clear()
 	var w: int = biome_img.get_width()
@@ -171,7 +175,12 @@ func build(biome_img: Image, height_img: Image, sea_level: float, world: Vector2
 		while gx < w:
 			var x: int = clampi(int(gx + rng.randf() * step), 0, w - 1)
 			var y: int = clampi(int(gy + rng.randf() * step), 0, h - 1)
-			var id: int = data[y * w + x]
+			var bx: int = x
+			var by: int = y
+			if blend_px >= 1.0:
+				bx = clampi(x + int(rng.randf_range(-1.0, 1.0) * blend_px), 0, w - 1)
+				by = clampi(y + int(rng.randf_range(-1.0, 1.0) * blend_px), 0, h - 1)
+			var id: int = data[by * w + bx]
 			if id > 0 and id < defs.size() and defs[id] != null:
 				var d: Dictionary = defs[id]
 				if rng.randf() < float(d["d"]):

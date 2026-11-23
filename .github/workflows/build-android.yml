@@ -37,12 +37,37 @@ jobs:
 
       - name: Preparar la firma (clave fija de los secretos o, si no hay, una de depuración)
         env:
+          FIRMA_B64: ${{ secrets.FIRMA_B64 }}
           KS_B64: ${{ secrets.ATLAS_KEYSTORE_BASE64 }}
           KS_PASS: ${{ secrets.ATLAS_KEYSTORE_PASSWORD }}
           KS_ALIAS: ${{ secrets.ATLAS_KEY_ALIAS }}
           KEY_PASS: ${{ secrets.ATLAS_KEY_PASSWORD }}
         run: |
           mkdir -p "$HOME/.config/godot"
+          # Opción 1 (la más cómoda): el mismo secreto FIRMA_B64 que usa Familia-Revista (un .zip o .tar.gz en base64 con
+          # familia.keystore y claves.properties, alias «familia»).
+          if [ -n "$FIRMA_B64" ]; then
+            printf '%s' "$FIRMA_B64" | tr -d '\r\n ' | base64 -d > "${RUNNER_TEMP}/firma.bin"
+            mkdir -p "${RUNNER_TEMP}/firma_ext"
+            TIPO=$(file -b "${RUNNER_TEMP}/firma.bin")
+            if echo "$TIPO" | grep -qi "Zip archive"; then
+              unzip -qo "${RUNNER_TEMP}/firma.bin" -d "${RUNNER_TEMP}/firma_ext"
+            else
+              tar -xf "${RUNNER_TEMP}/firma.bin" -C "${RUNNER_TEMP}/firma_ext"
+            fi
+            KS_FILE=$(find "${RUNNER_TEMP}/firma_ext" -name familia.keystore | head -n 1)
+            PROPS=$(find "${RUNNER_TEMP}/firma_ext" -name claves.properties | head -n 1)
+            if [ -n "$KS_FILE" ] && [ -n "$PROPS" ]; then
+              KS_PASS=$(grep '^familia.pass=' "$PROPS" | head -n 1 | cut -d= -f2- | tr -d '\r')
+              echo "::add-mask::$KS_PASS"
+              KS_ALIAS=familia
+              KEY_PASS="$KS_PASS"
+              KS_B64=$(base64 -w0 "$KS_FILE")
+            else
+              echo "::warning::FIRMA_B64 no trae familia.keystore y claves.properties."
+            fi
+            rm -rf "${RUNNER_TEMP}/firma.bin" "${RUNNER_TEMP}/firma_ext"
+          fi
           if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ] && [ -n "$KS_ALIAS" ]; then
             # Firma fija: la misma en cada compilación, así las versiones nuevas se instalan encima sin perder los mapas.
             echo "$KS_B64" | base64 -d > "${RUNNER_TEMP}/origen.keystore"
@@ -67,7 +92,7 @@ jobs:
             echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=${KEYSTORE_PATH}" >> "$GITHUB_ENV"
             echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
             echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
-            echo "::warning::Sin los secretos ATLAS_KEYSTORE_*: APK firmado con una clave de depuración nueva (hay que desinstalar la anterior)."
+            echo "::warning::Sin el secreto FIRMA_B64 (ni ATLAS_KEYSTORE_*): APK firmado con una clave de depuración nueva (hay que desinstalar la anterior)."
           fi
           cat <<EOF > "$HOME/.config/godot/editor_settings-4.tres"
           [gd_resource type="EditorSettings" format=3]

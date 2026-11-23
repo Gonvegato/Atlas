@@ -2,6 +2,30 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.11.0
+
+- **Ciudades por tamaño, generadas solas.** Aldeas, pueblos, ciudades, capitales y puertos tienen un deslizador de
+  TAMAÑO (1-10) en Lugares: de una aldea de 3 casas a una capital de casi 300 edificios. El trazado se genera según tipo y
+  tamaño: calles que salen de la plaza (más cuanto más grande), rondas en anillo, casas en fila mirando a la calle, los
+  edificios especiales (mercado, taberna, herrería, iglesia, cuartel…) junto a la plaza, muralla irregular con una
+  puerta en cada calle y torres (capitales desde el 3, ciudades desde el 4, pueblos muy grandes), arrabales fuera de la
+  muralla y molinos y aserraderos en las afueras. Puedes hacer un pueblo enorme o una capital pequeña. Lo mismo en 2D
+  (al acercarte se ve la planta: calles, plaza, manzanas y muralla) y en 3D (con las calles de tierra y la plaza
+  empedrada pintadas en el suelo). Lo que caería en el agua no se construye. En 3D, cada modelo va en una MultiMesh: una
+  capital grande se monta en menos de 0,1 s.
+- **Fundido entre biomas.** Los biomas se mezclan en la linde: los colores en 2D, el suelo texturizado en 3D (hasta 7
+  muestras, cada bioma distinto se texturiza una vez) y los árboles (en el borde el bosque se aclara y las especies de los
+  dos lados se mezclan, en 2D y en 3D). Deslizador FUNDIDO ENTRE BIOMAS en Biomas (se guarda con el mapa; a cero, linde
+  nítida).
+- **Valles, cañones y acantilados sin escalones.** El cañón ya no talla cuatro terrazas: fondo con río, talud, pared casi
+  vertical de una vez y cornisa redondeada, con barrancos (el pie de la pared entra y sale). El valle sube en curva suave
+  sin arista ni al pie ni en el borde, y su anchura ondula. El ACANTILADO ya no hace rellanos: donde hay desnivel recoge
+  la ladera en una sola pared (deslizador PARED VERTICAL), decidida con la altura suavizada para no abrir hoyos. En 3D, el
+  sombreado por caras (low-poly) queda solo para las cumbres (en laderas suaves sus filas parecían peldaños), los estratos
+  de las paredes son bandas suaves y la malla tiene más vértices (uno cada ~3 px del mapa, hasta 900 por lado).
+- **Firma con el secreto de la familia.** El workflow acepta el mismo secreto `FIRMA_B64` que Familia-Revista (ver
+  `docs/FIRMA-Y-FAMILIA.md`). Mensaje para el Claude de Familia-Revista en `docs/MENSAJE-PARA-FAMILIA-REVISTA.md`.
+
 ## 0.10.1
 
 - **Arreglo: los botones del panel no respondían en la tablet** (en vertical y en horizontal). El filtro táctil del panel

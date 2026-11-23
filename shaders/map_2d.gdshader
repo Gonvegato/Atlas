@@ -43,6 +43,8 @@ uniform vec3 col_ink : source_color = vec3(0.10, 0.11, 0.13);
 uniform float biome_desat = 0.0;
 uniform vec3 biome_tint : source_color = vec3(0.95, 0.92, 0.84);
 uniform float biome_tint_amt = 0.0;
+// Fundido entre biomas: radio (píxeles del mapa) en el que se mezclan colores, árboles y patrones. 0 = linde seca.
+uniform float biome_blend = 16.0;
 
 float hash1(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21));
@@ -319,18 +321,42 @@ void fragment() {
 		vec3 auto_col = mix(col_land_low, col_land_mid, smoothstep(0.05, 0.45, elev));
 		auto_col = mix(auto_col, col_land_high, smoothstep(0.42, 0.78, elev));
 
-		// Biomas: los 4 vecinos mezclados (lindes suaves) con el punto desplazado por ruido (lindes orgánicas).
+		// Biomas: fundido en un disco de radio biome_blend (13 muestras en espiral, más peso cerca), con el punto
+		// desplazado por ruido para que la linde sea orgánica. Sin fundido, los 4 vecinos (linde nítida pero suave).
 		vec2 warp = (vec2(vnoise(UV * 90.0), vnoise(UV * 90.0 + 31.7)) - 0.5) * 3.0;
-		vec2 bp = UV * tex_size + warp - 0.5;
-		vec2 b0 = floor(bp);
-		vec2 bf = fract(bp);
-		vec3 bc4[4];
-		for (int k = 0; k < 4; k++) {
-			vec2 o = vec2(float(k % 2), float(k / 2));
-			int bid = id_at(biome_tex, (b0 + o + 0.5) / tex_size);
-			bc4[k] = bid > 0 ? mix(biome_color(bid), auto_col, smoothstep(0.55, 0.95, elev) * 0.6) : auto_col;
+		float forest_w = 0.0;
+		if (biome_blend >= 1.0) {
+			vec2 wobble = (vec2(vnoise(UV * 23.0 + 3.1), vnoise(UV * 23.0 + 9.7)) - 0.5) * biome_blend * 0.8;
+			vec2 bc = UV * tex_size + warp + wobble;
+			vec3 acc = vec3(0.0);
+			float wsum = 0.0;
+			for (int k = 0; k < 13; k++) {
+				float rk = k == 0 ? 0.0 : sqrt(float(k) / 12.0);
+				float ak = float(k) * 2.3999632;
+				vec2 sp = bc + vec2(cos(ak), sin(ak)) * rk * biome_blend;
+				int bid = id_at(biome_tex, sp / tex_size);
+				float wk = 1.0 - rk * rk * 0.75;
+				vec3 ck = bid > 0 ? mix(biome_color(bid), auto_col, smoothstep(0.55, 0.95, elev) * 0.6) : auto_col;
+				acc += ck * wk;
+				wsum += wk;
+				if (bid > 0 && is_tree(int(round(texelFetch(biome_pal, ivec2(bid, 1), 0).r * 255.0)))) {
+					forest_w += wk;
+				}
+			}
+			color = acc / wsum;
+			forest_w /= wsum;
+		} else {
+			vec2 bp = UV * tex_size + warp - 0.5;
+			vec2 b0 = floor(bp);
+			vec2 bf = fract(bp);
+			vec3 bc4[4];
+			for (int k = 0; k < 4; k++) {
+				vec2 o = vec2(float(k % 2), float(k / 2));
+				int bid = id_at(biome_tex, (b0 + o + 0.5) / tex_size);
+				bc4[k] = bid > 0 ? mix(biome_color(bid), auto_col, smoothstep(0.55, 0.95, elev) * 0.6) : auto_col;
+			}
+			color = mix(mix(bc4[0], bc4[1], bf.x), mix(bc4[2], bc4[3], bf.x), bf.y);
 		}
-		color = mix(mix(bc4[0], bc4[1], bf.x), mix(bc4[2], bc4[3], bf.x), bf.y);
 		color = mix(color, col_snow, smoothstep(0.80, 0.96, elev));
 
 		float slope = 1.0 - normal.z;
@@ -357,7 +383,9 @@ void fragment() {
 
 		if (show_symbols) {
 			// Patrones continuos (grietas, hielo, cultivos) según el bioma de este punto.
-			int pid = id_at(biome_tex, UV);
+			// En el fundido, cada punto toma el patrón de un vecino al azar (punteado de transición).
+			vec2 bj = (hash2(floor(UV * tex_size / 1.5)) - 0.5) * 2.0 * biome_blend / tex_size;
+			int pid = id_at(biome_tex, UV + bj);
 			if (pid > 0) {
 				vec4 meta = texelFetch(biome_pal, ivec2(pid, 1), 0);
 				int pk = int(round(meta.r * 255.0));
@@ -384,7 +412,7 @@ void fragment() {
 			float rnd = hash1(ci);
 			vec2 jit = (hash2(ci + 5.0) - 0.5) * 0.28;
 			vec2 center_uv = (ci + 0.5 + jit) * symbol_cell / tex_size;
-			int gid = id_at(biome_tex, center_uv);
+			int gid = id_at(biome_tex, center_uv + (hash2(ci + 23.0) - 0.5) * 2.0 * biome_blend / tex_size);
 			if (gid > 0 && texture(height_tex, center_uv).r > sea_level + 0.006) {
 				vec4 meta = texelFetch(biome_pal, ivec2(gid, 1), 0);
 				int kind = int(round(meta.r * 255.0));
@@ -401,7 +429,7 @@ void fragment() {
 			vec2 tb = floor(tq);
 			float taa = max(fwidth(tq.x), 0.002);
 			int here = id_at(biome_tex, UV);
-			bool near_forest = here > 0 && is_tree(int(round(texelFetch(biome_pal, ivec2(here, 1), 0).r * 255.0)));
+			bool near_forest = forest_w > 0.0 || (here > 0 && is_tree(int(round(texelFetch(biome_pal, ivec2(here, 1), 0).r * 255.0))));
 			if (!near_forest) {
 				// Un borde de bosque puede asomar desde la celda de abajo.
 				int below = id_at(biome_tex, (tb + vec2(0.5, 1.5)) * tree_cell / tex_size);
@@ -409,9 +437,10 @@ void fragment() {
 			}
 			if (near_forest) {
 				// Suelo del bosque: el color del bioma algo más oscuro y moteado.
-				if (here > 0) {
+				if (here > 0 || forest_w > 0.0) {
 					float mott = vnoise(UV * tex_size / (tree_cell * 1.7));
-					color *= 0.86 + mott * 0.12;
+					float fw2 = biome_blend >= 1.0 ? forest_w : 1.0;
+					color *= mix(1.0, 0.86 + mott * 0.12, fw2);
 				}
 				for (int dj = -1; dj <= 1; dj++) {
 					for (int di = -1; di <= 1; di++) {
@@ -419,7 +448,9 @@ void fragment() {
 						float r = hash1(cell * 1.31 + 7.0);
 						vec2 base = cell + vec2(0.5, 0.86) + (hash2(cell + 11.0) - 0.5) * vec2(0.55, 0.22);
 						vec2 buv = base * tree_cell / tex_size;
-						int tid = id_at(biome_tex, buv);
+						// El bioma del árbol, de un punto cercano al azar: en el fundido el bosque se aclara y las
+						// especies de los dos lados se mezclan.
+						int tid = id_at(biome_tex, buv + (hash2(cell + 21.0) - 0.5) * 2.0 * biome_blend / tex_size);
 						if (tid <= 0) continue;
 						vec4 m1 = texelFetch(biome_pal, ivec2(tid, 1), 0);
 						int tk = int(round(m1.r * 255.0));
