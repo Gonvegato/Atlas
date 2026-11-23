@@ -34,6 +34,8 @@ const TOOLS = [
 	["land", "TIERRA", "Levanta tierra suave."],
 	["mountain", "CORDILLERA", "Levanta montañas con crestas."],
 	["sea", "MAR", "Hunde la tierra bajo el mar."],
+	["lake", "LAGO", "Hace un lago: fondo bajo el agua y orillas suaves. Con «Contorno», dibuja su orilla."],
+	["swamp", "PANTANO", "Deja la tierra a ras del agua, con charcas, y pinta el bioma pantano."],
 	["river", "RÍO", "Talla un cauce estrecho."],
 	["valley", "VALLE", "Baja la tierra hasta el río: el cauce en medio y las orillas suaves."],
 	["canyon", "CAÑÓN", "Corta un cauce hondo con paredes casi verticales."],
@@ -138,6 +140,7 @@ var density_chips: Array[Button] = []
 var lbl_msaa_note: Label
 # --- relaciones, viajes, mapas guardados y modo vertical
 var relation_box: VBoxContainer
+var realm_parent_option: OptionButton
 var route_pts: Array = []
 var route_mode: String = "pie"
 var travel_mode_chips: Array[Button] = []
@@ -161,6 +164,20 @@ var header_name_lbl: Label
 var header_dot_lbl: Label
 var b_fit_btn: Button
 var portrait: bool = false
+## "pincel" o "contorno" (se dibuja el borde y se rellena lo de dentro).
+var draw_mode: String = "pincel"
+var outline_pts: Array = []
+var _outline_last: Vector2 = Vector2.ZERO
+var _stroke_bounds: Rect2 = Rect2()
+## El lienzo crece solo al dibujar tierra junto al borde.
+var grow_canvas: bool = true
+var draw_mode_chips: Array[Button] = []
+var quick_mode_chips: Array[Button] = []
+var quick_bar: HBoxContainer
+var toast_panel: PanelContainer
+var toast_label: Label
+var _toast_tween: Tween
+var _raw_centroids: Dictionary = {}
 
 # --- interfaz
 var btn_mode_3d: Button
@@ -228,6 +245,7 @@ func _ready() -> void:
 	_select_tool(current_tool)
 	_select_biome(current_biome)
 	_select_section("relieve")
+	_set_draw_mode("pincel")
 	# El 3D a la resolución real de la pantalla (no a la lógica de 1280×800), con MSAA 4×.
 	view_3d_container.stretch = false
 	view_3d_container.set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -526,7 +544,8 @@ func _connect_signals() -> void:
 	)
 	engine.places_changed.connect(_on_places_changed)
 	engine.realm_centroids_changed.connect(func(c: Dictionary):
-		overlay.centroids = c
+		_raw_centroids = c
+		overlay.centroids = _realm_aggregate(c)
 		overlay.queue_redraw()
 	)
 
@@ -549,6 +568,8 @@ func _tool_radius() -> float:
 			return r * 1.8
 		"canyon":
 			return r * 1.6
+		"lake":
+			return r * 1.2
 	return r
 
 func _on_stroke_started(pos: Vector2, pressure: float) -> void:
@@ -556,6 +577,15 @@ func _on_stroke_started(pos: Vector2, pressure: float) -> void:
 		return
 	_stroke_kind = ""
 	var uv: Vector2 = _pos_to_uv(pos)
+	_stroke_bounds = Rect2(uv, Vector2.ZERO)
+	# Contorno: se va guardando el borde y al soltar se rellena (ver _on_stroke_ended).
+	if _outline_target() != "":
+		_stroke_kind = "outline"
+		outline_pts = [uv]
+		_outline_last = pos
+		overlay.outline = outline_pts
+		overlay.queue_redraw()
+		return
 	match section:
 		"relieve":
 			_stroke_kind = "paint"
@@ -597,8 +627,16 @@ func _on_stroke_started(pos: Vector2, pressure: float) -> void:
 
 func _on_stroke_moved(pos: Vector2, pressure: float) -> void:
 	match _stroke_kind:
+		"outline":
+			if pos.distance_to(_outline_last) >= 3.0:
+				var ouv: Vector2 = _pos_to_uv(pos)
+				outline_pts.append(ouv)
+				_stroke_bounds = _stroke_bounds.expand(ouv)
+				_outline_last = pos
+				overlay.queue_redraw()
 		"paint":
 			var uv: Vector2 = _pos_to_uv(pos)
+			_stroke_bounds = _stroke_bounds.expand(uv)
 			var r: float = _tool_radius() if section == "relieve" else brush_radius * float(maxi(engine.map_size.x, engine.map_size.y)) / 1024.0
 			var s: float = _tool_strength(pressure)
 			engine.paint_uv(uv, r, s, cliff_steps)
@@ -616,15 +654,112 @@ func _on_stroke_moved(pos: Vector2, pressure: float) -> void:
 
 func _on_stroke_ended() -> void:
 	match _stroke_kind:
+		"outline":
+			var pts: Array = outline_pts.duplicate()
+			var target: String = _outline_target()
+			var value: int = _outline_value()
+			outline_pts = []
+			overlay.outline = []
+			if pts.size() >= 3:
+				_finish_outline(target, value, pts)
+			else:
+				overlay.queue_redraw()
 		"paint":
 			overlay.hide_ring()
 			engine.end_stroke()
+			if section == "relieve" and current_tool in ["land", "mountain"]:
+				_maybe_grow(_stroke_bounds)
 		"place":
 			if _drag_place > 0 and _drag_moved:
 				engine.commit_place_move(_drag_before)
 	_stroke_kind = ""
 	_drag_place = -1
 	_drag_moved = false
+
+## Qué rellena un contorno en esta sección y herramienta ("" = se pinta con pincel).
+func _outline_target() -> String:
+	if draw_mode != "contorno":
+		return ""
+	match section:
+		"relieve":
+			return current_tool if current_tool in ["land", "sea", "lake", "swamp"] else ""
+		"biomas":
+			return "biome"
+		"regiones":
+			return "area" if (current_area > 0 or area_erase) else ""
+		"politico":
+			return "realm" if (current_realm > 0 or realm_erase) else ""
+	return ""
+
+func _outline_value() -> int:
+	match section:
+		"biomas":
+			return current_biome
+		"regiones":
+			return 0 if area_erase else current_area
+		"politico":
+			return 0 if realm_erase else current_realm
+	return 0
+
+func _finish_outline(target: String, value: int, pts: Array) -> void:
+	overlay.queue_redraw()
+	var r: Rect2i = await engine.fill_outline(target, value, pts)
+	if r.size.x <= 0:
+		_toast("No se pudo rellenar ese contorno: dibújalo más grande.")
+		return
+	if target == "land":
+		var b := Rect2(pts[0], Vector2.ZERO)
+		for p in pts:
+			b = b.expand(p)
+		_maybe_grow(b)
+
+## Si se ha dibujado tierra pegada al borde, el lienzo crece por ese lado (hasta 8.192 px).
+func _maybe_grow(b: Rect2) -> void:
+	if not grow_canvas:
+		return
+	var edge: float = 0.03
+	var dirs: Array = []
+	if b.position.x < edge:
+		dirs.append(["O", "al oeste"])
+	if b.end.x > 1.0 - edge:
+		dirs.append(["E", "al este"])
+	if b.position.y < edge:
+		dirs.append(["N", "al norte"])
+	if b.end.y > 1.0 - edge:
+		dirs.append(["S", "al sur"])
+	var grown: Array = []
+	for d in dirs:
+		if await engine.extend(str(d[0])):
+			grown.append(d[1])
+	if not grown.is_empty():
+		_toast("El lienzo ha crecido %s (%s × %s px)." % [", ".join(grown), Estilo.miles(engine.map_size.x), Estilo.miles(engine.map_size.y)])
+	elif not dirs.is_empty() and maxi(engine.map_size.x, engine.map_size.y) >= engine.MAX_SIDE:
+		_toast("El lienzo ya está en el máximo (8.192 px).")
+
+func _set_draw_mode(m: String) -> void:
+	draw_mode = m
+	for i in draw_mode_chips.size():
+		_paint_filter(draw_mode_chips[i], (i == 1) == (m == "contorno"))
+	# La barra rápida flota sobre la mesa oscura: el apagado lleva fondo de papel para que se lea.
+	for i in quick_mode_chips.size():
+		var on: bool = (i == 1) == (m == "contorno")
+		if on:
+			Estilo.pintar_boton(quick_mode_chips[i], Estilo.SOBRE_ACENTO, Estilo.ACENTO, Estilo.ACENTO.darkened(0.15), 16, 10, Estilo.TINTA, 2)
+		else:
+			Estilo.pintar_boton(quick_mode_chips[i], Estilo.TINTA, Estilo.PAPEL, Estilo.CRUDO, 16, 10, Estilo.TINTA, 2)
+	_update_hint()
+
+## Un aviso breve abajo del mapa.
+func _toast(text: String) -> void:
+	toast_label.text = text
+	toast_panel.visible = true
+	toast_panel.modulate.a = 1.0
+	if _toast_tween != null:
+		_toast_tween.kill()
+	_toast_tween = create_tween()
+	_toast_tween.tween_interval(2.6)
+	_toast_tween.tween_property(toast_panel, "modulate:a", 0.0, 0.5)
+	_toast_tween.tween_callback(func(): toast_panel.visible = false)
 
 ## Fuerza según la herramienta: los pinceles que suman usan incrementos pequeños; los que mezclan, alfa.
 func _tool_strength(pressure: float) -> float:
@@ -634,7 +769,7 @@ func _tool_strength(pressure: float) -> float:
 			return lerpf(0.006, 0.05, f) * pressure
 		"river":
 			return lerpf(0.006, 0.05, f) * pressure * 1.35
-		"valley", "canyon":
+		"valley", "canyon", "lake":
 			return lerpf(0.15, 0.7, f)
 		_:
 			return lerpf(0.05, 0.5, f) * pressure
@@ -709,6 +844,8 @@ func _toggle_3d() -> void:
 	btn_mode_3d.text = "VOLVER AL MAPA  ←" if in_3d else "VER RELIEVE 3D  →"
 	sec_relief_3d.visible = in_3d
 	labels3d.visible = in_3d
+	if quick_bar != null:
+		quick_bar.visible = not in_3d and section in ["relieve", "biomas", "regiones", "politico"]
 	if in_3d:
 		_msaa_enter_3d()
 		_rebuild_3d()
@@ -827,7 +964,7 @@ func _update_hint() -> void:
 		"mundo":
 			lbl_hint.text = "UN DEDO MUEVE · DOS DEDOS ACERCAN"
 		_:
-			lbl_hint.text = "LÁPIZ DIBUJA · DOS DEDOS MUEVEN Y ACERCAN"
+			lbl_hint.text = "DIBUJA EL BORDE · SE RELLENA SOLO" if draw_mode == "contorno" else "LÁPIZ DIBUJA · DOS DEDOS MUEVEN Y ACERCAN"
 
 func _apply_theme(idx: int) -> void:
 	current_theme_idx = idx
@@ -905,9 +1042,16 @@ func _new_world() -> void:
 	current_realm = -1
 	route_pts.clear()
 	await engine.save_map(_view_extra())
-	await engine.create_world(size, s, new_mode)
+	await engine.create_world(size, s, 1 if new_mode == 2 else new_mode)
 	map_name_edit.text = engine.map_name
 	_refresh_route()
+	if new_mode == 2:
+		# Lienzo en blanco (mar) para dibujar el mundo a mano: tierra por contorno y lienzo que crece.
+		grow_canvas = true
+		_select_section("relieve")
+		_select_tool("land")
+		_set_draw_mode("contorno")
+		_toast("Dibuja la costa de tu tierra con el lápiz: al soltar se rellena. Si llegas al borde, el lienzo crece.")
 
 ## Botones que borran trabajo sin vuelta atrás: el primer toque pregunta, el segundo hace.
 func _confirm(key: String, b: Button, text_ready: String, action: Callable) -> void:
@@ -939,6 +1083,8 @@ func _select_section(id: String) -> void:
 		c.visible = (str(k) == id)
 	brush_box.visible = id in ["relieve", "biomas", "politico", "regiones"]
 	overlay.show_route = id == "viajes"
+	if quick_bar != null:
+		quick_bar.visible = id in ["relieve", "biomas", "regiones", "politico"]
 	overlay.queue_redraw()
 	if id == "mundo":
 		_refresh_maps_list()
@@ -976,11 +1122,14 @@ func _paint_filter(b: Button, on: bool) -> void:
 # ================================================================ reinos y lugares
 
 func _rebuild_realm_palette() -> void:
-	var img := Image.create(64, 1, false, Image.FORMAT_RGBA8)
+	# Fila 0: el color de cada reino · fila 1: su imperio (el de más arriba), r = id / 255.
+	var img := Image.create(64, 2, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0, 0, 0, 0))
 	for r in engine.realms:
 		var c: Color = r["color"]
-		img.set_pixel(int(r["id"]), 0, c)
+		var rid: int = int(r["id"])
+		img.set_pixel(rid, 0, c)
+		img.set_pixel(rid, 1, Color(float(engine.realm_top(rid)) / 255.0, 0, 0, 1))
 	var tex := ImageTexture.create_from_image(img)
 	var rimg := Image.create(64, 64, false, Image.FORMAT_R8)
 	for rel in engine.relations:
@@ -997,6 +1146,8 @@ func _rebuild_realm_palette() -> void:
 
 func _on_realms_changed() -> void:
 	_rebuild_realm_palette()
+	overlay.centroids = _realm_aggregate(_raw_centroids)
+	overlay.realm_parent = func(id: int) -> int: return engine.realm_parent(id)
 	_places3d_dirty = true
 	if engine.realm_by_id(current_realm).is_empty():
 		current_realm = -1
@@ -1006,10 +1157,13 @@ func _on_realms_changed() -> void:
 	lbl_realm_count.text = "%d REINOS" % engine.realms.size() if engine.realms.size() != 1 else "1 REINO"
 	for c in realm_list.get_children():
 		c.queue_free()
-	for r in engine.realms:
+	for e in _realm_tree():
+		var r: Dictionary = e[0]
+		var depth: int = e[1]
 		var id: int = int(r["id"])
 		var col: Color = r["color"]
-		var b := Estilo.boton("%s · %s" % [str(r["name"]).to_upper(), str(r["kind"])], 12, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 9)
+		var b := Estilo.boton("%s%s · %s" % ["   ".repeat(depth) + ("└ " if depth > 0 else ""), str(r["name"]).to_upper(), str(r["kind"])], 12, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 9)
+		b.custom_minimum_size = Vector2(0, 40)
 		b.icon = _swatch(col)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -1018,6 +1172,36 @@ func _on_realms_changed() -> void:
 		realm_list.add_child(b)
 		_paint_filter(b, id == current_realm and not realm_erase)
 	_refresh_realm_editor()
+
+## Los reinos en orden de árbol: [reino, profundidad].
+func _realm_tree() -> Array:
+	var out: Array = []
+	var add_level := func(f: Callable, parent: int, depth: int) -> void:
+		for r in engine.realms:
+			var p: int = int(r.get("parent", 0))
+			if p == parent or (parent == 0 and engine.realm_by_id(p).is_empty() and p != 0):
+				out.append([r, depth])
+				if depth < 6:
+					f.call(f, int(r["id"]), depth + 1)
+	add_level.call(add_level, 0, 0)
+	return out
+
+## Centro y área de cada reino contando los suyos (un imperio sin territorio propio también tiene centro).
+func _realm_aggregate(c: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for r in engine.realms:
+		var id: int = int(r["id"])
+		var sum := Vector2.ZERO
+		var area: float = 0.0
+		for o in engine.realms:
+			var oid: int = int(o["id"])
+			if c.has(oid) and engine.realm_is_within(oid, id):
+				var cc: Dictionary = c[oid]
+				sum += Vector2(cc["uv"]) * float(cc["area"])
+				area += float(cc["area"])
+		if area > 0.0:
+			out[id] = {"uv": sum / area, "area": area}
+	return out
 
 func _select_realm(id: int) -> void:
 	current_realm = id
@@ -1037,6 +1221,16 @@ func _refresh_realm_editor() -> void:
 	for i in realm_kind_chips.size():
 		_paint_filter(realm_kind_chips[i], Catalogo.TIPOS_REINO[i] == kind)
 	_refresh_relations()
+	realm_parent_option.clear()
+	realm_parent_option.add_item("NINGUNO (INDEPENDIENTE)", 0)
+	for o in engine.realms:
+		var oid: int = int(o["id"])
+		if oid != current_realm and not engine.realm_is_within(oid, current_realm):
+			realm_parent_option.add_item(("%s DE %s" % [str(o["kind"]), str(o["name"])]).to_upper(), oid)
+	var cur_parent: int = int(r.get("parent", 0))
+	for i in realm_parent_option.item_count:
+		if realm_parent_option.get_item_id(i) == cur_parent:
+			realm_parent_option.select(i)
 	var col: Color = r["color"]
 	for i in realm_color_buttons.size():
 		var c: Color = Catalogo.COLORES_REINO[i]
@@ -1077,9 +1271,22 @@ func _refresh_relations() -> void:
 	if others == 0:
 		relation_box.add_child(_note_label("Crea otro reino para poder relacionarlos."))
 
+## Rótulo pequeño de un grupo del panel (versalitas gris) que parte línea si no cabe.
+func _caption(text: String) -> Label:
+	var l := Estilo.etiqueta(text, 11, Estilo.GRIS)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.custom_minimum_size = Vector2(120, 0)
+	return l
+
 func _option_button() -> OptionButton:
 	var ob := OptionButton.new()
 	ob.focus_mode = Control.FOCUS_NONE
+	# Sin esto el desplegable mide lo que su opción más larga y ensancha el panel entero.
+	ob.fit_to_longest_item = false
+	ob.clip_text = true
+	ob.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	ob.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ob.custom_minimum_size = Vector2(120, 40)
 	ob.add_theme_font_override("font", Estilo.versalitas())
 	ob.add_theme_font_size_override("font_size", 11)
 	for k in ["normal", "hover", "pressed", "focus"]:
@@ -1185,6 +1392,33 @@ func _build_ui() -> void:
 	overlay = MapOverlay.new()
 	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	view_2d_root.add_child(overlay)
+
+	# Barra rápida sobre el mapa (a mano del pulgar): pincel o contorno.
+	quick_bar = HBoxContainer.new()
+	quick_bar.add_theme_constant_override("separation", 0)
+	quick_bar.position = Vector2(16, 14)
+	workspace.add_child(quick_bar)
+	for i in 2:
+		var qb := Estilo.boton(["PINCEL", "CONTORNO"][i], 12, Estilo.TINTA, Estilo.PAPEL, Estilo.CRUDO, 14, 10, Estilo.TINTA, 2)
+		qb.custom_minimum_size = Vector2(0, 44)
+		var qi: int = i
+		qb.pressed.connect(func(): _set_draw_mode("contorno" if qi == 1 else "pincel"))
+		quick_bar.add_child(qb)
+		quick_mode_chips.append(qb)
+	toast_panel = PanelContainer.new()
+	toast_panel.add_theme_stylebox_override("panel", Estilo.caja(Estilo.TINTA, Estilo.ACENTO, 0, 16, 10))
+	toast_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	toast_panel.visible = false
+	toast_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	toast_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	toast_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	toast_panel.offset_bottom = -64
+	workspace.add_child(toast_panel)
+	toast_label = Estilo.etiqueta("", 13, Estilo.PAPEL, Estilo.F_SEMI)
+	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	toast_label.custom_minimum_size = Vector2(360, 0)
+	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	toast_panel.add_child(toast_label)
 
 	vegetation = Vegetacion3D.new()
 	# Hojas con los colores puros del bioma (paleta de fantasía), como el suelo 3D.
@@ -1396,6 +1630,7 @@ func _chips(parent: Control, labels: Array, on_pick: Callable, size: int = 12) -
 	var out: Array[Button] = []
 	for i in labels.size():
 		var b := Estilo.boton(str(labels[i]), size, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 9)
+		b.custom_minimum_size.y = 40
 		var idx: int = i
 		b.pressed.connect(func(): on_pick.call(idx))
 		flow.add_child(b)
@@ -1592,8 +1827,14 @@ func _build_section_politico(col: Control) -> void:
 		b.pressed.connect(func(): engine.update_realm(current_realm, "color", Catalogo.COLORES_REINO[idx]))
 		colors.add_child(b)
 		realm_color_buttons.append(b)
+	realm_editor.add_child(_caption("PERTENECE A · UN IMPERIO CONTIENE REINOS"))
+	realm_parent_option = _option_button()
+	realm_parent_option.item_selected.connect(func(i: int):
+		engine.set_realm_parent(current_realm, realm_parent_option.get_item_id(i))
+	)
+	realm_editor.add_child(realm_parent_option)
 	realm_editor.add_child(Estilo.filete(1, Color(Estilo.TINTA, 0.25)))
-	realm_editor.add_child(Estilo.etiqueta("RELACIONES (SE VEN EN LAS FRONTERAS COMUNES)", 11, Estilo.GRIS))
+	realm_editor.add_child(_caption("RELACIONES · SE VEN EN LA FRONTERA"))
 	relation_box = VBoxContainer.new()
 	relation_box.add_theme_constant_override("separation", 6)
 	realm_editor.add_child(relation_box)
@@ -1966,6 +2207,8 @@ func _do_save() -> void:
 func _on_saved(ok: bool) -> void:
 	var t: Dictionary = Time.get_time_dict_from_system()
 	lbl_save_state.text = ("GUARDADO · %02d:%02d" % [t["hour"], t["minute"]]) if ok else "NO SE PUDO GUARDAR"
+	if not ok:
+		_toast("No se pudo guardar el mapa. Se volverá a intentar con el próximo cambio.")
 	if section == "mundo":
 		_refresh_maps_list()
 
@@ -2090,7 +2333,7 @@ func _build_section_mundo(col: Control) -> void:
 			_paint_filter(shape_chips[k], k == i)
 	, 11)
 	v.add_child(Estilo.etiqueta("EMPEZAR CON", 11, Estilo.GRIS))
-	mode_chips = _chips(v, ["UN CONTINENTE", "OCÉANO VACÍO"], func(i: int):
+	mode_chips = _chips(v, ["UN CONTINENTE", "OCÉANO VACÍO", "DIBUJAR A MANO"], func(i: int):
 		new_mode = i
 		for k in mode_chips.size():
 			_paint_filter(mode_chips[k], k == i)
@@ -2106,6 +2349,9 @@ func _build_section_mundo(col: Control) -> void:
 	btn_create.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn_create.pressed.connect(func(): _confirm("create", btn_create, "CREAR MUNDO  →", _new_world))
 	v.add_child(btn_create)
+	var gr := HFlowContainer.new()
+	v.add_child(gr)
+	_toggle_chip(gr, "EL LIENZO CRECE AL DIBUJAR EN EL BORDE", grow_canvas, func(on: bool): grow_canvas = on)
 	_note(v, "El mapa actual queda guardado en «Mis mapas». «Gigante» y «Colosal» usan mucha memoria (hasta ~1 GB) y tardan más en guardarse.")
 
 	v.add_child(Estilo.filete(2))
@@ -2187,6 +2433,10 @@ func _build_brush(col: Control) -> void:
 	col.add_child(brush_box)
 	brush_box.add_child(Estilo.filete(2))
 	_title(brush_box, "Pincel", "")
+	draw_mode_chips = _chips(brush_box, ["PINCEL", "CONTORNO (SE RELLENA)"], func(i: int):
+		_set_draw_mode("contorno" if i == 1 else "pincel")
+	, 11)
+	_note(brush_box, "Contorno: dibuja el borde con el lápiz y se rellena lo de dentro (tierra, mar, lago, pantano, biomas, regiones y reinos).")
 	var blocks := _blocks(brush_box, [["38", "TAMAÑO"], ["50 %", "FUERZA"]])
 	val_size = blocks[0]
 	val_strength = blocks[1]

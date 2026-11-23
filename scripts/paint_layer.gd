@@ -115,6 +115,9 @@ func load_image(img: Image) -> void:
 		copy.convert(mirror_format)
 	mirror = copy
 	_snapshot_dirty = true
+	# Un lienzo nuevo tiene que borrarse una vez antes de escribir en él: si no, en GL Compatibility lo que se pinta
+	# después sale con la conversión sRGB aplicada (un id 2 se leía como 26). Comprobado al ampliar el lienzo.
+	await fill(null, Color.BLACK)
 	await restore_region(Rect2i(Vector2i.ZERO, size), copy)
 
 ## Una pincelada: un ColorRect con [material] en [rect] (píxeles de la capa). Varias en el mismo fotograma
@@ -182,6 +185,15 @@ func read_region(rect: Rect2i) -> Image:
 	_snapshot_dirty = true
 	mirror_updated.emit(rect)
 	return img
+
+## Dibuja un nodo (Polygon2D…) una vez sobre la capa y lo quita. Asíncrono: espera a que esté dibujado.
+func draw_once(node: CanvasItem) -> void:
+	_hide_dabs()
+	viewport.add_child(node)
+	viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
+	viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	await RenderingServer.frame_post_draw
+	node.queue_free()
 
 ## Pasa toda la capa por un material (que lee snapshot_texture()) y la vuelve a leer: para cambios globales
 ## como borrar un reino entero. Devuelve la imagen nueva completa.

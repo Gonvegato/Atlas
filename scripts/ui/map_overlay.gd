@@ -18,6 +18,8 @@ var map_zoom: float = 1.0
 var places: Array = []
 var realms: Array = []
 var centroids: Dictionary = {}
+## Quién contiene a quién (lo pone main): id → id del que depende (0 = nadie).
+var realm_parent: Callable = func(_id: int) -> int: return 0
 var areas: Array = []
 var area_shapes: Dictionary = {}
 var show_area_names: bool = true
@@ -28,6 +30,8 @@ var route: Array = []
 var route_label: String = ""
 var routes: Array = []
 var show_route: bool = false
+## Contorno que se está dibujando (uv).
+var outline: Array = []
 var selected_place: int = -1
 var show_place_names: bool = true
 var show_realm_names: bool = true
@@ -83,6 +87,7 @@ func _draw() -> void:
 		_draw_realm_names()
 	_draw_places(layout)
 	_draw_route_label()
+	_draw_outline()
 	if ring_visible:
 		draw_arc(ring_center, ring_radius + 1.5, 0.0, TAU, 72, Estilo.PAPEL, 2.0, true)
 		draw_arc(ring_center, ring_radius, 0.0, TAU, 72, Estilo.TINTA, 1.5, true)
@@ -163,6 +168,18 @@ func _draw_routes() -> void:
 		draw_circle(p, 6.0, paper)
 		draw_arc(p, 6.0, 0.0, TAU, 20, Estilo.ACENTO, 2.5, true)
 
+## El contorno a mano: tinta sobre papel y, a trazos, el tramo que lo cerrará al soltar.
+func _draw_outline() -> void:
+	if outline.size() < 2:
+		return
+	var pts := PackedVector2Array()
+	for u in outline:
+		pts.append(uv_to_screen(u))
+	draw_polyline(pts, Color(paper, 0.9), 5.0, true)
+	draw_polyline(pts, Estilo.ACENTO, 2.5, true)
+	_dashed(pts[pts.size() - 1], pts[0], Estilo.ACENTO, 2.0, 7.0)
+	draw_circle(pts[0], 5.0, Estilo.ACENTO)
+
 ## El tiempo de la ruta, encima de todo (se pinta al final), junto al punto medio del último tramo.
 func _draw_route_label() -> void:
 	if not show_route or route.size() < 2 or route_label == "":
@@ -176,7 +193,19 @@ func _draw_route_label() -> void:
 # ---------------------------------------------------------------- reinos
 
 func _draw_realm_names() -> void:
-	for r in realms:
+	# Primero los imperios (los de arriba), luego los reinos que contienen: así los grandes eligen sitio antes.
+	var order: Array = realms.duplicate()
+	var depth := func(r: Dictionary) -> int:
+		var d: int = 0
+		var cur: int = int(r["id"])
+		for i in 8:
+			cur = int(realm_parent.call(cur))
+			if cur <= 0:
+				break
+			d += 1
+		return d
+	order.sort_custom(func(a, b): return int(depth.call(a)) < int(depth.call(b)))
+	for r in order:
 		var id: int = int(r["id"])
 		if not centroids.has(id):
 			continue
@@ -185,6 +214,14 @@ func _draw_realm_names() -> void:
 		var uv: Vector2 = c["uv"]
 		var p: Vector2 = uv_to_screen(uv)
 		var extent: float = sqrt(area) * minf(map_screen_size.x, map_screen_size.y)
+		var has_kids: bool = false
+		for o in realms:
+			if int(realm_parent.call(int(o["id"]))) == id:
+				has_kids = true
+				break
+		var d: int = int(depth.call(r))
+		# Los que contienen reinos, más grandes; los de dentro, más pequeños.
+		extent *= 1.25 if has_kids else (0.8 if d > 0 else 1.0)
 		var kind: String = r["kind"]
 		var nm: String = r["name"]
 		var txt: String = (kind + " DE " + nm).to_upper()

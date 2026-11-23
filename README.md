@@ -2,6 +2,34 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.9.0
+
+- **Contorno que se rellena**: con «Contorno» (en el panel o en la barra rápida sobre el mapa) dibujas el borde con el lápiz
+  y al soltar se rellena lo de dentro.
+  - Vale para tierra, mar, lago, pantano, biomas, regiones y reinos.
+  - La costa pasa exactamente por donde dibujas (comprobado: ±1 px) y se suaviza a lo largo del trazo.
+  - Si el contorno se cruza consigo mismo, se rellena igual.
+  - Se deshace de una vez.
+- **Dibujar el mundo a mano**: Mundo → Nuevo mundo → «Dibujar a mano». Empieza con un mar vacío, la herramienta Tierra en
+  modo Contorno, y el lienzo **crece solo** (hasta 8.192 px) cuando dibujas tierra junto a un borde. Se puede apagar.
+- **Imperios que contienen reinos**: «Pertenece a» en cada reino (sin ciclos).
+  - La frontera exterior lleva el color del imperio y las de dentro, una línea fina a trazos.
+  - El nombre del imperio va más grande sobre todo su territorio.
+  - La lista de reinos se ve en árbol.
+  - Las relaciones de un imperio valen para sus reinos.
+- **Lagos y pantanos** como herramientas de relieve (a pincel o por contorno). El lago deja el fondo bajo el agua con orillas
+  suaves; el pantano, la tierra a ras del agua con charcas, y pinta el bioma pantano.
+- Interfaz:
+  - Barra rápida Pincel/Contorno sobre el mapa y avisos breves (lienzo ampliado, errores de guardado…).
+  - Botones de al menos 40 px de alto.
+  - El panel ya no se desborda con nombres largos.
+- **Firma fija**: si el repositorio tiene los secretos `ATLAS_KEYSTORE_BASE64`, `ATLAS_KEYSTORE_PASSWORD`,
+  `ATLAS_KEY_ALIAS` y (si es distinta) `ATLAS_KEY_PASSWORD`, el APK sale en release firmado con esa clave. Si no, con una de
+  depuración nueva, como hasta ahora. El paquete pasa a ser `com.gonzalo.atlas`, como el resto de la familia.
+- **Arreglo importante** (ya venía en la 0.8.0): tras abrir un mapa guardado, ampliar el lienzo o cambiar la precisión, lo que
+  se pintaba se guardaba con valores erróneos (un lienzo nuevo que no se había borrado nunca aplicaba la conversión sRGB).
+
+
 ## 0.8.0
 
 - **Se guarda solo**: unos segundos después de cada cambio, al salir de la app y antes de abrir otro mapa o crear uno

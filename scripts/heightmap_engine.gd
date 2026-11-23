@@ -30,7 +30,9 @@ const MAX_HISTORY_BYTES: int = 96 * 1024 * 1024
 const STATS_SIDE: int = 128
 const CONFIG_PATH: String = "user://atlas.cfg"
 
-const SHAPE_MODES = {"smooth": 0, "cliff": 1, "plateau": 2, "valley": 3, "canyon": 4}
+const SHAPE_MODES = {"smooth": 0, "cliff": 1, "plateau": 2, "valley": 3, "canyon": 4, "swamp": 5, "lake": 6}
+## Rellenos de contorno del relieve: herramienta → modo de height_fill.gdshader.
+const FILL_MODES = {"land": 0, "lake": 1, "sea": 2, "swamp": 3}
 
 var map_size: Vector2i = Vector2i(2048, 2048)
 var hdr: bool = true
@@ -297,6 +299,8 @@ func begin_stroke(tool: String, value: int, start_uv: Vector2) -> void:
 		var a: Dictionary = area_by_id(value)
 		if not a.is_empty() and int(a["biome"]) > 0:
 			_stroke_targets.append([biome, int(a["biome"])])
+	elif tool == "swamp":
+		_stroke_targets.append([biome, Catalogo.bioma_id("PANTANO")])
 	_stroke_dirty = Rect2i()
 	_stroke_has = false
 	_last_px = Vector2(-1, -1)
@@ -334,16 +338,17 @@ func paint_uv(uv: Vector2, radius_px: float, strength: float, steps: float = 10.
 	m.set_shader_parameter("p0", prev_px)
 	m.set_shader_parameter("p1", curr_px)
 	m.set_shader_parameter("brush_radius", radius_px)
+	# Las demás capas del trazo (el bioma de una región o de un pantano), con su propio valor.
+	for i in range(1, _stroke_targets.size()):
+		var t: Array = _stroke_targets[i]
+		var m2: ShaderMaterial = _mat_id.duplicate() as ShaderMaterial
+		for k in ["rect_min", "rect_size", "p0", "p1"]:
+			m2.set_shader_parameter(k, m.get_shader_parameter(k))
+		m2.set_shader_parameter("brush_radius", radius_px * 0.9)
+		m2.set_shader_parameter("value", float(int(t[1])) / 255.0)
+		(t[0] as PaintLayer).dab(m2, Rect2(min_pt, rect_sz))
 	if base == _mat_id:
 		m.set_shader_parameter("value", float(_stroke_value) / 255.0)
-		# Las demás capas del trazo (el bioma de una región), con su propio valor.
-		for i in range(1, _stroke_targets.size()):
-			var t: Array = _stroke_targets[i]
-			var m2: ShaderMaterial = base.duplicate() as ShaderMaterial
-			for k in ["rect_min", "rect_size", "p0", "p1", "brush_radius"]:
-				m2.set_shader_parameter(k, m.get_shader_parameter(k))
-			m2.set_shader_parameter("value", float(int(t[1])) / 255.0)
-			(t[0] as PaintLayer).dab(m2, Rect2(min_pt, rect_sz))
 	elif base == _mat_shape:
 		m.set_shader_parameter("mode", int(SHAPE_MODES[tool]))
 		m.set_shader_parameter("snap", _snap_tex)
@@ -407,6 +412,112 @@ func _after_layer_change(layer: PaintLayer) -> void:
 	elif layer == area:
 		_compute_area_shapes()
 	layer_changed.emit(_layer_name(layer))
+
+# ---------------------------------------------------------------- relleno de contornos
+
+## Polígonos simples a partir de un contorno a mano (cerrado solo): sin puntos repetidos y, si se cruza consigo
+## mismo, deshecho en piezas simples con Clipper (unión), para que el triangulado no falle.
+static func _clean_outline(pts_px: PackedVector2Array) -> Array:
+	var clean := PackedVector2Array()
+	for p in pts_px:
+		if clean.is_empty() or clean[clean.size() - 1].distance_to(p) >= 2.0:
+			clean.append(p)
+	if clean.size() < 3:
+		return []
+	var out: Array = []
+	if not Geometry2D.triangulate_polygon(clean).is_empty():
+		out.append(clean)
+		return out
+	for poly in Geometry2D.merge_polygons(clean, clean):
+		var pp: PackedVector2Array = poly
+		# Los agujeros (orientación contraria) también se rellenan: es un lazo, no una forma con huecos.
+		if pp.size() >= 3 and not Geometry2D.triangulate_polygon(pp).is_empty():
+			out.append(pp)
+	return out
+
+## Rellena el interior de un contorno dibujado (uv del mapa). [tool]: "land", "lake", "sea", "swamp" (relieve), "biome",
+## "realm" o "area" (con [value], el id). Un paso del historial. Devuelve el rectángulo tocado (vacío si nada).
+func fill_outline(tool: String, value: int, pts_uv: Array) -> Rect2i:
+	if not world_ready:
+		return Rect2i()
+	var pts := PackedVector2Array()
+	for u in pts_uv:
+		pts.append(Vector2(u) * Vector2(map_size))
+	var polys: Array = _clean_outline(pts)
+	if polys.is_empty():
+		return Rect2i()
+	var bounds := Rect2(pts[0], Vector2.ZERO)
+	for p in pts:
+		bounds = bounds.expand(p)
+	var margin: int = 24
+	var rect := Rect2i(Vector2i(bounds.position.floor()) - Vector2i(margin, margin), Vector2i(bounds.size.ceil()) + Vector2i(margin * 2, margin * 2))
+	rect = rect.intersection(Rect2i(Vector2i.ZERO, map_size))
+	if rect.size.x <= 0 or rect.size.y <= 0:
+		return Rect2i()
+	# Capas y valores que pinta.
+	var targets: Array = []
+	if FILL_MODES.has(tool):
+		targets.append([height, -1])
+		if tool == "swamp":
+			targets.append([biome, Catalogo.bioma_id("PANTANO")])
+	elif tool == "biome":
+		targets.append([biome, value])
+	elif tool == "realm":
+		targets.append([realm, value])
+	elif tool == "area":
+		targets.append([area, value])
+		var a: Dictionary = area_by_id(value)
+		if not a.is_empty() and int(a["biome"]) > 0:
+			targets.append([biome, int(a["biome"])])
+	var befores: Array = []
+	for t in targets:
+		befores.append((t[0] as PaintLayer).crop_mirror(rect))
+	for t in targets:
+		var layer: PaintLayer = t[0]
+		var v: int = t[1]
+		for poly in polys:
+			var pg := Polygon2D.new()
+			pg.polygon = poly
+			pg.antialiased = false
+			if v < 0:
+				var mat := ShaderMaterial.new()
+				mat.shader = preload("res://shaders/height_fill.gdshader")
+				mat.set_shader_parameter("mode", int(FILL_MODES[tool]))
+				mat.set_shader_parameter("sea_level", sea_level)
+				mat.set_shader_parameter("seed", float(world_seed % 97))
+				pg.material = mat
+				pg.texture = height.snapshot_texture()
+				var uvs := PackedVector2Array()
+				for p in (poly as PackedVector2Array):
+					uvs.append(p)
+				pg.uv = uvs
+			else:
+				pg.color = Color(float(v) / 255.0, float(v) / 255.0, float(v) / 255.0, 1.0)
+			await layer.draw_once(pg)
+		await layer.read_region(rect)
+		if v < 0:
+			# La costa, suave pero siguiendo el trazo: se suaviza a lo largo del contorno.
+			var r_px: float = clampf(float(maxi(map_size.x, map_size.y)) / 1024.0 * 7.0, 5.0, 40.0)
+			for poly in polys:
+				var pp: PackedVector2Array = poly
+				begin_stroke("smooth", 0, pp[0] / Vector2(map_size))
+				_snap_tex = height.snapshot_texture()
+				for i in pp.size() + 1:
+					paint_uv(pp[i % pp.size()] / Vector2(map_size), r_px, 0.55)
+					if i % 24 == 23:
+						await get_tree().process_frame
+				_stroke_layer = null
+				_stroke_has = false
+			await height.read_region(rect)
+	var items: Array = []
+	for i in targets.size():
+		var layer: PaintLayer = targets[i][0]
+		items.append({"t": "paint", "layer": _layer_name(layer), "rect": rect, "before": befores[i], "after": layer.crop_mirror(rect)})
+	stroke_count += 1
+	_push(items[0] if items.size() == 1 else {"t": "multi", "items": items, "stroke": true})
+	for t in targets:
+		_after_layer_change(t[0])
+	return rect
 
 # ---------------------------------------------------------------- historial
 
@@ -529,7 +640,7 @@ func add_realm() -> int:
 		return -1
 	var before: Dictionary = _meta_snapshot()
 	var col: Color = Catalogo.COLORES_REINO[(id - 1) % Catalogo.COLORES_REINO.size()]
-	realms.append({"id": id, "name": Nombres.reino(rng), "kind": "REINO", "color": col})
+	realms.append({"id": id, "name": Nombres.reino(rng), "kind": "REINO", "color": col, "parent": 0})
 	_commit_meta(before)
 	return id
 
@@ -555,6 +666,10 @@ func delete_realm(id: int) -> void:
 	var after_img: Image = await realm.apply_full(m)
 	realms.erase(r)
 	relations = relations.filter(func(x): return int(x["a"]) != id and int(x["b"]) != id)
+	# Sus reinos pasan a depender de quien dependía él.
+	for o in realms:
+		if int(o.get("parent", 0)) == id:
+			o["parent"] = int(r.get("parent", 0))
 	var full := Rect2i(Vector2i.ZERO, map_size)
 	_push({"t": "multi", "items": [
 		{"t": "paint", "layer": "realm", "rect": full, "before": before_img, "after": after_img},
@@ -562,6 +677,41 @@ func delete_realm(id: int) -> void:
 	]})
 	realms_changed.emit()
 	_compute_centroids()
+
+# ---------------------------------------------------------------- imperios y reinos
+
+func realm_parent(id: int) -> int:
+	return int(realm_by_id(id).get("parent", 0))
+
+## El de más arriba de la cadena (el imperio); él mismo si no pertenece a nadie.
+func realm_top(id: int) -> int:
+	var cur: int = id
+	for i in 64:
+		var p: int = realm_parent(cur)
+		if p <= 0 or realm_by_id(p).is_empty():
+			return cur
+		cur = p
+	return cur
+
+func realm_children(id: int) -> Array:
+	return realms.filter(func(o): return int(o.get("parent", 0)) == id)
+
+## ¿Es [anc] antepasado de [id] (o el mismo)?
+func realm_is_within(id: int, anc: int) -> bool:
+	var cur: int = id
+	for i in 64:
+		if cur == anc:
+			return true
+		cur = realm_parent(cur)
+		if cur <= 0:
+			return false
+	return false
+
+## Hace a [id] parte de [parent] (0 = independiente). No deja ciclos.
+func set_realm_parent(id: int, parent: int) -> void:
+	if parent > 0 and realm_is_within(parent, id):
+		return
+	update_realm(id, "parent", parent)
 
 # ---------------------------------------------------------------- relaciones entre reinos
 

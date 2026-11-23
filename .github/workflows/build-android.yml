@@ -35,33 +35,46 @@ jobs:
           unzip -q "Godot_v${GODOT_VERSION}_export_templates.tpz" -d /tmp/godot_templates
           mv /tmp/godot_templates/templates/* "$HOME/.local/share/godot/export_templates/${TEMPLATE_VERSION}/"
 
-      - name: Generar debug.keystore y configurar rutas Android SDK
+      - name: Preparar la firma (clave fija de los secretos o, si no hay, una de depuración)
+        env:
+          KS_B64: ${{ secrets.ATLAS_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ATLAS_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ATLAS_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ATLAS_KEY_PASSWORD }}
         run: |
-          KEYSTORE_PATH="${RUNNER_TEMP}/debug.keystore"
-          keytool -genkey -v \
-            -keystore "$KEYSTORE_PATH" \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "C=US, O=Android, CN=Android Debug"
-
-          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=${KEYSTORE_PATH}" >> "$GITHUB_ENV"
-          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
-          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
-
           mkdir -p "$HOME/.config/godot"
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ] && [ -n "$KS_ALIAS" ]; then
+            # Firma fija: la misma en cada compilación, así las versiones nuevas se instalan encima sin perder los mapas.
+            echo "$KS_B64" | base64 -d > "${RUNNER_TEMP}/origen.keystore"
+            # Godot exige que la contraseña del almacén y la de la clave sean la misma: se copia la clave a un PKCS12 nuevo
+            # (solo en esta máquina, que se borra al terminar) con una sola contraseña.
+            keytool -importkeystore -noprompt \
+              -srckeystore "${RUNNER_TEMP}/origen.keystore" -srcstorepass "$KS_PASS" \
+              -srcalias "$KS_ALIAS" -srckeypass "${KEY_PASS:-$KS_PASS}" \
+              -destkeystore "${RUNNER_TEMP}/release.p12" -deststoretype PKCS12 \
+              -deststorepass "$KS_PASS" -destkeypass "$KS_PASS" -destalias "$KS_ALIAS"
+            rm -f "${RUNNER_TEMP}/origen.keystore"
+            echo "ATLAS_MODO=release" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=${RUNNER_TEMP}/release.p12" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=${KS_ALIAS}" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=${KS_PASS}" >> "$GITHUB_ENV"
+            echo "Firma: clave fija de los secretos (release)."
+          else
+            KEYSTORE_PATH="${RUNNER_TEMP}/debug.keystore"
+            keytool -genkey -v -keystore "$KEYSTORE_PATH" -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"
+            echo "ATLAS_MODO=debug" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=${KEYSTORE_PATH}" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
+            echo "::warning::Sin los secretos ATLAS_KEYSTORE_*: APK firmado con una clave de depuración nueva (hay que desinstalar la anterior)."
+          fi
           cat <<EOF > "$HOME/.config/godot/editor_settings-4.tres"
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
           export/android/java_sdk_path = "${JAVA_HOME}"
           export/android/android_sdk_path = "${ANDROID_HOME}"
-          export/android/debug_keystore = "${KEYSTORE_PATH}"
-          export/android/debug_keystore_user = "androiddebugkey"
-          export/android/debug_keystore_pass = "android"
           EOF
           cp "$HOME/.config/godot/editor_settings-4.tres" "$HOME/.config/godot/editor_settings-4.7.tres"
 
@@ -78,7 +91,14 @@ jobs:
       - name: Exportar ATLAS-android.apk
         run: |
           mkdir -p build
-          godot --headless --verbose --path . --export-debug "Android" "build/ATLAS-android.apk"
+          if [ "$ATLAS_MODO" = "release" ]; then
+            godot --headless --verbose --path . --export-release "Android" "build/ATLAS-android.apk"
+          else
+            godot --headless --verbose --path . --export-debug "Android" "build/ATLAS-android.apk"
+          fi
+          # La huella del certificado (para comprobar que es la de la familia).
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)"
+          "${BT}apksigner" verify --print-certs build/ATLAS-android.apk | grep -i "SHA-256" || true
           ls -lh build/ATLAS-android.apk
 
       - name: Subir APK descargable

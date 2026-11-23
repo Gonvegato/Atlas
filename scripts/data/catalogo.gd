@@ -192,6 +192,13 @@ static func relacion_idx(kind: String) -> int:
 			return i
 	return 0
 
+## Id (índice + 1) de un bioma por su nombre; 0 si no existe.
+static func bioma_id(nombre: String) -> int:
+	for i in BIOMAS.size():
+		if BIOMAS[i][0] == nombre:
+			return i + 1
+	return 0
+
 static func tipo_region(id: String) -> Array:
 	for t in TIPOS_REGION:
 		if t[0] == id:

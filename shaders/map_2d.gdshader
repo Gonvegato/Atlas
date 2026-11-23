@@ -449,6 +449,7 @@ void fragment() {
 
 		if (show_realms) {
 			int rid = id_at(realm_tex, UV);
+			int rtop = rid > 0 ? int(round(texelFetch(realm_pal, ivec2(rid, 1), 0).r * 255.0)) : 0;
 			vec2 px1 = vec2(max(texel_px * 1.1, 0.75)) / tex_size;
 			bool edge = false;
 			int nb = 0;
@@ -462,7 +463,9 @@ void fragment() {
 			}
 			if (rid > 0) {
 				vec3 rc = texelFetch(realm_pal, ivec2(rid, 0), 0).rgb;
+				vec3 top_col = texelFetch(realm_pal, ivec2(rtop, 0), 0).rgb;
 				float band = 0.0;
+				float inner_band = 0.0;
 				int other = 0;
 				float br_px = max(texel_px * 7.0, 3.0);
 				for (int k = 0; k < 8; k++) {
@@ -470,14 +473,27 @@ void fragment() {
 					vec2 o = vec2(cos(ang), sin(ang)) * br_px / tex_size;
 					int n8 = id_at(realm_tex, UV + o);
 					if (n8 != rid) {
-						band = 1.0;
-						other = max(other, n8);
+						int ntop = n8 > 0 ? int(round(texelFetch(realm_pal, ivec2(n8, 1), 0).r * 255.0)) : 0;
+						if (ntop == rtop && n8 > 0) {
+							inner_band = 1.0;
+						} else {
+							band = 1.0;
+							other = max(other, n8);
+						}
 					}
 				}
-				color = mix(color, rc, 0.13 + band * 0.42);
+				// Dentro de un imperio: el fondo de cada reino en su color, la banda exterior en el del imperio y la
+				// interior (entre reinos del mismo imperio) más tenue.
+				color = mix(color, rc, 0.16 + inner_band * 0.30);
+				color = mix(color, top_col, band * 0.45);
 				// La relación con el reino vecino, en la banda de la frontera (por los dos lados).
 				if (band > 0.0 && other > 0) {
 					int rel = int(round(texelFetch(relation_tex, ivec2(rid, other), 0).r * 255.0));
+					if (rel == 0) {
+						// Entre imperios: vale la relación de los de arriba.
+						int otop = int(round(texelFetch(realm_pal, ivec2(other, 1), 0).r * 255.0));
+						rel = int(round(texelFetch(relation_tex, ivec2(rtop, otop), 0).r * 255.0));
+					}
 					if (rel > 0) {
 						float diag = fract((FRAGCOORD.x + FRAGCOORD.y) / 9.0);
 						float dash = step(0.45, fract((FRAGCOORD.x - FRAGCOORD.y) / 22.0));
@@ -497,7 +513,14 @@ void fragment() {
 				}
 			}
 			if (edge && (rid > 0 || nb > 0)) {
-				color = mix(color, col_ink, 0.82);
+				int ntop2 = nb > 0 ? int(round(texelFetch(realm_pal, ivec2(nb, 1), 0).r * 255.0)) : 0;
+				if (rid > 0 && nb > 0 && ntop2 == rtop) {
+					// Frontera interior de un imperio: fina y a trazos.
+					float dsh = step(0.4, fract((FRAGCOORD.x + FRAGCOORD.y) / 12.0));
+					color = mix(color, col_ink, 0.75 * dsh);
+				} else {
+					color = mix(color, col_ink, 0.85);
+				}
 			}
 		}
 	}

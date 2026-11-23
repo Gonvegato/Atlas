@@ -87,6 +87,16 @@ void fragment() {
 		float prof = mix(bed, bank, smoothstep(0.06, 0.14, d));
 		target = min(h, prof);
 		a = strength;
+	} else if (mode == 5) {
+		// Pantano: al nivel del agua, con charcas (algunas manchas un poco por debajo del mar).
+		float n = fract(sin(dot(floor(px / 9.0), vec2(12.9898, 78.233))) * 43758.5453);
+		float puddle = step(0.7, n);
+		target = mix(sea_level + 0.004, sea_level - 0.006, puddle);
+		a = strength * smoothstep(1.0, 0.5, d);
+	} else if (mode == 6) {
+		// Lago: el fondo plano un poco bajo el agua, orillas suaves.
+		target = min(h, mix(sea_level - 0.025, h, smoothstep(0.55, 1.0, d)));
+		a = strength;
 	} else {
 		// Cañón: cauce estrecho con agua, fondo seco algo más ancho y paredes escalonadas (cuatro escarpes con su
 		// cornisa, como los cañones del desierto) hasta el borde, que conserva el terreno.
