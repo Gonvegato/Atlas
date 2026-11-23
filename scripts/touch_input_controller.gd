@@ -1,4 +1,3 @@
-class_name TouchInputController
 extends Node
 
 signal stroke_started(screen_pos: Vector2, pressure: float)
@@ -46,7 +45,6 @@ func _handle_touch(e: InputEventScreenTouch) -> void:
 			pending_start_ms = Time.get_ticks_msec()
 			pending_pos = e.position
 		else:
-			# 2+ dedos: cancela cualquier trazo accidental (antipalma) y pasa a Zoom/Pan
 			pending_stroke = false
 			if stroke_active:
 				stroke_active = false

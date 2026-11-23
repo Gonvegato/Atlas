@@ -65,9 +65,15 @@ jobs:
           EOF
           cp "$HOME/.config/godot/editor_settings-4.tres" "$HOME/.config/godot/editor_settings-4.7.tres"
 
-      - name: Pre-importar recursos del proyecto (headless)
+      - name: Pre-importar y verificar scripts (headless)
         run: |
           godot --headless --path . --import --quit || true
+          godot --headless --path . --quit-after 3 > smoke.log 2>&1 || true
+          cat smoke.log
+          if grep -E "Parse Error|SCRIPT ERROR" smoke.log; then
+            echo "ERROR: Se detectaron errores en los scripts GDScript."
+            exit 1
+          fi
 
       - name: Exportar ATLAS-android.apk
         run: |

@@ -6,7 +6,7 @@ uniform vec2 p1 = vec2(512.0, 512.0);
 uniform float brush_radius = 40.0;
 uniform float strength = 0.025;
 uniform float hardness = 0.35;
-uniform int brush_mode = 0; // 0 = Tierra suave, 1 = Cordillera fractal
+uniform int brush_mode = 0;
 uniform float noise_scale = 26.0;
 uniform vec2 map_size = vec2(1024.0, 1024.0);
 

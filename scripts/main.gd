@@ -1,11 +1,12 @@
 extends Control
 
-@onready var engine: HeightmapEngine = $HeightmapEngine
-@onready var input_ctrl: TouchInputController = $TouchInputController
+@onready var engine: Node = $HeightmapEngine
+@onready var input_ctrl: Node = $TouchInputController
 @onready var workspace: Control = $Workspace
 @onready var view_2d_root: Control = $Workspace/View2D
 @onready var map_canvas: ColorRect = $Workspace/View2D/MapCanvas
 @onready var view_3d_container: SubViewportContainer = $Workspace/View3DContainer
+@onready var subviewport_3d: SubViewport = $Workspace/View3DContainer/SubViewport3D
 @onready var terrain_mesh: MeshInstance3D = $Workspace/View3DContainer/SubViewport3D/TerrainMesh
 @onready var cam_pivot: Node3D = $Workspace/View3DContainer/SubViewport3D/CameraPivot
 @onready var cam_3d: Camera3D = $Workspace/View3DContainer/SubViewport3D/CameraPivot/Camera3D
@@ -63,12 +64,15 @@ func _ready() -> void:
 	_setup_materials()
 	_connect_signals()
 	view_3d_container.visible = false
+	subviewport_3d.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	_update_3d_camera()
 	await get_tree().process_frame
 	_center_map()
 
 func _center_map() -> void:
 	var ws_size := view_2d_root.size
+	if ws_size.x <= 0.0 or ws_size.y <= 0.0:
+		return
 	var target_dim := minf(ws_size.x, ws_size.y) * 0.92
 	map_canvas.size = Vector2(target_dim, target_dim)
 	map_zoom = 1.0
@@ -82,8 +86,8 @@ func _setup_materials() -> void:
 
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(12.0, 12.0)
-	plane.subdivide_width = 220
-	plane.subdivide_depth = 220
+	plane.subdivide_width = 140
+	plane.subdivide_depth = 140
 	terrain_mesh.mesh = plane
 
 	mat_3d = ShaderMaterial.new()
@@ -145,6 +149,9 @@ func _toggle_3d() -> void:
 	input_ctrl.is_3d_mode = not input_ctrl.is_3d_mode
 	view_3d_container.visible = input_ctrl.is_3d_mode
 	view_2d_root.visible = not input_ctrl.is_3d_mode
+	subviewport_3d.render_target_update_mode = (
+		SubViewport.UPDATE_ALWAYS if input_ctrl.is_3d_mode else SubViewport.UPDATE_DISABLED
+	)
 	btn_mode_3d.text = "VOLVER A 2D" if input_ctrl.is_3d_mode else "VER RELIEVE 3D"
 
 func _cycle_theme(btn: Button) -> void:
@@ -188,7 +195,6 @@ func _select_tool(tool_id: String) -> void:
 		b.add_theme_stylebox_override("pressed", _make_style(Color("4A647E")))
 
 func _build_editorial_ui() -> void:
-	# Fondo carbón del espacio de trabajo
 	var bg := ColorRect.new()
 	bg.color = Color("1A1B1E")
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -196,7 +202,6 @@ func _build_editorial_ui() -> void:
 	add_child(bg)
 	move_child(bg, 0)
 
-	# Cabecera crema estilo editorial
 	var top_bar := ColorRect.new()
 	top_bar.color = Color("F6F1DF")
 	top_bar.custom_minimum_size = Vector2(0, 68)
@@ -234,7 +239,6 @@ func _build_editorial_ui() -> void:
 	btn_mode_3d.pressed.connect(_toggle_3d)
 	top_bar.add_child(btn_mode_3d)
 
-	# Barra negra de modos/herramientas
 	var sub_bar := ColorRect.new()
 	sub_bar.color = Color("141414")
 	sub_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)

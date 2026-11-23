@@ -6,7 +6,7 @@ uniform vec2 p1 = vec2(512.0, 512.0);
 uniform float brush_radius = 40.0;
 uniform float strength = 0.025;
 uniform float hardness = 0.35;
-uniform int brush_mode = 0; // 0 = Hundir/Mar, 1 = Cauce de río nítido
+uniform int brush_mode = 0;
 
 void fragment() {
 	vec2 pa = FRAGCOORD.xy - p0;

@@ -13,23 +13,15 @@ uniform vec3 col_land_mid : source_color = vec3(0.64, 0.62, 0.52);
 uniform vec3 col_cliff : source_color = vec3(0.38, 0.36, 0.34);
 uniform vec3 col_snow : source_color = vec3(0.96, 0.96, 0.95);
 
-varying float v_raw_height;
-
 void vertex() {
 	float h = texture(height_tex, UV).r;
-	v_raw_height = h;
 	float elev = max(h - sea_level, 0.0);
 	VERTEX.y = elev * height_scale;
 }
 
 void fragment() {
-	vec2 texel = 1.0 / vec2(textureSize(height_tex, 0));
+	vec2 t = 2.0 / vec2(textureSize(height_tex, 0));
 	float h = texture(height_tex, UV).r;
-	float hL = texture(height_tex, UV - vec2(texel.x, 0.0)).r;
-	float hR = texture(height_tex, UV + vec2(texel.x, 0.0)).r;
-	float hD = texture(height_tex, UV - vec2(0.0, texel.y)).r;
-	float hU = texture(height_tex, UV + vec2(0.0, texel.y)).r;
-
 	float coast_dist = h - sea_level;
 
 	if (coast_dist <= 0.001) {
@@ -41,11 +33,23 @@ void fragment() {
 		METALLIC = 0.05;
 		NORMAL = normalize((VIEW_MATRIX * MODEL_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
 	} else {
-		float step_world = terrain_size * texel.x * 2.0;
+		float tl = texture(height_tex, UV + vec2(-t.x, -t.y)).r;
+		float tc = texture(height_tex, UV + vec2( 0.0, -t.y)).r;
+		float tr = texture(height_tex, UV + vec2( t.x, -t.y)).r;
+		float ml = texture(height_tex, UV + vec2(-t.x,  0.0)).r;
+		float mr = texture(height_tex, UV + vec2( t.x,  0.0)).r;
+		float bl = texture(height_tex, UV + vec2(-t.x,  t.y)).r;
+		float bc = texture(height_tex, UV + vec2( 0.0,  t.y)).r;
+		float br = texture(height_tex, UV + vec2( t.x,  t.y)).r;
+
+		float dx = ((tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl)) * 0.25;
+		float dz = ((bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr)) * 0.25;
+		float step_world = terrain_size * t.x * 2.0;
+
 		vec3 n_obj = normalize(vec3(
-			(hL - hR) * height_scale,
+			-dx * height_scale,
 			step_world,
-			(hD - hU) * height_scale
+			-dz * height_scale
 		));
 		NORMAL = normalize((VIEW_MATRIX * MODEL_MATRIX * vec4(n_obj, 0.0)).xyz);
 

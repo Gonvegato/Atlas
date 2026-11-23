@@ -1,10 +1,9 @@
-class_name HeightmapEngine
 extends Node
 
 signal heightmap_ready(tex: Texture2D)
 
 @export var resolution: int = 1024
-@export var max_undo_steps: int = 12
+@export var max_undo_steps: int = 10
 
 var viewport: SubViewport
 var init_rect: ColorRect
@@ -17,6 +16,7 @@ var mat_sub: ShaderMaterial
 
 var undo_stack: Array[Image] = []
 var last_px: Vector2 = Vector2(-1, -1)
+var has_initial_snapshot: bool = false
 
 func _ready() -> void:
 	_setup_viewport()
@@ -24,13 +24,11 @@ func _ready() -> void:
 	await get_tree().process_frame
 	init_rect.visible = false
 	viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
-	push_undo_snapshot()
 	heightmap_ready.emit(viewport.get_texture())
 
 func _setup_viewport() -> void:
 	viewport = SubViewport.new()
 	viewport.size = Vector2i(resolution, resolution)
-	viewport.use_hdr_2d = true # 16-bit float precision en Mobile/Vulkan
 	viewport.disable_3d = true
 	viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
 	viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
@@ -74,9 +72,13 @@ func regenerate_world(new_seed: float) -> void:
 	await get_tree().process_frame
 	init_rect.visible = false
 	viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
-	push_undo_snapshot()
+	undo_stack.clear()
+	has_initial_snapshot = false
 
 func begin_stroke() -> void:
+	if not has_initial_snapshot:
+		push_undo_snapshot()
+		has_initial_snapshot = true
 	last_px = Vector2(-1, -1)
 
 func end_stroke() -> void:
@@ -99,7 +101,6 @@ func paint_uv(uv: Vector2, tool: String, radius_px: float, strength: float) -> v
 	mat.set_shader_parameter("strength", strength)
 	mat.set_shader_parameter("brush_mode", 1 if (tool == "mountain" or tool == "river") else 0)
 
-	# Bounding box de la cápsula del trazo para evitar huecos al mover rápido el lápiz
 	var min_pt := Vector2(minf(prev_px.x, curr_px.x), minf(prev_px.y, curr_px.y)) - Vector2(radius_px + 2.0, radius_px + 2.0)
 	var max_pt := Vector2(maxf(prev_px.x, curr_px.x), maxf(prev_px.y, curr_px.y)) + Vector2(radius_px + 2.0, radius_px + 2.0)
 
@@ -111,7 +112,10 @@ func paint_uv(uv: Vector2, tool: String, radius_px: float, strength: float) -> v
 	last_px = curr_px
 
 func push_undo_snapshot() -> void:
-	var img := viewport.get_texture().get_image()
+	var tex := viewport.get_texture()
+	if tex == null:
+		return
+	var img := tex.get_image()
 	if img == null:
 		return
 	undo_stack.append(img)
