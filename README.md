@@ -2,6 +2,12 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.12.1
+
+- **La firma de la familia la pone Familia-Revista.** ATLAS compila siempre la versión final (no la de depuración) y la
+  publica en `releases/latest/download/ATLAS.apk` (con `ATLAS.json`); Familia-Revista, que guarda la clave, la vuelve a
+  firmar y la sube a Drive. Ver `docs/FIRMA-Y-FAMILIA.md`.
+
 ## 0.12.0
 
 - **Caminos dibujados, con cuatro texturas.** En Lugares → CAMINOS, el lápiz dibuja un camino de un tirón: SENDERO
