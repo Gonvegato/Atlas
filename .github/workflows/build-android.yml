@@ -147,7 +147,9 @@ jobs:
           VER=$(grep -m1 '^config/version=' project.godot | cut -d'"' -f2)
           CODE=$(grep -m1 '^version/code=' export_presets.cfg | cut -d= -f2)
           cp build/ATLAS-android.apk build/ATLAS.apk
-          printf '{"version": "%s", "code": %s, "sha": "%s"}\n' "$VER" "$CODE" "$GITHUB_SHA" > build/ATLAS.json
+          APK_SHA=$(sha256sum build/ATLAS.apk | cut -d' ' -f1)
+          # sha: el commit de git; apk_sha256: la huella del APK publicado (para comprobar la descarga).
+          printf '{"version": "%s", "code": %s, "sha": "%s", "apk_sha256": "%s"}\n' "$VER" "$CODE" "$GITHUB_SHA" "$APK_SHA" > build/ATLAS.json
           if gh release view "v$VER" >/dev/null 2>&1; then
             gh release upload "v$VER" build/ATLAS.apk build/ATLAS.json --clobber
           else
