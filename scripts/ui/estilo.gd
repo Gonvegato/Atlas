@@ -2,8 +2,10 @@ class_name Estilo
 extends RefCounted
 
 ## Los tokens de la familia (dirección «C», noviembre de 2026), copiados de Familia-Revista
-## (escritorio/familia/.../revista/Tema.kt y CaraC.kt): papel #F8F0D4, tinta negra y un acento por app.
-## Letras: Bricolage Grotesque ExtraBold para los nombres y las cifras; Inter para todo lo demás.
+## (escritorio/familia/.../revista/Tema.kt y CaraC.kt; capturas de Seshat y Thot): papel #F8F0D4, tinta negra,
+## cabecera negra con el nombre en papel y el punto del acento, pestañas sobre papel con la elegida en bloque.
+## Letras: Bricolage Grotesque ExtraBold (tamaño óptico 48, ancho 100) para nombres, titulares y cifras; Inter para
+## etiquetas y texto; Fraunces (la serif de la familia) para los nombres de las cosas en listas.
 
 # --- Colores ---
 const PAPEL := Color("F8F0D4")
@@ -11,8 +13,11 @@ const CRUDO := Color("FBF6E5")
 const TINTA := Color("000000")
 const TINTA_CABECERA := Color("0C0A09")
 const GRIS := Color("57544A")
+## Texto secundario sobre la cabecera negra (BUSCAR, la fecha…).
+const SOBRE_CABECERA := Color("B9B2A2")
 const GRIS_CLARO := Color("888475")
-const MESA := Color("1A1B1E")
+## La mesa bajo el mapa: papel más hondo (la familia es papel de arriba abajo; antes era casi negra).
+const MESA := Color("E4DABB")
 ## El acento de ATLAS (azul pizarra). OJO: Thot/Nova usa #5A7896, casi el mismo.
 const ACENTO := Color("5C7894")
 const SOBRE_ACENTO := Color("FFFFFF")
@@ -24,9 +29,34 @@ const F_GROTESCA: FontFile = preload("res://fonts/BricolageGrotesque.ttf")
 const F_NEGRITA: FontFile = preload("res://fonts/Inter-Bold.ttf")
 const F_SEMI: FontFile = preload("res://fonts/Inter-SemiBold.ttf")
 const F_TEXTO: FontFile = preload("res://fonts/Inter-Regular.ttf")
+const F_SERIF: FontFile = preload("res://fonts/Fraunces-Regular.ttf")
+const F_SERIF_SEMI: FontFile = preload("res://fonts/Fraunces-SemiBold.ttf")
+const F_SERIF_CURSIVA: FontFile = preload("res://fonts/Fraunces-Italic.ttf")
 
 static var _versalitas: FontVariation = null
 static var _grotesca_prieta: FontVariation = null
+static var _grotesca: FontVariation = null
+
+## Bricolage con el tamaño óptico de la familia: sin él se dibuja con el de cartel (96) y los remates de las
+## mayúsculas salen a alturas distintas (criterio de Seshat 0.17.0).
+static func _opsz(fv: FontVariation) -> void:
+	var ts: TextServer = TextServerManager.get_primary_interface()
+	fv.variation_opentype = {ts.name_to_tag("opsz"): 48.0, ts.name_to_tag("wdth"): 100.0, ts.name_to_tag("wght"): 800.0}
+
+## La grotesca para titulares y cifras (sin espaciado negativo: los dígitos no se tocan).
+static func grotesca() -> FontVariation:
+	if _grotesca == null:
+		_grotesca = FontVariation.new()
+		_grotesca.base_font = F_GROTESCA
+		_opsz(_grotesca)
+	return _grotesca
+
+## Acento legible sobre la cabecera negra (aclarado si hace falta, como acentoLegible() de la familia).
+static func acento_sobre_negro() -> Color:
+	var c: Color = ACENTO
+	while c.get_luminance() < 0.32:
+		c = c.lightened(0.08)
+	return c
 
 ## Inter en negrita con el espaciado de las etiquetas de la familia («BUSCAR», «+ NUEVA»).
 static func versalitas() -> FontVariation:
@@ -41,7 +71,9 @@ static func grotesca_prieta() -> FontVariation:
 	if _grotesca_prieta == null:
 		_grotesca_prieta = FontVariation.new()
 		_grotesca_prieta.base_font = F_GROTESCA
-		_grotesca_prieta.spacing_glyph = -2
+		# −0,015 em como mucho en los nombres con punto (a 64 px, −1).
+		_grotesca_prieta.spacing_glyph = -1
+		_opsz(_grotesca_prieta)
 	return _grotesca_prieta
 
 static func etiqueta(texto: String, tam: int, color: Color, fuente: Font = null) -> Label:

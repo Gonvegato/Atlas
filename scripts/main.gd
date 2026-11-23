@@ -4,8 +4,8 @@ extends Control
 ## banda de tinta con las secciones (la elegida en un bloque del acento, con su cuenta) y, a la derecha, el panel
 ## de la sección. Secciones: Relieve · Biomas · Político · Lugares · Mundo.
 
-const HEADER_H: int = 84
-const TABS_H: int = 52
+const HEADER_H: int = 116
+const TABS_H: int = 48
 const PANEL_W: int = 340
 const MAP_MAT: float = 14.0
 const PLACE_HIT_PX: float = 20.0
@@ -184,6 +184,7 @@ var autosave_timer: Timer
 var panel_node: Panel
 var header_name_lbl: Label
 var header_dot_lbl: Label
+var header_date_lbl: Label
 var b_fit_btn: Button
 var portrait: bool = false
 ## "pincel" o "contorno" (se dibuja el borde y se rellena lo de dentro).
@@ -443,14 +444,17 @@ func _apply_layout() -> void:
 		workspace.offset_bottom = 0
 	panel_node.add_theme_stylebox_override("panel", sb)
 	# Cabecera más compacta en vertical.
-	var fs: int = 40 if portrait else 54
+	var fs: int = 52 if portrait else 64
 	header_name_lbl.add_theme_font_size_override("font_size", fs)
 	header_dot_lbl.add_theme_font_size_override("font_size", fs)
 	lbl_world.visible = not portrait
+	header_date_lbl.text = (Estilo.fecha_corta()) if portrait else ("  ·  " + Estilo.fecha_corta())
 	b_fit_btn.visible = not portrait
 	lbl_hint.visible = not portrait
 	for k in tab_buttons.keys():
-		(tab_buttons[k] as Button).add_theme_font_size_override("font_size", 11 if portrait else 13)
+		var tb: Button = tab_buttons[k]
+		(tb.get_meta("name_l") as Label).add_theme_font_size_override("font_size", 11 if portrait else 12)
+		_fit_tab(tb)
 	_select_section(section)
 	_center_map.call_deferred()
 	_fit_3d_viewport.call_deferred()
@@ -1179,11 +1183,7 @@ func _confirm(key: String, b: Button, text_ready: String, action: Callable) -> v
 func _select_section(id: String) -> void:
 	section = id
 	for k in tab_buttons.keys():
-		var b: Button = tab_buttons[k]
-		if str(k) == id:
-			Estilo.pintar_boton(b, Estilo.SOBRE_ACENTO, Estilo.ACENTO, Estilo.ACENTO.darkened(0.15), 16, 0)
-		else:
-			Estilo.pintar_boton(b, Estilo.PAPEL, Estilo.TINTA, Color("1C1B19"), 16, 0)
+		_paint_tab(tab_buttons[k], str(k) == id)
 	for k in sections_ui.keys():
 		var c: Control = sections_ui[k]
 		c.visible = (str(k) == id)
@@ -1219,8 +1219,31 @@ func _select_tool(tool_id: String) -> void:
 func _select_biome(id: int) -> void:
 	current_biome = id
 	for i in biome_buttons.size():
-		_paint_filter(biome_buttons[i], i == id)
+		_paint_row(biome_buttons[i], i == id)
 	lbl_biome_name.text = "AUTOMÁTICO" if id == 0 else str(Catalogo.BIOMAS[id - 1][0])
+
+## Fila de lista de la familia (nombres en serif, como los de los ajustes y las fichas): raya fina debajo y, la
+## elegida, una barra del acento a la izquierda y la letra en seminegra.
+func _paint_row(b: Button, on: bool) -> void:
+	var normal := Estilo.caja(Color(Estilo.ACENTO, 0.10) if on else Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 12, 8)
+	normal.border_color = Estilo.ACENTO if on else Color(Estilo.TINTA, 0.18)
+	normal.border_width_left = 4 if on else 0
+	normal.border_width_bottom = 0 if on else 1
+	normal.content_margin_left = 10 if on else 14
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color(Estilo.TINTA, 0.08)
+	for k in ["normal", "hover", "disabled"]:
+		b.add_theme_stylebox_override(k, normal)
+	b.add_theme_stylebox_override("pressed", pressed)
+	b.add_theme_stylebox_override("hover_pressed", pressed)
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	b.add_theme_font_override("font", Estilo.F_SERIF_SEMI if on else Estilo.F_SERIF)
+	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+		b.add_theme_color_override(k, Estilo.TINTA if on else Color(Estilo.TINTA, 0.82))
+
+## «BOSQUE VIEJO» → «Bosque viejo» (los nombres van en serif con mayúscula inicial).
+static func _frase(t: String) -> String:
+	return t.substr(0, 1).to_upper() + t.substr(1).to_lower()
 
 func _paint_filter(b: Button, on: bool) -> void:
 	if on:
@@ -1462,11 +1485,10 @@ func _refresh_place_editor() -> void:
 
 func _set_tab_count(id: String, n: int) -> void:
 	var b: Button = tab_buttons[id]
-	var base: String = ""
-	for s in SECTIONS:
-		if s[0] == id:
-			base = s[1]
-	b.text = base if n == 0 else "%s %d" % [base, n]
+	var count_l: Label = b.get_meta("count_l")
+	count_l.text = str(n)
+	count_l.visible = n > 0
+	_fit_tab(b)
 
 func _swatch(c: Color) -> ImageTexture:
 	var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
@@ -1550,111 +1572,160 @@ func _build_ui() -> void:
 	labels3d.camera = cam_3d
 	workspace.add_child(labels3d)
 
+## La cabecera de la familia (dirección C): banda negra con la fila pequeña arriba (+ NUEVO MUNDO en el acento,
+## deshacer, rehacer, encuadrar · el mapa y la fecha) y el nombre grande en papel con su punto del acento; a la
+## derecha, la acción principal (el relieve 3D) en bloque del acento.
 func _build_header() -> void:
 	var header := Panel.new()
-	header.add_theme_stylebox_override("panel", Estilo.caja(Estilo.PAPEL))
+	header.add_theme_stylebox_override("panel", Estilo.caja(Estilo.TINTA_CABECERA))
 	header.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	header.offset_bottom = HEADER_H
 	add_child(header)
 
-	var row := HBoxContainer.new()
-	row.set_anchors_preset(Control.PRESET_FULL_RECT)
-	row.offset_left = 28
-	row.offset_right = -20
-	row.add_theme_constant_override("separation", 0)
-	header.add_child(row)
+	var transparent := Color(0, 0, 0, 0)
+	var pressed_bg := Color(1, 1, 1, 0.08)
+	var small := HBoxContainer.new()
+	small.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	small.offset_left = 18
+	small.offset_right = -24
+	small.offset_top = 6
+	small.offset_bottom = 44
+	small.add_theme_constant_override("separation", 2)
+	header.add_child(small)
 
+	var b_new := Estilo.boton("+ NUEVO MUNDO", 12, Estilo.acento_sobre_negro(), transparent, pressed_bg, 10, 10)
+	b_new.pressed.connect(func(): _select_section("mundo"))
+	small.add_child(b_new)
+	btn_undo = Estilo.boton("DESHACER", 12, Estilo.SOBRE_CABECERA, transparent, pressed_bg, 10, 10)
+	btn_undo.disabled = true
+	btn_undo.pressed.connect(func(): engine.undo())
+	small.add_child(btn_undo)
+	btn_redo = Estilo.boton("REHACER", 12, Estilo.SOBRE_CABECERA, transparent, pressed_bg, 10, 10)
+	btn_redo.disabled = true
+	btn_redo.pressed.connect(func(): engine.redo())
+	small.add_child(btn_redo)
+	var b_fit := Estilo.boton("ENCUADRAR", 12, Estilo.SOBRE_CABECERA, transparent, pressed_bg, 10, 10)
+	b_fit_btn = b_fit
+	b_fit.pressed.connect(_center_map)
+	small.add_child(b_fit)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	small.add_child(spacer)
+	lbl_world = Estilo.etiqueta("MUNDO Nº %04d" % engine.world_seed, 12, Estilo.SOBRE_CABECERA)
+	lbl_world.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	small.add_child(lbl_world)
+	var date_lbl := Estilo.etiqueta("  ·  " + Estilo.fecha_corta(), 12, Estilo.SOBRE_CABECERA)
+	date_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	small.add_child(date_lbl)
+	header_date_lbl = date_lbl
+
+	var big := HBoxContainer.new()
+	big.set_anchors_preset(Control.PRESET_FULL_RECT)
+	big.offset_left = 28
+	big.offset_right = -24
+	big.offset_top = 40
+	big.offset_bottom = -6
+	big.add_theme_constant_override("separation", 0)
+	header.add_child(big)
 	var name_box := HBoxContainer.new()
 	name_box.add_theme_constant_override("separation", 0)
 	name_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	header_name_lbl = Estilo.etiqueta("ATLAS", 54, Estilo.TINTA, Estilo.grotesca_prieta())
-	header_dot_lbl = Estilo.etiqueta(".", 54, Estilo.ACENTO, Estilo.F_GROTESCA)
+	header_name_lbl = Estilo.etiqueta("ATLAS", 64, Estilo.PAPEL, Estilo.grotesca_prieta())
+	header_dot_lbl = Estilo.etiqueta(".", 64, Estilo.ACENTO, Estilo.grotesca())
 	name_box.add_child(header_name_lbl)
 	name_box.add_child(header_dot_lbl)
-	row.add_child(name_box)
-
-	var gap := Control.new()
-	gap.custom_minimum_size = Vector2(34, 0)
-	row.add_child(gap)
-
-	var links := HBoxContainer.new()
-	links.add_theme_constant_override("separation", 6)
-	links.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.add_child(links)
-
-	var transparent := Color(0, 0, 0, 0)
-	var pressed_bg := Color(Estilo.TINTA, 0.07)
-	var b_new := Estilo.boton("+ NUEVO MUNDO", 13, Estilo.ACENTO, transparent, pressed_bg, 10, 12)
-	b_new.pressed.connect(func(): _select_section("mundo"))
-	links.add_child(b_new)
-
-	btn_undo = Estilo.boton("DESHACER", 13, Estilo.TINTA, transparent, pressed_bg, 10, 12)
-	btn_undo.disabled = true
-	btn_undo.pressed.connect(func(): engine.undo())
-	links.add_child(btn_undo)
-
-	btn_redo = Estilo.boton("REHACER", 13, Estilo.TINTA, transparent, pressed_bg, 10, 12)
-	btn_redo.disabled = true
-	btn_redo.pressed.connect(func(): engine.redo())
-	links.add_child(btn_redo)
-
-	var b_fit := Estilo.boton("ENCUADRAR", 13, Estilo.TINTA, transparent, pressed_bg, 10, 12)
-	b_fit_btn = b_fit
-	b_fit.pressed.connect(_center_map)
-	links.add_child(b_fit)
-
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(spacer)
-
-	lbl_world = Estilo.etiqueta("MUNDO Nº %04d · %s" % [engine.world_seed, Estilo.fecha_corta()], 12, Estilo.GRIS)
-	lbl_world.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.add_child(lbl_world)
-
-	var gap2 := Control.new()
-	gap2.custom_minimum_size = Vector2(20, 0)
-	row.add_child(gap2)
-
-	btn_mode_3d = Estilo.boton("VER RELIEVE 3D  →", 15, Estilo.SOBRE_ACENTO, Estilo.ACENTO, Estilo.ACENTO.darkened(0.15), 22, 15)
+	big.add_child(name_box)
+	var spacer2 := Control.new()
+	spacer2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	big.add_child(spacer2)
+	btn_mode_3d = Estilo.boton("VER RELIEVE 3D  →", 14, Estilo.SOBRE_ACENTO, Estilo.ACENTO, Estilo.ACENTO.darkened(0.15), 22, 14)
 	var bold_grotesk := FontVariation.new()
 	bold_grotesk.base_font = Estilo.F_GROTESCA
 	bold_grotesk.spacing_glyph = 1
+	Estilo._opsz(bold_grotesk)
 	btn_mode_3d.add_theme_font_override("font", bold_grotesk)
 	btn_mode_3d.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	btn_mode_3d.pressed.connect(_toggle_3d)
-	row.add_child(btn_mode_3d)
+	big.add_child(btn_mode_3d)
 
+## Las pestañas de la familia: sobre papel, la elegida en un bloque del acento, su número al lado en el acento
+## (en papel si está elegida) y un filete de tinta debajo de toda la fila.
 func _build_tabs() -> void:
 	var band := Panel.new()
-	band.add_theme_stylebox_override("panel", Estilo.caja(Estilo.TINTA))
+	band.add_theme_stylebox_override("panel", Estilo.caja(Estilo.PAPEL))
 	band.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	band.offset_top = HEADER_H
 	band.offset_bottom = HEADER_H + TABS_H
 	add_child(band)
+	var rule := Estilo.filete(2)
+	rule.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	rule.offset_top = -2
+	band.add_child(rule)
 
 	var row := HBoxContainer.new()
 	row.set_anchors_preset(Control.PRESET_FULL_RECT)
-	row.offset_left = 6
+	row.offset_bottom = -2
 	row.offset_right = -24
 	row.add_theme_constant_override("separation", 0)
 	band.add_child(row)
 
 	for item in SECTIONS:
 		var id: String = item[0]
-		var b := Estilo.boton(item[1], 13, Estilo.PAPEL, Estilo.TINTA, Color("1C1B19"), 16, 0)
+		var b := Estilo.boton("", 12, Estilo.TINTA, Color(0, 0, 0, 0), Color(Estilo.TINTA, 0.06), 0, 0)
 		b.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		b.custom_minimum_size = Vector2(0, TABS_H)
 		b.pressed.connect(func(): _select_section(id))
+		var inner := HBoxContainer.new()
+		inner.set_anchors_preset(Control.PRESET_FULL_RECT)
+		inner.alignment = BoxContainer.ALIGNMENT_CENTER
+		inner.add_theme_constant_override("separation", 5)
+		inner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		b.add_child(inner)
+		var name_l := Estilo.etiqueta(str(item[1]), 12, Estilo.TINTA, _tab_font())
+		name_l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		inner.add_child(name_l)
+		var count_l := Estilo.etiqueta("", 13, Estilo.ACENTO, Estilo.grotesca())
+		count_l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		count_l.visible = false
+		inner.add_child(count_l)
+		b.set_meta("name_l", name_l)
+		b.set_meta("count_l", count_l)
 		row.add_child(b)
 		tab_buttons[id] = b
+		_fit_tab(b)
 
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(spacer)
 
-	lbl_hint = Estilo.etiqueta("", 11, Color(Estilo.PAPEL, 0.55))
+	lbl_hint = Estilo.etiqueta("", 11, Estilo.GRIS_CLARO)
 	lbl_hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(lbl_hint)
+
+static var _tab_font_cache: FontVariation = null
+
+## Inter negra con 1 de espaciado, como PestanasPaginas de la familia.
+static func _tab_font() -> FontVariation:
+	if _tab_font_cache == null:
+		_tab_font_cache = FontVariation.new()
+		_tab_font_cache.base_font = Estilo.F_NEGRITA
+		_tab_font_cache.spacing_glyph = 1
+	return _tab_font_cache
+
+## Ancho de la pestaña según su nombre y su número (12 px de margen a cada lado).
+func _fit_tab(b: Button) -> void:
+	var name_l: Label = b.get_meta("name_l")
+	var count_l: Label = b.get_meta("count_l")
+	var w: float = name_l.get_minimum_size().x
+	if count_l.visible:
+		w += 5.0 + count_l.get_minimum_size().x
+	b.custom_minimum_size = Vector2(w + 28.0, 0)
+
+func _paint_tab(b: Button, on: bool) -> void:
+	var name_l: Label = b.get_meta("name_l")
+	var count_l: Label = b.get_meta("count_l")
+	Estilo.pintar_boton(b, Estilo.TINTA, Estilo.ACENTO if on else Color(0, 0, 0, 0), Estilo.ACENTO.darkened(0.12) if on else Color(Estilo.TINTA, 0.06), 0, 0)
+	name_l.add_theme_color_override("font_color", Estilo.SOBRE_ACENTO if on else Estilo.TINTA)
+	count_l.add_theme_color_override("font_color", Estilo.SOBRE_ACENTO if on else Estilo.ACENTO)
 
 func _build_map_frame() -> void:
 	var frame := Panel.new()
@@ -1893,10 +1964,11 @@ func _build_section_biomas(col: Control) -> void:
 	for b in Catalogo.BIOMAS:
 		names.append(b[0])
 	for i in names.size():
-		var b := Estilo.boton(str(names[i]), 10, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 8, 8)
+		var b := Estilo.boton(_frase(str(names[i])), 15, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 8, 8)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		b.custom_minimum_size = Vector2((PANEL_W - 3 - 44 - 6) / 2, 44)
+		b.custom_minimum_size = Vector2((PANEL_W - 3 - 44 - 6) / 2, 42)
+		_paint_row(b, false)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		b.add_theme_constant_override("h_separation", 6)
 		if i == 0:
@@ -2708,12 +2780,13 @@ func _refresh_maps_list() -> void:
 		line.add_theme_constant_override("separation", 6)
 		maps_list.add_child(line)
 		var nov: String = str(m.get("obra_t", ""))
-		var txt: String = "%s%s · %s×%s · %02d.%02d.%02d" % [str(m["name"]).to_upper(), (" · " + nov.to_upper()) if nov != "" else "", Estilo.miles(sz.x), Estilo.miles(sz.y), d["day"], d["month"], int(d["year"]) % 100]
-		var b := Estilo.boton(txt, 11, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 10, 8)
+		var txt: String = "%s%s · %s px · %02d.%02d.%02d" % [str(m["name"]), (" · " + nov) if nov != "" else "", Estilo.miles(maxi(sz.x, sz.y)), d["day"], d["month"], int(d["year"]) % 100]
+		var b := Estilo.boton(txt, 15, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 10, 8)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		b.clip_text = true
-		_paint_filter(b, mid == engine.map_id)
+		b.add_theme_font_size_override("font_size", 15)
+		_paint_row(b, mid == engine.map_id)
 		b.pressed.connect(func():
 			if mid == engine.map_id:
 				return

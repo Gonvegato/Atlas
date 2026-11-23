@@ -566,7 +566,7 @@ func _draw_north(at: Vector2) -> void:
 	var f: Font = Estilo.F_GROTESCA
 	var n_size: int = 18
 	var n_w: float = f.get_string_size("N", HORIZONTAL_ALIGNMENT_LEFT, -1, n_size).x
-	draw_string(f, top + Vector2(-n_w * 0.5, -6), "N", HORIZONTAL_ALIGNMENT_LEFT, -1, n_size, Estilo.PAPEL)
+	draw_string(f, top + Vector2(-n_w * 0.5, -6), "N", HORIZONTAL_ALIGNMENT_LEFT, -1, n_size, Estilo.TINTA)
 
 func _draw_zoom_tag() -> void:
 	var f: Font = Estilo.versalitas()
