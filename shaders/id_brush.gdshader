@@ -1,5 +1,6 @@
 shader_type canvas_item;
 render_mode blend_mix;
+#include "res://shaders/ruido.gdshaderinc"
 
 // Pinta un identificador exacto (bioma o reino) en una capa de 8 bits: borde duro (sin antialias, el valor
 // tiene que llegar entero), algo irregular para que las lindes no salgan como círculos.
@@ -13,9 +14,7 @@ uniform float value = 0.0;
 uniform float roughness = 0.22;
 
 float hash(vec2 p) {
-	p = fract(p * vec2(234.34, 435.345));
-	p += dot(p, p + 34.23);
-	return fract(p.x * p.y);
+	return hash_cell(p, 0.0);
 }
 
 float noise(vec2 p) {

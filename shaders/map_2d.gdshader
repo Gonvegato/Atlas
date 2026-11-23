@@ -1,4 +1,5 @@
 shader_type canvas_item;
+#include "res://shaders/ruido.gdshaderinc"
 
 // El mapa 2D: relieve (Sobel, sombreado, curvas, costa a tinta), biomas con sus símbolos y reinos con sus
 // fronteras. Las tres capas tienen el mismo tamaño; biomas y reinos son identificadores (filtro nearest).
@@ -57,10 +58,7 @@ vec2 hash2(vec2 p) {
 }
 
 float vnoise(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	vec2 u = f * f * (3.0 - 2.0 * f);
-	return mix(mix(hash1(i), hash1(i + vec2(1.0, 0.0)), u.x), mix(hash1(i + vec2(0.0, 1.0)), hash1(i + vec2(1.0, 1.0)), u.x), u.y);
+	return value_noise(p, 0.0);
 }
 
 float paper_grain(vec2 p) {

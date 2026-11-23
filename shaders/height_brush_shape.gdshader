@@ -1,5 +1,6 @@
 shader_type canvas_item;
 render_mode blend_mix;
+#include "res://shaders/ruido.gdshaderinc"
 
 // Pinceles que LEEN el relieve: la textura `snap` es la capa al empezar el trazo (el espejo de la CPU).
 // Cada pincelada mezcla (blend_mix, alfa = fuerza) la altura hacia un objetivo; las pinceladas repetidas
@@ -29,9 +30,7 @@ float h_at(vec2 px) {
 }
 
 float hash1(vec2 p) {
-	p = fract(p * vec2(123.34, 456.21));
-	p += dot(p, p + 45.32);
-	return fract(p.x * p.y);
+	return hash_cell(p, 0.0);
 }
 
 float vnoise(vec2 p) {
@@ -136,7 +135,7 @@ void fragment() {
 		a = strength;
 	} else if (mode == 5) {
 		// Pantano: al nivel del agua, con charcas (algunas manchas un poco por debajo del mar).
-		float n = fract(sin(dot(floor(px / 9.0), vec2(12.9898, 78.233))) * 43758.5453);
+		float n = hash_cell(floor(px / 9.0), 3.0);
 		float puddle = step(0.7, n);
 		target = mix(sea_level + 0.004, sea_level - 0.006, puddle);
 		a = strength * smoothstep(1.0, 0.5, d);

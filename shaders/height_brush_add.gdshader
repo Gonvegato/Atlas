@@ -1,5 +1,6 @@
 shader_type canvas_item;
 render_mode blend_add;
+#include "res://shaders/ruido.gdshaderinc"
 
 uniform vec2 rect_min = vec2(0.0, 0.0);
 uniform vec2 rect_size = vec2(100.0, 100.0);
@@ -13,9 +14,7 @@ uniform float noise_scale = 26.0;
 uniform vec2 map_size = vec2(1024.0, 1024.0);
 
 float hash(vec2 p) {
-	p = fract(p * vec2(234.34, 435.345));
-	p += dot(p, p + 34.23);
-	return fract(p.x * p.y);
+	return hash_cell(p, 0.0);
 }
 
 float noise(vec2 p) {

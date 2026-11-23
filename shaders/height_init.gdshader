@@ -1,4 +1,5 @@
 shader_type canvas_item;
+#include "res://shaders/ruido.gdshaderinc"
 
 uniform float seed = 42.0;
 // Escala de la textura para que el ruido no se estire en mapas apaisados (ancho/alto, el lado corto = 1).
@@ -7,9 +8,7 @@ uniform vec2 aspect_scale = vec2(1.0, 1.0);
 uniform int mode = 0;
 
 float hash(vec2 p) {
-	p = fract(p * vec2(123.34, 456.21) + seed);
-	p += dot(p, p + 45.32);
-	return fract(p.x * p.y);
+	return hash_cell(p, seed);
 }
 
 float noise(vec2 p) {

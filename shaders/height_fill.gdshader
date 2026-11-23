@@ -1,5 +1,6 @@
 shader_type canvas_item;
 render_mode blend_mix;
+#include "res://shaders/ruido.gdshaderinc"
 
 // Relleno de un contorno dibujado a mano (Polygon2D con TEXTURE = el relieve al empezar y UV = posición en el mapa).
 // mode: 0 tierra (sube lo que esté bajo el mar a tierra baja con algo de relieve) · 1 lago (baja a poco bajo el mar) ·
@@ -9,9 +10,7 @@ uniform float sea_level = 0.5;
 uniform float seed = 0.0;
 
 float hash(vec2 p) {
-	p = fract(p * vec2(234.34, 435.345) + seed);
-	p += dot(p, p + 34.23);
-	return fract(p.x * p.y);
+	return hash_cell(p, seed);
 }
 
 float noise(vec2 p) {

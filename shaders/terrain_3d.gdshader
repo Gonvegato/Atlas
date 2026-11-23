@@ -1,5 +1,6 @@
 shader_type spatial;
 render_mode cull_back, diffuse_lambert, specular_schlick_ggx;
+#include "res://shaders/ruido.gdshaderinc"
 
 uniform sampler2D height_tex : filter_linear, repeat_disable;
 uniform float sea_level = 0.5;
@@ -61,9 +62,7 @@ vec3 biome_color(int id) {
 }
 
 float hash1(vec2 p) {
-	p = fract(p * vec2(123.34, 456.21));
-	p += dot(p, p + 45.32);
-	return fract(p.x * p.y);
+	return hash_cell(p, 0.0);
 }
 
 float vnoise(vec2 p) {

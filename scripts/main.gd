@@ -2757,6 +2757,19 @@ func _build_section_mundo(col: Control) -> void:
 		_refresh_maps_list()
 	)
 	_note(v, "Se guarda solo unos segundos después de cada cambio y al salir de la app.")
+	var rrow := HFlowContainer.new()
+	v.add_child(rrow)
+	_accent_link(rrow, "QUITAR RAYAS DEL RELIEVE", func():
+		lbl_save_state.text = "QUITANDO RAYAS…"
+		var n: int = await engine.repair_seams()
+		_world3d_dirty = true
+		_places3d_dirty = true
+		if input_ctrl.is_3d_mode:
+			_rebuild_3d.call_deferred()
+		_toast("Rayas quitadas (%s px retocados). Si no te gusta, DESHACER." % Estilo.miles(n))
+		_schedule_save()
+	)
+	_note(v, "Para mapas creados con versiones anteriores a la 0.12.3: en algunos móviles el relieve generado salía con rayas rectas (surcos). Esto las suaviza sin tocar lo demás; los mundos nuevos ya salen bien.")
 	v.add_child(Estilo.etiqueta("MIS MAPAS", 11, Estilo.GRIS))
 	maps_list = VBoxContainer.new()
 	maps_list.add_theme_constant_override("separation", 6)

@@ -676,6 +676,33 @@ func update_realm(id: int, key: String, value: Variant) -> void:
 	r[key] = value
 	_commit_meta(before)
 
+## Quita las rayas del relieve (escalones rectos del ruido antiguo en algunos móviles): una pasada del filtro
+## height_seams por escala (de fina a gruesa) sobre todo el mapa. Un solo paso del historial. Devuelve cuántos píxeles cambiaron (aprox.).
+func repair_seams(scales: Array = [1.0, 1.0, 2.0, 4.0]) -> int:
+	if not world_ready:
+		return 0
+	var before_img: Image = height.mirror.duplicate()
+	var after_img: Image = before_img
+	for sc in scales:
+		var m := _mat("res://shaders/height_seams.gdshader")
+		m.set_shader_parameter("scale", float(sc))
+		m.set_shader_parameter("snap", height.snapshot_texture())
+		m.set_shader_parameter("map_size", Vector2(map_size))
+		m.set_shader_parameter("rect_min", Vector2.ZERO)
+		m.set_shader_parameter("rect_size", Vector2(map_size))
+		after_img = await height.apply_full(m)
+	var changed: int = 0
+	var step: int = maxi(map_size.x / 256, 1)
+	for y in range(0, map_size.y, step):
+		for x in range(0, map_size.x, step):
+			if absf(after_img.get_pixel(x, y).r - before_img.get_pixel(x, y).r) > 0.0005:
+				changed += 1
+	var full := Rect2i(Vector2i.ZERO, map_size)
+	_push({"t": "paint", "layer": "height", "rect": full, "before": before_img, "after": after_img})
+	layer_changed.emit("height")
+	_compute_stats()
+	return changed * step * step
+
 ## Borra el reino y su territorio (pasa a «sin reino»). Un solo paso del historial.
 func delete_realm(id: int) -> void:
 	var r: Dictionary = realm_by_id(id)

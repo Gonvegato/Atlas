@@ -2,6 +2,20 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.12.3
+
+- **Arreglo: rayas rectas (surcos) en el relieve generado, en el móvil.** El ruido del terreno elegía el valor de cada
+  punto de la rejilla con un hash de coma flotante (`fract(p * 123.34 …)`); el compilador de la GPU del móvil reordena
+  esas cuentas y el mismo punto salía con valores distintos según la casilla desde la que se calculaba: escalones
+  rectos en los bordes de casilla, en varias direcciones (cada octava va girada), guardados en el mapa (se veían en 2D
+  y en 3D). Reproducido simulando ese reordenamiento. Ahora el azar por casilla se calcula con enteros de 32 bits
+  (`shaders/ruido.gdshaderinc`), exacto en cualquier GPU, en el generador, el relleno por contorno, los pinceles de
+  relieve y biomas, y el ruido del 2D y del 3D. Los mundos generados a partir de ahora son distintos para la misma
+  semilla.
+- **Mundo → QUITAR RAYAS DEL RELIEVE**, para los mapas ya hechos: busca escalones bruscos (un salto entre dos píxeles
+  mucho mayor que la pendiente a los lados) a varias escalas y suaviza solo ahí; se puede deshacer.
+- (0.12.2 quitó también los artefactos de las sombras, que no eran la causa de las rayas.)
+
 ## 0.12.2
 
 - **Arreglo: cortes rectos y triángulos en el 3D (en el móvil).** Eran artefactos de las sombras del sol: venían con la
