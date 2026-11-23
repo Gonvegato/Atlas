@@ -152,3 +152,17 @@ static func miles(n: int) -> String:
 		if c % 3 == 0 and i > 0:
 			out = "." + out
 	return ("-" if n < 0 else "") + out
+
+## Un rótulo con placa detrás (para que se lea sobre cualquier fondo): rectángulo duro de [fill] con filete de
+## [border] (grosor [bw], 0 = sin filete) y el texto encima. [at] es la línea base a la izquierda del texto.
+## Devuelve el rectángulo de la placa.
+static func placa(ci: CanvasItem, font: Font, at: Vector2, text: String, fs: int, fill: Color, border: Color, bw: float, text_col: Color, pad: Vector2 = Vector2(5, 3)) -> Rect2:
+	var tw: float = font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var asc: float = font.get_ascent(fs)
+	var desc: float = font.get_descent(fs)
+	var r := Rect2(at + Vector2(-pad.x, -asc - pad.y), Vector2(tw + pad.x * 2.0, asc + desc + pad.y * 2.0))
+	ci.draw_rect(r, fill)
+	if bw > 0.0:
+		ci.draw_rect(r, border, false, bw)
+	ci.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, text_col)
+	return r

@@ -273,6 +273,8 @@ func _connect_signals() -> void:
 		_refresh_labels_3d()
 	)
 	engine.layer_changed.connect(func(layer_name: String):
+		if layer_name == "realm":
+			_places3d_dirty = true
 		if layer_name == "biome" or layer_name == "height":
 			_world3d_dirty = true
 			_places3d_dirty = true
@@ -468,13 +470,18 @@ func _rebuild_3d() -> void:
 		_world3d_dirty = false
 		var n: int = 0
 		if trees_3d:
-			n = vegetation.build(engine.biome.mirror, engine.height.mirror, sea_level, world, hs, engine.world_seed)
+			# Sin árboles dentro de las ciudades y demás lugares.
+			var exclude: Array = []
+			for p in engine.places:
+				var puv: Vector2 = p["uv"]
+				exclude.append(Vector3(puv.x, puv.y, places3d.radius_uv(str(p["kind"]), world)))
+			n = vegetation.build(engine.biome.mirror, engine.height.mirror, sea_level, world, hs, engine.world_seed, exclude)
 		else:
 			vegetation.clear()
 		lbl_trees.text = "%s PLANTAS" % Estilo.miles(n)
 	if _places3d_dirty:
 		_places3d_dirty = false
-		_place_label_pos = places3d.build(engine.places, engine.height.mirror, sea_level, world, hs)
+		_place_label_pos = places3d.build(engine.places, engine.height.mirror, engine.realm.mirror, engine.realms, sea_level, world, hs)
 	_refresh_labels_3d()
 
 func _uv_to_3d(uv: Vector2, lift: float) -> Vector3:
@@ -661,6 +668,7 @@ func _rebuild_realm_palette() -> void:
 
 func _on_realms_changed() -> void:
 	_rebuild_realm_palette()
+	_places3d_dirty = true
 	if engine.realm_by_id(current_realm).is_empty():
 		current_realm = -1
 	overlay.realms = engine.realms
@@ -723,6 +731,7 @@ func _flash_realm_hint() -> void:
 
 func _on_places_changed() -> void:
 	_places3d_dirty = true
+	_world3d_dirty = true
 	if input_ctrl.is_3d_mode:
 		_rebuild_3d.call_deferred()
 	overlay.places = engine.places
@@ -1080,7 +1089,7 @@ func _build_relief_3d(col: Control) -> void:
 	, 11)
 	for k in density_chips.size():
 		_paint_filter(density_chips[k], k == 2)
-	_note(relief, "Modelos CC0 de Kenney (Nature, Castle y Fantasy Town Kit). Si el 3D va a tirones, baja a «Pocos».")
+	_note(relief, "Modelos CC0 de Kenney, KayKit (Kay Lousberg) y Quaternius. Si el 3D va a tirones, baja a «Pocos».")
 	relief.add_child(Estilo.filete(2))
 
 func _build_section_relieve(col: Control) -> void:

@@ -2,6 +2,37 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.5.0
+
+- **Nombres con placa detrás**, en el estilo de la familia (rectángulos duros, papel y tinta):
+  - Capitales: placa de tinta con letra de papel.
+  - Resto de lugares: placa de papel con filete de tinta, y un halo de papel detrás del símbolo.
+  - Reinos y regiones: banda de papel translúcida (rotada con el texto en las regiones).
+  - En 3D, las mismas placas con una línea guía hasta el sitio.
+- **Ciudades nuevas en 3D** con el [KayKit Medieval Hexagon Pack](https://github.com/KayKit-Game-Assets/KayKit-Medieval-Hexagon-Pack-1.0)
+  (Kay Lousberg, CC0):
+  - Castillo, iglesia, taberna, mercado, herrería, cuartel, molinos, pozo, aserradero, mina, torres, murallas con puerta, ruinas,
+    tiendas de campaña, banderas, cajas y barriles.
+  - Cada lugar lleva los colores de su reino (el más parecido de los cuatro del pack) y cada tipo tiene su composición. La capital
+    tiene castillo, iglesia, mercado, taberna, herrería, cuartel, diez casas, pozo y muralla con puerta y torres; el castillo,
+    muralla y torre de catapulta; la aldea, casas y molino; la batalla, tiendas, banderas y una catapulta…
+  - Cada edificio se asienta en la altura del terreno de su sitio, sin pisarse con los demás, y alrededor de cada lugar no hay
+    árboles.
+- **Más variedad de vegetación**:
+  - Árboles sueltos de KayKit.
+  - Del [Stylized Nature MegaKit](https://opengameart.org/content/stylized-nature-megakit) de Quaternius (CC0): helechos,
+    flores, hierba alta, tréboles, arbustos con flor, setas, rocas y árboles protagonistas (retorcidos en el bosque encantado,
+    muertos en el bosque muerto, pinos y árboles grandes repartidos). Estos son 20-50 veces más pesados que los de Kenney y van
+    con tope por modelo. Sus texturas se han reducido a 512 px, sin mapas de normales, y con los bordes transparentes
+    rellenados para que no salgan halos blancos.
+- Arreglos en 3D:
+  - Árboles y edificios ya no reciben la sombra direccional, que a esa escala dejaba motas.
+  - Fuera `tree_default_fall` de Kenney, que tiene caras solapadas (rayado al alejarse).
+  - Fuera los campos de trigo hexagonales, que parecían monedas.
+  - Las copas oscuras salen más claras.
+- El APK crece unos 18 MB por los modelos nuevos. Licencias en `assets/*/License.txt`.
+
+
 ## 0.4.0
 
 - **Bosques de verdad en 2D**: cada bosque con su árbol, a tinta y con luz y sombra en la copa (del lado del sol):

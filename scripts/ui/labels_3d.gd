@@ -53,10 +53,19 @@ func _draw() -> void:
 				fs = 14
 				col = water_ink
 		var tw: float = f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-		var at: Vector2 = sp + Vector2(-tw * 0.5, -6.0)
-		if kind == "lugar" or kind == "capital":
-			draw_circle(sp, 3.0, ink)
-			draw_line(sp, sp + Vector2(0, -4), ink, 1.0)
-			at = sp + Vector2(-tw * 0.5, -9.0)
-		draw_string_outline(f, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(paper, 0.85))
-		draw_string(f, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+		var at: Vector2 = sp + Vector2(-tw * 0.5, 0.0)
+		match kind:
+			"capital", "lugar":
+				# Línea guía desde el sitio hasta la placa, que flota un poco por encima.
+				var top: Vector2 = sp + Vector2(0, -18)
+				draw_line(sp, top, ink, 1.5)
+				draw_circle(sp, 3.0, ink)
+				at = top + Vector2(-tw * 0.5, -4.0)
+				if kind == "capital":
+					Estilo.placa(self, f, at, txt, fs, ink, ink, 0.0, paper, Vector2(6, 3))
+				else:
+					Estilo.placa(self, f, at, txt, fs, Color(paper, 0.93), ink, 1.0, ink, Vector2(4, 2))
+			"reino":
+				Estilo.placa(self, f, at, txt, fs, Color(paper, 0.72), col, 0.0, col, Vector2(8, 4))
+			_:
+				Estilo.placa(self, f, at, txt, fs, Color(paper, 0.7), col, 0.0, col, Vector2(6, 3))

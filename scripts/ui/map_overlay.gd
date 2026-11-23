@@ -102,8 +102,7 @@ func _draw_area_names() -> void:
 		var p: Vector2 = uv_to_screen(uv)
 		draw_set_transform(p, angle if absf(angle) < 1.2 else 0.0, Vector2.ONE)
 		var at := Vector2(-tw * 0.5, fs * 0.35)
-		draw_string_outline(_area_font, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(paper, 0.7))
-		draw_string(_area_font, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(col, 0.92))
+		Estilo.placa(self, _area_font, at, txt, fs, Color(paper, 0.68), col, 0.0, col, Vector2(7, 3))
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 # ---------------------------------------------------------------- reinos
@@ -125,8 +124,7 @@ func _draw_realm_names() -> void:
 		var col: Color = r["color"]
 		var tw: float = _realm_font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		var at: Vector2 = _free_spot(p, tw, fs)
-		draw_string_outline(_realm_font, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 5, Color(paper, 0.75))
-		draw_string(_realm_font, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col.darkened(0.35))
+		Estilo.placa(self, _realm_font, at, txt, fs, Color(paper, 0.5), col.darkened(0.35), 0.0, col.darkened(0.45), Vector2(6, 2))
 
 ## Donde poner el nombre de un reino tapando los menos lugares posibles: prueba alturas alrededor del centro
 ## (el centro gana si empata).
@@ -184,13 +182,19 @@ func _draw_place_name(kind: String, nm: String, at: Vector2) -> void:
 	elif kind == "aldea" or kind == "ruinas" or kind == "mina":
 		f = Estilo.F_TEXTO
 		fs = 11
-	var pos: Vector2 = at + Vector2(11, fs * 0.36)
-	draw_string_outline(f, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(paper, 0.9))
-	draw_string(f, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, ink)
+	var pos: Vector2 = at + Vector2(14, fs * 0.36)
+	if kind == "capital":
+		Estilo.placa(self, f, pos, txt, fs, ink, ink, 0.0, paper, Vector2(6, 3))
+	elif kind == "ciudad":
+		Estilo.placa(self, f, pos, txt, fs, Color(paper, 0.95), ink, 1.5, ink, Vector2(5, 3))
+	else:
+		Estilo.placa(self, f, pos, txt, fs, Color(paper, 0.9), Color(ink, 0.85), 1.0, ink, Vector2(4, 2))
 
 func _draw_symbol(kind: String, c: Vector2) -> void:
 	var k: Color = ink
 	var w: Color = paper
+	draw_circle(c, 10.5, Color(paper, 0.88))
+	draw_arc(c, 10.5, 0.0, TAU, 28, Color(ink, 0.35), 1.0, true)
 	match kind:
 		"capital":
 			draw_rect(Rect2(c - Vector2(7, 7), Vector2(14, 14)), k)

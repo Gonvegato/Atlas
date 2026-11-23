@@ -4,7 +4,7 @@ shader_type spatial;
 // part: 0 = conserva el color del modelo (troncos, flores, setas) · 1 = hojas: el color de la instancia (el del
 // bioma) · 2 = roca/tierra: el color del modelo por el tinte de la instancia (INSTANCE_CUSTOM) · 3 = corteza:
 // el salmón del kit pasado a marrón.
-render_mode cull_disabled, diffuse_lambert_wrap, specular_disabled;
+render_mode cull_disabled, diffuse_lambert_wrap, specular_disabled, shadows_disabled;
 
 uniform vec3 albedo : source_color = vec3(0.4, 0.6, 0.3);
 uniform int part = 0;
