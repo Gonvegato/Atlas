@@ -2,6 +2,13 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.10.1
+
+- **Arreglo: los botones del panel no respondían en la tablet** (en vertical y en horizontal). El filtro táctil del panel
+  (desde la 0.7.0) reenviaba el toque en unidades de la interfaz y no en píxeles de la pantalla; con escala 1,5 o 2 caía en
+  otro sitio. Ahora se comprueba con pantallas escaladas (1200×1920 y 2560×1600): botones, desplazamiento y deslizadores.
+
+
 ## 0.10.0
 
 - **Los mapas de las novelas, en la cuenta de la familia**: Mundo → «Cuenta de la familia».

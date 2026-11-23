@@ -352,9 +352,17 @@ func _click_ev(p: Vector2, pressed: bool) -> InputEventMouseButton:
 	return m
 
 ## Reenvía eventos a la interfaz, marcados para que este mismo filtro no los vuelva a interceptar.
+## Ojo: aquí las posiciones están en unidades de la interfaz (1280×800 u 800×1280), pero Input.parse_input_event las
+## espera en píxeles de la pantalla; sin pasarlas, en una tablet (escala 1,5 o 2) el toque caía en otro sitio y los botones
+## del panel no respondían.
 func _replay(events: Array) -> void:
+	var xf: Transform2D = get_tree().root.get_final_transform()
 	for e in events:
 		var ev: InputEvent = e
+		if ev is InputEventMouseButton:
+			var mb: InputEventMouseButton = ev
+			mb.position = xf * mb.position
+			mb.global_position = mb.position
 		ev.set_meta("atlas_panel", true)
 		Input.parse_input_event(ev)
 
