@@ -189,7 +189,7 @@ func _select_tool(tool_id: String) -> void:
 	current_tool = tool_id
 	for k in tool_buttons.keys():
 		var b: Button = tool_buttons[k]
-		var active := (k == tool_id)
+		var active: bool = (str(k) == tool_id)
 		b.add_theme_stylebox_override("normal", _make_style(Color("5C7894") if active else Color("141414")))
 		b.add_theme_stylebox_override("hover", _make_style(Color("6E8AA6") if active else Color("242629")))
 		b.add_theme_stylebox_override("pressed", _make_style(Color("4A647E")))
