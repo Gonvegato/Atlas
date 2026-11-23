@@ -9,6 +9,8 @@ signal history_changed(can_undo: bool, can_redo: bool)
 signal stats_changed(land_frac: float, max_height: float)
 signal realms_changed()
 signal places_changed()
+## Los caminos dibujados cambiaron (añadir, quitar, cambiar tipo, deshacer).
+signal roads_changed()
 ## id de reino → {"uv": Vector2 (centro), "area": float (fracción del mapa)}
 signal realm_centroids_changed(centroids: Dictionary)
 signal areas_changed()
@@ -52,6 +54,11 @@ var relations: Array = []
 var travel: Dictionary = {"hours_per_px": 0.0, "km_per_px": 0.0, "sample": ""}
 ## Rutas guardadas: {"id", "name", "points": [Vector2 uv...], "mode": "pie"|"caballo"|"carro"|"barco"}
 var routes: Array = []
+## Caminos dibujados: {id, kind (Catalogo.TIPOS_CAMINO), points: [uv]}.
+var roads: Array = []
+## Rejilla de caminos a 1/4 del mapa (índice del tipo + 1), para el coste de los viajes.
+var _road_grid: Image
+var _road_grid_dirty: bool = true
 var world_ready: bool = false
 ## Mapa abierto: carpeta en user://mapas y nombre.
 var map_id: String = ""
@@ -195,6 +202,8 @@ func create_world(size: Vector2i, seed: int, mode: int) -> void:
 	areas.clear()
 	relations.clear()
 	routes.clear()
+	roads.clear()
+	_road_grid_dirty = true
 	travel = {"hours_per_px": 0.0, "km_per_px": 0.0, "sample": ""}
 	_next_place_id = 1
 	stroke_count = 0
@@ -207,6 +216,7 @@ func create_world(size: Vector2i, seed: int, mode: int) -> void:
 	_emit_history()
 	realms_changed.emit()
 	places_changed.emit()
+	roads_changed.emit()
 	_compute_stats()
 	realm_centroids_changed.emit({})
 	areas_changed.emit()
@@ -246,10 +256,11 @@ func extend(dir: String, frac: float = 0.5) -> bool:
 	for p in places:
 		var uv: Vector2 = p["uv"]
 		p["uv"] = (uv * Vector2(old_size) + Vector2(offset)) / Vector2(new_size)
-	for r in routes:
+	for r in routes + roads:
 		var pts: Array = r["points"]
 		for i in pts.size():
 			pts[i] = (Vector2(pts[i]) * Vector2(old_size) + Vector2(offset)) / Vector2(new_size)
+	_road_grid_dirty = true
 	# La escala (km y horas por píxel) no cambia: los píxeles viejos miden lo mismo.
 	undo_stack.clear()
 	redo_stack.clear()
@@ -257,6 +268,7 @@ func extend(dir: String, frac: float = 0.5) -> bool:
 	layers_ready.emit(map_size)
 	_emit_history()
 	places_changed.emit()
+	roads_changed.emit()
 	_compute_stats()
 	_compute_centroids()
 	_compute_area_shapes()
@@ -600,7 +612,7 @@ func _reversed(a: Array) -> Array:
 func _meta_snapshot() -> Dictionary:
 	return {"realms": realms.duplicate(true), "places": places.duplicate(true), "areas": areas.duplicate(true),
 		"relations": relations.duplicate(true), "travel": travel.duplicate(true), "routes": routes.duplicate(true),
-		"next_place": _next_place_id}
+		"roads": roads.duplicate(true), "next_place": _next_place_id}
 
 func _set_meta(snap: Dictionary) -> void:
 	var rs: Array = snap["realms"]
@@ -615,13 +627,20 @@ func _set_meta(snap: Dictionary) -> void:
 	travel = tr.duplicate(true)
 	var rts: Array = snap.get("routes", [])
 	routes = rts.duplicate(true)
+	var rds: Array = snap.get("roads", [])
+	roads = rds.duplicate(true)
+	_road_grid_dirty = true
 	_next_place_id = int(snap["next_place"])
 	realms_changed.emit()
 	places_changed.emit()
 	areas_changed.emit()
+	roads_changed.emit()
 
 func _commit_meta(before: Dictionary) -> void:
 	_push({"t": "meta", "before": before, "after": _meta_snapshot()})
+	if before.get("roads", []) != roads:
+		_road_grid_dirty = true
+		roads_changed.emit()
 	realms_changed.emit()
 	places_changed.emit()
 	areas_changed.emit()
@@ -763,6 +782,92 @@ func delete_route(id: int) -> void:
 	routes = routes.filter(func(r): return int(r["id"]) != id)
 	_commit_meta(before)
 
+# ---------------------------------------------------------------- caminos
+
+func road_by_id(id: int) -> Dictionary:
+	for r in roads:
+		if int(r["id"]) == id:
+			return r
+	return {}
+
+func add_road(kind: String, points: Array) -> int:
+	if points.size() < 2:
+		return -1
+	var before: Dictionary = _meta_snapshot()
+	var id: int = 1
+	for r in roads:
+		id = maxi(id, int(r["id"]) + 1)
+	roads.append({"id": id, "kind": kind, "points": points.duplicate()})
+	_commit_meta(before)
+	return id
+
+func set_road_kind(id: int, kind: String) -> void:
+	var r: Dictionary = road_by_id(id)
+	if r.is_empty() or str(r["kind"]) == kind:
+		return
+	var before: Dictionary = _meta_snapshot()
+	r["kind"] = kind
+	_commit_meta(before)
+
+func delete_road(id: int) -> void:
+	if road_by_id(id).is_empty():
+		return
+	var before: Dictionary = _meta_snapshot()
+	roads = roads.filter(func(r): return int(r["id"]) != id)
+	_commit_meta(before)
+
+## El camino más cercano a [uv] a menos de [max_px] píxeles del mapa (-1 si ninguno).
+func road_at(uv: Vector2, max_px: float) -> int:
+	var p: Vector2 = uv * Vector2(map_size)
+	var best: int = -1
+	var best_d: float = max_px
+	for r in roads:
+		var pts: Array = r["points"]
+		for i in range(pts.size() - 1):
+			var a: Vector2 = Vector2(pts[i]) * Vector2(map_size)
+			var b: Vector2 = Vector2(pts[i + 1]) * Vector2(map_size)
+			var ab: Vector2 = b - a
+			var t: float = clampf((p - a).dot(ab) / maxf(ab.length_squared(), 1e-6), 0.0, 1.0)
+			var d: float = p.distance_to(a + ab * t)
+			if d < best_d:
+				best_d = d
+				best = int(r["id"])
+	return best
+
+## Ancho de un tipo de camino en píxeles de este mapa.
+func road_width_px(kind: String) -> float:
+	return float(Catalogo.tipo_camino(kind)[2]) * float(maxi(map_size.x, map_size.y)) / 2048.0
+
+func _road_grid_update() -> void:
+	if not _road_grid_dirty and _road_grid != null:
+		return
+	_road_grid_dirty = false
+	var gs := Vector2i(maxi(map_size.x / 4, 1), maxi(map_size.y / 4, 1))
+	_road_grid = Image.create(gs.x, gs.y, false, Image.FORMAT_L8)
+	for r in roads:
+		var t: Array = Catalogo.tipo_camino(str(r["kind"]))
+		var v: float = float(Catalogo.TIPOS_CAMINO.find(t) + 1) / 255.0
+		var half: int = maxi(int(road_width_px(str(r["kind"])) / 8.0), 1)
+		var pts: Array = r["points"]
+		for i in range(pts.size() - 1):
+			var a: Vector2 = Vector2(pts[i]) * Vector2(gs)
+			var b: Vector2 = Vector2(pts[i + 1]) * Vector2(gs)
+			var n: int = maxi(int(a.distance_to(b)), 1)
+			for k in n + 1:
+				var q: Vector2i = Vector2i(a.lerp(b, float(k) / float(n)))
+				_road_grid.fill_rect(Rect2i(q - Vector2i(half, half), Vector2i(half * 2 + 1, half * 2 + 1)).intersection(Rect2i(Vector2i.ZERO, gs)), Color(v, v, v))
+
+## Lo que cuesta un paso en [px] (píxeles del mapa) por estar en un camino (1 si no hay camino).
+func road_factor(px: Vector2) -> float:
+	if roads.is_empty():
+		return 1.0
+	_road_grid_update()
+	var q := Vector2i(clampi(int(px.x / 4.0), 0, _road_grid.get_width() - 1), clampi(int(px.y / 4.0), 0, _road_grid.get_height() - 1))
+	var idx: int = int(round(_road_grid.get_pixelv(q).r * 255.0))
+	if idx <= 0 or idx > Catalogo.TIPOS_CAMINO.size():
+		return 1.0
+	return float(Catalogo.TIPOS_CAMINO[idx - 1][4])
+
 ## Longitud ponderada de una ruta (en píxeles del mapa): cada tramo cuesta más si sube o baja mucho, si va por
 ## montaña o si cruza agua yendo por tierra (y al revés en barco). Muestreo cada ~4 px.
 func route_cost(points: Array, mode: String) -> Dictionary:
@@ -795,6 +900,8 @@ func route_cost(points: Array, mode: String) -> Dictionary:
 				cost *= 1.0 + smoothstep(0.25, 0.45, h - sea_level) * 0.8
 				if wet:
 					cost *= 4.0
+				# Por un camino se va más deprisa (y la cuesta pesa menos: los caminos buscan el paso).
+				cost *= road_factor(p)
 				climb += maxf(h - prev_h, 0.0)
 			total_px += step
 			weighted += step * cost

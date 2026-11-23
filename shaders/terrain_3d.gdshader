@@ -242,15 +242,24 @@ void fragment() {
 			g = max(mix(vec3(lum2), g, ground_saturation), vec3(0.0));
 			g = max((g - 0.18) * ground_contrast + 0.18, vec3(0.0));
 			g *= ground_gain * (0.9 + 0.2 * n2);
-			// Calles de tierra apisonada y plazas empedradas: con su textura, pero sin la saturación del suelo.
+			// Calles y caminos (tierra, grava, adoquín y losas) y plazas empedradas: con su textura pero sin la
+			// saturación del suelo. Un canal de road_tex por suelo.
 			if (has_roads) {
-				float rd = texture(road_tex, UV + (vec2(vnoise(wp * 40.0), vnoise(wp * 40.0 + 5.0)) - 0.5) * 0.0006).r;
-				float street = smoothstep(0.22, 0.42, rd);
-				float plz = smoothstep(0.72, 0.9, rd);
-				float gl = dot(ground(14.0, wp * 1.6), vec3(0.2126, 0.7152, 0.0722));
-				float pl = dot(ground(18.0, wp * 2.2), vec3(0.2126, 0.7152, 0.0722));
-				g = mix(g, vec3(0.74, 0.64, 0.50) * (0.55 + gl * 0.9), street * 0.9);
-				g = mix(g, vec3(0.70, 0.68, 0.64) * (0.5 + pl * 1.0), plz * 0.95);
+				vec4 rd = texture(road_tex, UV + (vec2(vnoise(wp * 40.0), vnoise(wp * 40.0 + 5.0)) - 0.5) * 0.0006);
+				vec4 m = smoothstep(vec4(0.25), vec4(0.6), rd);
+				if (m.r + m.g + m.b + m.a > 0.0) {
+					float l_dirt = dot(ground(1.0, wp * 1.6), vec3(0.2126, 0.7152, 0.0722));
+					float l_grav = dot(ground(14.0, wp * 1.6), vec3(0.2126, 0.7152, 0.0722));
+					float l_cobb = dot(ground(18.0, wp * 2.2), vec3(0.2126, 0.7152, 0.0722));
+					float l_slab = dot(ground(15.0, wp * 1.2), vec3(0.2126, 0.7152, 0.0722));
+					g = mix(g, vec3(0.70, 0.56, 0.40) * (0.55 + l_dirt * 0.9), m.r * 0.9);
+					g = mix(g, vec3(0.76, 0.70, 0.60) * (0.55 + l_grav * 0.9), m.g * 0.92);
+					g = mix(g, vec3(0.68, 0.66, 0.63) * (0.5 + l_cobb * 1.0), m.b * 0.95);
+					// Losas: la textura de roca con juntas.
+					vec2 sl = fract(wp * 90.0);
+					float joint = 1.0 - smoothstep(0.0, 0.08, min(min(sl.x, 1.0 - sl.x), min(sl.y, 1.0 - sl.y)));
+					g = mix(g, vec3(0.84, 0.80, 0.72) * (0.6 + l_slab * 0.7) * (1.0 - joint * 0.35), m.a * 0.95);
+				}
 			}
 
 			// Montaña estilizada: roca cálida (con el detalle de luces de la textura), paredes más oscuras y casquetes de
@@ -288,7 +297,11 @@ void fragment() {
 		}
 		if (!use_ground) {
 			if (has_roads) {
-				land = mix(land, vec3(0.62, 0.56, 0.46), smoothstep(0.22, 0.42, texture(road_tex, UV).r) * 0.85);
+				vec4 rd = smoothstep(vec4(0.25), vec4(0.6), texture(road_tex, UV));
+				land = mix(land, vec3(0.62, 0.52, 0.40), rd.r * 0.85);
+				land = mix(land, vec3(0.66, 0.62, 0.55), rd.g * 0.85);
+				land = mix(land, vec3(0.62, 0.61, 0.60), rd.b * 0.9);
+				land = mix(land, vec3(0.78, 0.75, 0.68), rd.a * 0.9);
 			}
 			land = mix(land, col_cliff, smoothstep(0.18, 0.52, slope));
 			land = mix(land, col_snow, smoothstep(0.68, 0.90, elev) * (1.0 - smoothstep(0.35, 0.65, slope)));

@@ -140,6 +140,21 @@ const TIPOS_LUGAR = [
 	["batalla", "BATALLA", 1.3],
 ]
 
+## Caminos dibujados: [id, nombre, ancho (px de un mapa de 2.048), canal del suelo 3D (0 tierra, 1 grava, 2 adoquín,
+## 3 losas), lo que cuesta cada paso por él al viajar (1 = campo abierto), descripción].
+const TIPOS_CAMINO = [
+	["sendero", "SENDERO", 3.0, 0, 0.85, "Tierra pisada, estrecho y a trazos en el mapa."],
+	["camino", "CAMINO", 5.0, 1, 0.75, "Camino de grava entre pueblos."],
+	["calzada", "CALZADA", 7.0, 2, 0.65, "Empedrada, con bordes: une ciudades."],
+	["imperial", "CALZADA IMPERIAL", 10.0, 3, 0.55, "Losas anchas: las grandes vías de un imperio."],
+]
+
+static func tipo_camino(id: String) -> Array:
+	for t in TIPOS_CAMINO:
+		if t[0] == id:
+			return t
+	return TIPOS_CAMINO[1]
+
 ## Regiones con nombre: [id, nombre, ¿es agua?, bioma que pinta de serie (0 = ninguno)]. El agua se rotula en
 ## azul y en cursiva; la tierra, en tinta y en cursiva.
 const TIPOS_REGION = [

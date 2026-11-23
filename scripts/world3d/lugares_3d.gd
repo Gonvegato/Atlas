@@ -29,7 +29,8 @@ var _rng := RandomNumberGenerator.new()
 ## Modelo → transformaciones (en el espacio de este nodo), para agrupar en MultiMesh al final.
 var _batch: Dictionary = {}
 var _mesh_cache: Dictionary = {}
-## Calles y plazas para el suelo del relieve (L8: 0 nada, ~0,5 calle de grava, 1 plaza empedrada).
+## Calles, plazas y caminos para el suelo del relieve (RGBA8, un canal por suelo: r tierra, g grava, b adoquín,
+## a losas). También sirve para que no salgan árboles encima.
 var road_img: Image
 var road_count: int = 0
 
@@ -57,10 +58,6 @@ func radius_uv_place(p: Dictionary, world: Vector2) -> float:
 func build(places: Array, height_img: Image, realm_img: Image, realms: Array, sea_level: float, world: Vector2, height_scale: float) -> Dictionary:
 	clear()
 	_batch.clear()
-	var long: int = maxi(height_img.get_width(), height_img.get_height())
-	var mk: float = clampf(float(long) / 2.0, 512.0, 2048.0) / float(long)
-	road_img = Image.create(maxi(int(height_img.get_width() * mk), 1), maxi(int(height_img.get_height() * mk), 1), false, Image.FORMAT_L8)
-	road_count = 0
 	_height = height_img
 	_sea = sea_level
 	_world = world
@@ -81,7 +78,6 @@ func build(places: Array, height_img: Image, realm_img: Image, realms: Array, se
 			var sz: int = Asentamiento.size_of(p)
 			var plan: Dictionary = Asentamiento.generate(kind, sz, int(p["id"]))
 			_build_plan(root, uv, col, plan, u, kind == "puerto")
-			_draw_roads(uv, plan, u)
 			out[int(p["id"])] = base + Vector3(0, u * (2.2 + float(sz) * 0.18), 0)
 			continue
 		match kind:
@@ -160,33 +156,60 @@ func _build_plan(root: Node3D, uv: Vector2, col: String, plan: Dictionary, u: fl
 			var prop: String = ["crate_A_big", "barrel", "crate_long_A", "sack", "barrel", "crate_B_big"][i]
 			_put_at(root, uv, KAY_PROP % prop, off, u * 1.2, _rng.randf() * TAU, 0.0, true)
 
-## Las calles y la plaza del trazado, en road_img.
-func _draw_roads(uv: Vector2, plan: Dictionary, u: float) -> void:
+## La máscara de calles, plazas y caminos (road_img). [roads]: los caminos dibujados del motor.
+func build_mask(places: Array, roads: Array, height_img: Image, world: Vector2) -> Image:
+	_world = world
+	var long: int = maxi(height_img.get_width(), height_img.get_height())
+	var mk: float = clampf(float(long) / 2.0, 512.0, 2048.0) / float(long)
+	road_img = Image.create(maxi(int(height_img.get_width() * mk), 1), maxi(int(height_img.get_height() * mk), 1), false, Image.FORMAT_RGBA8)
+	road_count = 0
 	var rw: int = road_img.get_width()
 	var rh: int = road_img.get_height()
-	# Unidades de edificio → píxeles de la máscara.
-	var k: float = u / maxf(_world.x, _world.y) * float(maxi(rw, rh))
-	var c := Vector2(uv.x * rw, uv.y * rh)
-	var half: float = maxf(Asentamiento.ROAD_HW * k, 1.0)
-	var street := Color(0.5, 0.5, 0.5)
-	for pts in plan["roads"]:
-		var arr: Array = pts
-		for i in range(arr.size() - 1):
-			var a: Vector2 = c + (arr[i] as Vector2) * k
-			var b: Vector2 = c + (arr[i + 1] as Vector2) * k
-			var n: int = maxi(int(a.distance_to(b) / maxf(half * 0.6, 0.5)), 1)
-			for j in n + 1:
-				var p: Vector2 = a.lerp(b, float(j) / float(n))
-				var r := Rect2i(Vector2i(p - Vector2(half, half)), Vector2i(int(half * 2.0) + 1, int(half * 2.0) + 1))
-				road_img.fill_rect(r.intersection(Rect2i(0, 0, rw, rh)), street)
-	var pr: float = float(plan["plaza"]) * k
-	if pr >= 1.0:
-		for y in range(int(c.y - pr), int(c.y + pr) + 1):
-			var dy: float = float(y) + 0.5 - c.y
-			var dx: float = sqrt(maxf(pr * pr - dy * dy, 0.0))
-			var r := Rect2i(int(c.x - dx), y, int(dx * 2.0) + 1, 1)
-			road_img.fill_rect(r.intersection(Rect2i(0, 0, rw, rh)), Color.WHITE)
-	road_count += 1
+	# Caminos: un canal por tipo; ancho en píxeles de la máscara.
+	for r in roads:
+		var t: Array = Catalogo.tipo_camino(str(r["kind"]))
+		var ch: int = int(t[3])
+		var col := Color(1.0 if ch == 0 else 0.0, 1.0 if ch == 1 else 0.0, 1.0 if ch == 2 else 0.0, 1.0 if ch == 3 else 0.0)
+		var half: float = maxf(float(t[2]) * float(long) / 2048.0 * mk * 0.5, 0.8)
+		var pts: Array = []
+		for q in r["points"]:
+			pts.append(Vector2(q) * Vector2(rw, rh))
+		_stamp_line(pts, half, col)
+		road_count += 1
+	# Las calles y la plaza de cada asentamiento.
+	var u: float = unit_for(world)
+	var k: float = u / maxf(world.x, world.y) * float(maxi(rw, rh))
+	for p in places:
+		var kind: String = str(p["kind"])
+		if not Asentamiento.has_size(kind):
+			continue
+		var plan: Dictionary = Asentamiento.generate(kind, Asentamiento.size_of(p), int(p["id"]))
+		var c := Vector2(Vector2(p["uv"]).x * rw, Vector2(p["uv"]).y * rh)
+		for pts0 in plan["roads"]:
+			var pts: Array = []
+			for q in pts0:
+				pts.append(c + (q as Vector2) * k)
+			_stamp_line(pts, maxf(Asentamiento.ROAD_HW * k, 1.0), Color(1, 0, 0, 0))
+		var pr: float = float(plan["plaza"]) * k
+		if pr >= 1.0:
+			for y in range(int(c.y - pr), int(c.y + pr) + 1):
+				var dy: float = float(y) + 0.5 - c.y
+				var dx: float = sqrt(maxf(pr * pr - dy * dy, 0.0))
+				road_img.fill_rect(Rect2i(int(c.x - dx), y, int(dx * 2.0) + 1, 1).intersection(Rect2i(0, 0, rw, rh)), Color(0, 0, 1, 0))
+		road_count += 1
+	return road_img
+
+## Una línea gruesa (cuadrados de lado 2·[half] cada poco) en road_img.
+func _stamp_line(pts: Array, half: float, col: Color) -> void:
+	var rect_all := Rect2i(0, 0, road_img.get_width(), road_img.get_height())
+	var side: int = int(half * 2.0) + 1
+	for i in range(pts.size() - 1):
+		var a: Vector2 = pts[i]
+		var b: Vector2 = pts[i + 1]
+		var n: int = maxi(int(a.distance_to(b) / maxf(half * 0.6, 0.5)), 1)
+		for j in n + 1:
+			var p: Vector2 = a.lerp(b, float(j) / float(n))
+			road_img.fill_rect(Rect2i(Vector2i(p - Vector2(half, half)), Vector2i(side, side)).intersection(rect_all), col)
 
 ## Una pieza en [off] (unidades del mundo desde el centro) a la altura del terreno de su sitio, a la cola del lote.
 func _put_at(root: Node3D, uv: Vector2, path: String, off: Vector2, scale: float, rot_y: float, lift: float = 0.0, allow_water: bool = false) -> void:

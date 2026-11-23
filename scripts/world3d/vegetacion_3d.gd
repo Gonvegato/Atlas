@@ -147,7 +147,7 @@ func clear() -> void:
 ## la linde los bosques se aclaran y las especies de los dos lados se mezclan.
 var blend_px: float = 0.0
 
-func build(biome_img: Image, height_img: Image, sea_level: float, world: Vector2, height_scale: float, seed: int, exclude: Array = []) -> int:
+func build(biome_img: Image, height_img: Image, sea_level: float, world: Vector2, height_scale: float, seed: int, exclude: Array = [], road_mask: Image = null) -> int:
 	clear()
 	var w: int = biome_img.get_width()
 	var h: int = biome_img.get_height()
@@ -205,6 +205,11 @@ func build(biome_img: Image, height_img: Image, sea_level: float, world: Vector2
 		if hv <= sea_level + 0.003:
 			continue
 		var cuv := Vector2((c.x + 0.5) / float(w), (c.y + 0.5) / float(h))
+		# Nada encima de calles, plazas ni caminos.
+		if road_mask != null:
+			var mc: Color = road_mask.get_pixel(clampi(int(cuv.x * road_mask.get_width()), 0, road_mask.get_width() - 1), clampi(int(cuv.y * road_mask.get_height()), 0, road_mask.get_height() - 1))
+			if mc.r + mc.g + mc.b + mc.a > 0.3:
+				continue
 		var blocked: bool = false
 		for e in exclude:
 			var ev: Vector3 = e

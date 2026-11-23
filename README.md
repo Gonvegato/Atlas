@@ -2,6 +2,16 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.12.0
+
+- **Caminos dibujados, con cuatro texturas.** En Lugares → CAMINOS, el lápiz dibuja un camino de un tirón: SENDERO
+  (tierra; a trazos en el mapa), CAMINO (grava; una línea), CALZADA (adoquín; dos líneas con el papel dentro) y CALZADA
+  IMPERIAL (losas con juntas; ancha, con su piedra y puntos en medio). En 3D cada uno pinta su suelo y no salen árboles
+  encima. Tocar un camino lo elige para cambiarle el tipo o quitarlo; todo se deshace y se guarda con el mapa (y viaja a
+  la cuenta). Las calles de las ciudades van en tierra y las plazas en adoquín, con la misma máscara.
+- **Los caminos acortan los viajes:** cada paso por un camino cuesta menos (sendero ×0,85, camino ×0,75, calzada ×0,65,
+  imperial ×0,55), así que las rutas de Viajes que van por ellos salen más rápidas.
+
 ## 0.11.0
 
 - **Ciudades por tamaño, generadas solas.** Aldeas, pueblos, ciudades, capitales y puertos tienen un deslizador de

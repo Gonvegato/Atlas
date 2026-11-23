@@ -32,6 +32,12 @@ var routes: Array = []
 var show_route: bool = false
 ## Contorno que se está dibujando (uv).
 var outline: Array = []
+## Caminos dibujados (del motor), el elegido y el que se está dibujando.
+var roads: Array = []
+var selected_road: int = -1
+var road_draft: Array = []
+var road_draft_kind: String = "camino"
+var map_px: Vector2 = Vector2(2048, 2048)
 var selected_place: int = -1
 var show_place_names: bool = true
 var show_realm_names: bool = true
@@ -84,6 +90,7 @@ func _draw() -> void:
 	# Primero se decide qué rótulos de lugares caben (son lo más importante); luego reinos y regiones buscan hueco
 	# sin pisarlos y se pintan debajo.
 	var layout: Array = _layout_places()
+	_draw_roads()
 	_draw_towns()
 	_draw_routes()
 	if show_area_names:
@@ -270,6 +277,57 @@ func ui_scale() -> float:
 	return clampf(0.5 + 0.5 * map_zoom, 0.6, 1.25)
 
 ## [lugar, posición en pantalla, ¿lleva nombre?]; deja en _taken los símbolos y nombres que se pintarán.
+## Caminos como en un mapa grabado: sendero a trazos, camino de una línea, calzada de dos líneas con el papel
+## dentro, calzada imperial ancha con su piedra y una línea de puntos en medio.
+func _draw_roads() -> void:
+	var spp: float = map_screen_size.x / maxf(map_px.x, 1.0)
+	for r in roads:
+		_draw_road(r["points"], str(r["kind"]), spp, int(r["id"]) == selected_road)
+	if road_draft.size() >= 2:
+		_draw_road(road_draft, road_draft_kind, spp, false)
+
+func _draw_road(pts_uv: Array, kind: String, spp: float, selected: bool) -> void:
+	var line := PackedVector2Array()
+	for q in pts_uv:
+		line.append(uv_to_screen(Vector2(q)))
+	if line.size() < 2:
+		return
+	var w: float = float(Catalogo.tipo_camino(kind)[2]) * map_px.x / 2048.0 * spp
+	if selected:
+		draw_polyline(line, Color(Estilo.ACENTO, 0.35), maxf(w, 3.0) + 10.0, true)
+	var brown := Color(0.42, 0.31, 0.20)
+	match kind:
+		"sendero":
+			_dashed_poly(line, Color(brown, 0.9), maxf(w * 0.6, 1.3), maxf(w * 2.2, 5.0))
+		"camino":
+			draw_polyline(line, Color(brown, 0.85), maxf(w * 0.7, 1.6), true)
+		"calzada":
+			draw_polyline(line, Color(ink, 0.85), maxf(w, 3.2), true)
+			draw_polyline(line, paper, maxf(w - 2.0, 1.4), true)
+		_:
+			draw_polyline(line, ink, maxf(w + 1.0, 4.5), true)
+			draw_polyline(line, Color(0.80, 0.72, 0.58), maxf(w - 1.5, 2.6), true)
+			_dashed_poly(line, Color(ink, 0.7), 1.0, maxf(w * 0.8, 3.0))
+
+## Una polilínea a trazos con el trazo continuo de un tramo al siguiente.
+func _dashed_poly(line: PackedVector2Array, col: Color, w: float, dash: float) -> void:
+	var on: bool = true
+	var left: float = dash
+	for i in range(line.size() - 1):
+		var a: Vector2 = line[i]
+		var b: Vector2 = line[i + 1]
+		var seg: float = a.distance_to(b)
+		var t: float = 0.0
+		while t < seg:
+			var step: float = minf(left, seg - t)
+			if on:
+				draw_line(a.lerp(b, t / seg), a.lerp(b, (t + step) / seg), col, w, true)
+			t += step
+			left -= step
+			if left <= 0.0:
+				on = not on
+				left = dash if on else dash * 0.8
+
 ## Px de pantalla que mide una casa con el zoom actual.
 func town_unit_px() -> float:
 	return TOWN_UNIT * maxf(map_screen_size.x, map_screen_size.y)

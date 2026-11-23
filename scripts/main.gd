@@ -78,6 +78,19 @@ var current_biome: int = 2
 var current_realm: int = -1
 var realm_erase: bool = false
 var place_kind: String = "ciudad"
+## Lugares: "lugares" (tocar pone uno) o "caminos" (el lápiz dibuja un camino).
+var lugares_mode: String = "lugares"
+var road_kind: String = "camino"
+var selected_road: int = -1
+var road_pts: Array = []
+var _road_last: Vector2 = Vector2.ZERO
+var lugares_mode_chips: Array[Button] = []
+var road_kind_chips: Array[Button] = []
+var places_box: VBoxContainer
+var roads_box: VBoxContainer
+var road_editor: Control
+var lbl_road_desc: Label
+var lbl_road_count: Label
 var area_kind: String = "bosque"
 var current_area: int = -1
 var area_erase: bool = false
@@ -577,6 +590,7 @@ func _connect_signals() -> void:
 				_rebuild_3d.call_deferred()
 	)
 	engine.places_changed.connect(_on_places_changed)
+	engine.roads_changed.connect(_on_roads_changed)
 	engine.realm_centroids_changed.connect(func(c: Dictionary):
 		_raw_centroids = c
 		overlay.centroids = _realm_aggregate(c)
@@ -640,6 +654,14 @@ func _on_stroke_started(pos: Vector2, pressure: float) -> void:
 			_stroke_kind = "paint"
 			engine.begin_stroke("realm", 0 if realm_erase else current_realm, uv)
 		"lugares":
+			if lugares_mode == "caminos":
+				_stroke_kind = "road"
+				road_pts = [uv.clamp(Vector2.ZERO, Vector2.ONE)]
+				_road_last = pos
+				overlay.road_draft = road_pts
+				overlay.road_draft_kind = road_kind
+				overlay.queue_redraw()
+				return
 			_place_down(pos, uv)
 			return
 		"viajes":
@@ -667,6 +689,11 @@ func _on_stroke_moved(pos: Vector2, pressure: float) -> void:
 				outline_pts.append(ouv)
 				_stroke_bounds = _stroke_bounds.expand(ouv)
 				_outline_last = pos
+				overlay.queue_redraw()
+		"road":
+			if pos.distance_to(_road_last) >= 4.0:
+				road_pts.append(_pos_to_uv(pos).clamp(Vector2.ZERO, Vector2.ONE))
+				_road_last = pos
 				overlay.queue_redraw()
 		"paint":
 			var uv: Vector2 = _pos_to_uv(pos)
@@ -706,6 +733,26 @@ func _on_stroke_ended() -> void:
 		"place":
 			if _drag_place > 0 and _drag_moved:
 				engine.commit_place_move(_drag_before)
+		"road":
+			var pts: Array = road_pts.duplicate()
+			road_pts = []
+			overlay.road_draft = []
+			var map_px: Vector2 = Vector2(engine.map_size)
+			var len_px: float = 0.0
+			for i in range(pts.size() - 1):
+				len_px += (Vector2(pts[i + 1]) * map_px).distance_to(Vector2(pts[i]) * map_px)
+			# Un toque (o un trazo mínimo) elige el camino que haya debajo; un trazo lo dibuja.
+			var screen_per_px: float = map_canvas.size.x * map_zoom / map_px.x
+			if len_px * screen_per_px < 12.0:
+				var hit: int = engine.road_at(Vector2(pts[0]), 14.0 / maxf(screen_per_px, 0.0001))
+				_select_road(hit)
+			else:
+				var simple: Array = _simplify(pts, 0.6 / maxf(map_px.x, map_px.y))
+				var id: int = engine.add_road(road_kind, simple)
+				_select_road(-1)
+				if id > 0:
+					_toast("%s de %s." % [str(Catalogo.tipo_camino(road_kind)[1]).capitalize(), _fmt_len(len_px)])
+			overlay.queue_redraw()
 	_stroke_kind = ""
 	_drag_place = -1
 	_drag_moved = false
@@ -936,6 +983,12 @@ func _rebuild_3d() -> void:
 	var long_side: float = float(maxi(engine.map_size.x, engine.map_size.y))
 	var world := Vector2(engine.map_size) / long_side * 12.0
 	var hs: float = 2.6 * relief_mult
+	if _world3d_dirty or _places3d_dirty:
+		# Calles, plazas y caminos: antes que la vegetación (que no planta encima) y que los edificios.
+		places3d.build_mask(engine.places, engine.roads, engine.height.mirror, world)
+		mat_3d.set_shader_parameter("has_roads", places3d.road_count > 0)
+		if places3d.road_count > 0:
+			mat_3d.set_shader_parameter("road_tex", ImageTexture.create_from_image(places3d.road_img))
 	if _world3d_dirty:
 		_world3d_dirty = false
 		var n: int = 0
@@ -945,16 +998,13 @@ func _rebuild_3d() -> void:
 			for p in engine.places:
 				var puv: Vector2 = p["uv"]
 				exclude.append(Vector3(puv.x, puv.y, places3d.radius_uv_place(p, world)))
-			n = vegetation.build(engine.biome.mirror, engine.height.mirror, sea_level, world, hs, engine.world_seed, exclude)
+			n = vegetation.build(engine.biome.mirror, engine.height.mirror, sea_level, world, hs, engine.world_seed, exclude, places3d.road_img)
 		else:
 			vegetation.clear()
 		lbl_trees.text = "%s PLANTAS" % Estilo.miles(n)
 	if _places3d_dirty:
 		_places3d_dirty = false
 		_place_label_pos = places3d.build(engine.places, engine.height.mirror, engine.realm.mirror, engine.realms, sea_level, world, hs)
-		mat_3d.set_shader_parameter("has_roads", places3d.road_count > 0)
-		if places3d.road_count > 0:
-			mat_3d.set_shader_parameter("road_tex", ImageTexture.create_from_image(places3d.road_img))
 	_refresh_labels_3d()
 
 func _uv_to_3d(uv: Vector2, lift: float) -> Vector3:
@@ -995,7 +1045,7 @@ func _update_hint() -> void:
 		return
 	match section:
 		"lugares":
-			lbl_hint.text = "TOCA PARA PONER · ARRASTRA PARA MOVER"
+			lbl_hint.text = "LÁPIZ DIBUJA EL CAMINO · TOCA UNO PARA CAMBIARLO" if lugares_mode == "caminos" else "TOCA PARA PONER · ARRASTRA PARA MOVER"
 		"viajes":
 			lbl_hint.text = "TOCA PARA AÑADIR ETAPAS · LOS LUGARES ATRAEN"
 		"mundo":
@@ -1128,6 +1178,8 @@ func _select_section(id: String) -> void:
 	if id == "mundo":
 		_refresh_maps_list()
 		_refresh_cuenta(false)
+	if id == "lugares":
+		_refresh_roads_ui()
 	mat_2d.set_shader_parameter("show_area_edges", id == "regiones")
 	_refresh_brush_rows()
 	_update_hint()
@@ -2043,19 +2095,27 @@ func _refresh_area_editor() -> void:
 func _build_section_lugares(col: Control) -> void:
 	var v := _section_box(col, "lugares")
 	lbl_place_count = _title(v, "Lugares", "0 LUGARES")
+	lugares_mode_chips = _chips(v, ["LUGARES", "CAMINOS"], func(i: int):
+		_set_lugares_mode("caminos" if i == 1 else "lugares")
+	, 11)
+	places_box = VBoxContainer.new()
+	places_box.add_theme_constant_override("separation", 10)
+	v.add_child(places_box)
+	_build_roads_box(v)
+	var pv: VBoxContainer = places_box
 	var labels: Array = []
 	for t in Catalogo.TIPOS_LUGAR:
 		labels.append(t[1])
-	place_kind_chips = _chips(v, labels, func(i: int):
+	place_kind_chips = _chips(pv, labels, func(i: int):
 		var kind: String = Catalogo.TIPOS_LUGAR[i][0]
 		if selected_place > 0:
 			engine.update_place(selected_place, "kind", kind)
 		place_kind = kind
 		_refresh_place_editor()
 	, 11)
-	_note(v, "Toca el mapa para poner uno del tipo elegido; toca uno para editarlo y arrástralo para moverlo. Los nombres pequeños aparecen al acercarte.")
+	_note(pv, "Toca el mapa para poner uno del tipo elegido; toca uno para editarlo y arrástralo para moverlo. Los nombres pequeños aparecen al acercarte.")
 	var opts := HFlowContainer.new()
-	v.add_child(opts)
+	pv.add_child(opts)
 	chk_names = _toggle_chip(opts, "NOMBRES", true, func(on: bool):
 		overlay.show_place_names = on
 		overlay.queue_redraw()
@@ -2063,7 +2123,7 @@ func _build_section_lugares(col: Control) -> void:
 
 	place_editor = VBoxContainer.new()
 	place_editor.add_theme_constant_override("separation", 10)
-	v.add_child(place_editor)
+	pv.add_child(place_editor)
 	place_editor.add_child(Estilo.filete(2))
 	place_editor.add_child(Estilo.etiqueta("NOMBRE", 11, Estilo.GRIS))
 	place_name_edit = _line_edit(place_editor, func(t: String):
@@ -2097,6 +2157,111 @@ func _build_section_lugares(col: Control) -> void:
 	)
 	var b_done := _accent_link(row, "LISTO", func(): _select_place(-1))
 	b_done.add_theme_color_override("font_color", Estilo.TINTA)
+
+func _build_roads_box(v: Control) -> void:
+	roads_box = VBoxContainer.new()
+	roads_box.add_theme_constant_override("separation", 10)
+	roads_box.visible = false
+	v.add_child(roads_box)
+	lbl_road_count = _caption("TIPO DE CAMINO")
+	roads_box.add_child(lbl_road_count)
+	var names: Array = []
+	for t in Catalogo.TIPOS_CAMINO:
+		names.append(t[1])
+	road_kind_chips = _chips(roads_box, names, func(i: int):
+		road_kind = str(Catalogo.TIPOS_CAMINO[i][0])
+		if selected_road > 0:
+			engine.set_road_kind(selected_road, road_kind)
+		_refresh_roads_ui()
+	, 11)
+	lbl_road_desc = _note(roads_box, "")
+	_note(roads_box, "Dibuja el camino con el lápiz, de un tirón. Toca uno para cambiarle el tipo o quitarlo. Por un camino se viaja más deprisa (Viajes lo tiene en cuenta).")
+	road_editor = HBoxContainer.new()
+	road_editor.add_theme_constant_override("separation", 16)
+	roads_box.add_child(road_editor)
+	var b_del := _accent_button(road_editor, "QUITAR ESTE CAMINO")
+	b_del.pressed.connect(func():
+		engine.delete_road(selected_road)
+		_select_road(-1)
+	)
+	var b_done := _accent_link(road_editor, "LISTO", func(): _select_road(-1))
+	b_done.add_theme_color_override("font_color", Estilo.TINTA)
+
+func _set_lugares_mode(mode: String) -> void:
+	lugares_mode = mode
+	if mode == "caminos":
+		_select_place(-1)
+	else:
+		_select_road(-1)
+	_refresh_roads_ui()
+	_update_hint()
+
+func _select_road(id: int) -> void:
+	selected_road = id
+	overlay.selected_road = id
+	var r: Dictionary = engine.road_by_id(id)
+	if not r.is_empty():
+		road_kind = str(r["kind"])
+	overlay.queue_redraw()
+	_refresh_roads_ui()
+
+func _refresh_roads_ui() -> void:
+	if places_box == null:
+		return
+	var roads_on: bool = lugares_mode == "caminos"
+	places_box.visible = not roads_on
+	roads_box.visible = roads_on
+	for i in lugares_mode_chips.size():
+		_paint_filter(lugares_mode_chips[i], (i == 1) == roads_on)
+	for i in road_kind_chips.size():
+		_paint_filter(road_kind_chips[i], str(Catalogo.TIPOS_CAMINO[i][0]) == road_kind)
+	lbl_road_desc.text = str(Catalogo.tipo_camino(road_kind)[5])
+	road_editor.visible = selected_road > 0 and not engine.road_by_id(selected_road).is_empty()
+	var n: int = engine.roads.size()
+	lbl_road_count.text = "TIPO DE CAMINO · %d %s" % [n, "CAMINO" if n == 1 else "CAMINOS"]
+
+## Una longitud en píxeles del mapa, en km si el viaje está calibrado.
+func _fmt_len(px: float) -> String:
+	var km_pp: float = float(engine.travel.get("km_per_px", 0.0))
+	return (Estilo.miles(int(round(px * km_pp))) + " km") if km_pp > 0.0 else (Estilo.miles(int(round(px))) + " px")
+
+func _on_roads_changed() -> void:
+	overlay.roads = engine.roads
+	overlay.map_px = Vector2(engine.map_size)
+	if val_route_dist != null:
+		_refresh_route()
+	if engine.road_by_id(selected_road).is_empty():
+		selected_road = -1
+		overlay.selected_road = -1
+	_places3d_dirty = true
+	_world3d_dirty = true
+	if input_ctrl.is_3d_mode:
+		_rebuild_3d.call_deferred()
+	overlay.queue_redraw()
+	_refresh_roads_ui()
+
+## Quita puntos casi alineados (Ramer-Douglas-Peucker) con tolerancia [eps] en uv.
+func _simplify(pts: Array, eps: float) -> Array:
+	if pts.size() < 3:
+		return pts.duplicate()
+	var a: Vector2 = pts[0]
+	var b: Vector2 = pts[pts.size() - 1]
+	var best: float = -1.0
+	var idx: int = -1
+	for i in range(1, pts.size() - 1):
+		var p: Vector2 = pts[i]
+		var ab: Vector2 = b - a
+		var t: float = clampf((p - a).dot(ab) / maxf(ab.length_squared(), 1e-12), 0.0, 1.0)
+		var d: float = p.distance_to(a + ab * t)
+		if d > best:
+			best = d
+			idx = i
+	if best <= eps:
+		return [a, b]
+	var left: Array = _simplify(pts.slice(0, idx + 1), eps)
+	var right: Array = _simplify(pts.slice(idx), eps)
+	left.pop_back()
+	return left + right
 
 # ---------------------------------------------------------------- viajes
 
