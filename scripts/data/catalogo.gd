@@ -164,7 +164,33 @@ const TIPOS_REGION = [
 	["golfo", "GOLFO", true, 0],
 	["estrecho", "ESTRECHO", true, 0],
 	["rio", "RÍO", true, 0],
+	["conflicto", "ZONA EN CONFLICTO", false, 0],
+	["frente", "FRENTE", false, 0],
+	["asedio", "ASEDIO", false, 0],
+	["tierra_nadie", "TIERRA DE NADIE", false, 0],
 ]
+
+## Regiones que se dibujan como zona en conflicto (rayado rojo, borde rojo siempre visible, espadas en el nombre).
+const REGIONES_CONFLICTO = ["conflicto", "frente", "asedio", "tierra_nadie"]
+
+static func es_conflicto(kind: String) -> bool:
+	return kind in REGIONES_CONFLICTO
+
+## Relaciones entre reinos: [id, nombre, color, qué dibuja en la frontera]
+const RELACIONES = [
+	["", "SIN RELACIÓN", Color(0, 0, 0, 0), ""],
+	["alianza", "ALIANZA", Color("C9A227"), "Frontera dorada continua"],
+	["comercio", "COMERCIO", Color("2E7F7A"), "Frontera verde azulada a trazos"],
+	["tregua", "TREGUA", Color("F2EEE6"), "Frontera blanca a trazos"],
+	["guerra", "GUERRA", Color("B3121B"), "Frontera roja rayada"],
+	["vasallaje", "VASALLAJE", Color("6B3F7A"), "Frontera morada a puntos"],
+]
+
+static func relacion_idx(kind: String) -> int:
+	for i in RELACIONES.size():
+		if RELACIONES[i][0] == kind:
+			return i
+	return 0
 
 static func tipo_region(id: String) -> Array:
 	for t in TIPOS_REGION:

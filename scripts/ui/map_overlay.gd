@@ -22,6 +22,12 @@ var areas: Array = []
 var area_shapes: Dictionary = {}
 var show_area_names: bool = true
 var water_ink: Color = Color(0.20, 0.32, 0.46)
+var war_ink: Color = Color(0.70, 0.08, 0.10)
+## Ruta que se está midiendo (uv) y su texto; rutas guardadas.
+var route: Array = []
+var route_label: String = ""
+var routes: Array = []
+var show_route: bool = false
 var selected_place: int = -1
 var show_place_names: bool = true
 var show_realm_names: bool = true
@@ -70,11 +76,13 @@ func _draw() -> void:
 	# Primero se decide qué rótulos de lugares caben (son lo más importante); luego reinos y regiones buscan hueco
 	# sin pisarlos y se pintan debajo.
 	var layout: Array = _layout_places()
+	_draw_routes()
 	if show_area_names:
 		_draw_area_names()
 	if show_realm_names:
 		_draw_realm_names()
 	_draw_places(layout)
+	_draw_route_label()
 	if ring_visible:
 		draw_arc(ring_center, ring_radius + 1.5, 0.0, TAU, 72, Estilo.PAPEL, 2.0, true)
 		draw_arc(ring_center, ring_radius, 0.0, TAU, 72, Estilo.TINTA, 1.5, true)
@@ -103,14 +111,67 @@ func _draw_area_names() -> void:
 		var fs: int = int(clampf(length_px * 0.8 / maxf(w10, 1.0) * 10.0, 10.0, 30.0))
 		var t: Array = Catalogo.tipo_region(str(a["kind"]))
 		var water: bool = t[2]
-		var col: Color = water_ink if water else ink
+		var conflict: bool = Catalogo.es_conflicto(str(a["kind"]))
+		var col: Color = war_ink if conflict else (water_ink if water else ink)
 		var tw: float = _area_font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		# Si aun así no cabe, se dobla en recto (casi horizontal) para que se lea.
 		var p: Vector2 = uv_to_screen(uv)
 		draw_set_transform(p, angle if absf(angle) < 1.2 else 0.0, Vector2.ONE)
 		var at := Vector2(-tw * 0.5, fs * 0.35)
-		Estilo.placa(self, _area_font, at, txt, fs, Color(paper, 0.68), col, 0.0, col, Vector2(7, 3))
+		if conflict:
+			Estilo.placa(self, _area_font, at, txt, fs, Color(paper, 0.9), col, 1.5, col, Vector2(7, 3))
+			_draw_swords(at + Vector2(-fs * 0.9, -fs * 0.35), fs * 0.5, col)
+		else:
+			Estilo.placa(self, _area_font, at, txt, fs, Color(paper, 0.68), col, 0.0, col, Vector2(7, 3))
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func _draw_swords(c: Vector2, r: float, col: Color) -> void:
+	draw_line(c + Vector2(-r, -r), c + Vector2(r, r), col, 2.0, true)
+	draw_line(c + Vector2(r, -r), c + Vector2(-r, r), col, 2.0, true)
+	draw_line(c + Vector2(-r * 0.9, r * 0.4), c + Vector2(-r * 0.4, r * 0.9), col, 2.2, true)
+	draw_line(c + Vector2(r * 0.9, r * 0.4), c + Vector2(r * 0.4, r * 0.9), col, 2.2, true)
+
+# ---------------------------------------------------------------- rutas
+
+func _dashed(a: Vector2, b: Vector2, col: Color, w: float, dash: float) -> void:
+	var len: float = a.distance_to(b)
+	if len < 0.5:
+		return
+	var n: int = int(len / dash)
+	for i in range(0, n + 1, 2):
+		var t0: float = float(i) * dash / len
+		var t1: float = minf(float(i + 1) * dash / len, 1.0)
+		if t0 >= 1.0:
+			break
+		draw_line(a.lerp(b, t0), a.lerp(b, t1), col, w, true)
+
+func _draw_routes() -> void:
+	# Las guardadas, finas y siempre; la que se mide, gruesa y solo en Viajes.
+	for r in routes:
+		var pts: Array = r["points"]
+		for i in range(pts.size() - 1):
+			_dashed(uv_to_screen(pts[i]), uv_to_screen(pts[i + 1]), Color(ink, 0.65), 1.6, 5.0)
+	if not show_route or route.is_empty():
+		return
+	for i in range(route.size() - 1):
+		var a: Vector2 = uv_to_screen(route[i])
+		var b: Vector2 = uv_to_screen(route[i + 1])
+		draw_line(a, b, Color(paper, 0.85), 5.0, true)
+		_dashed(a, b, Estilo.ACENTO, 3.0, 9.0)
+	for i in route.size():
+		var p: Vector2 = uv_to_screen(route[i])
+		draw_circle(p, 6.0, paper)
+		draw_arc(p, 6.0, 0.0, TAU, 20, Estilo.ACENTO, 2.5, true)
+
+## El tiempo de la ruta, encima de todo (se pinta al final), junto al punto medio del último tramo.
+func _draw_route_label() -> void:
+	if not show_route or route.size() < 2 or route_label == "":
+		return
+	var a: Vector2 = uv_to_screen(route[route.size() - 2])
+	var b: Vector2 = uv_to_screen(route[route.size() - 1])
+	var f: Font = Estilo.versalitas()
+	var m: Vector2 = (a + b) * 0.5
+	Estilo.placa(self, f, m + Vector2(10, 22), route_label, 13, Estilo.TINTA, Estilo.ACENTO, 2.0, Estilo.PAPEL, Vector2(6, 4))
 
 # ---------------------------------------------------------------- reinos
 

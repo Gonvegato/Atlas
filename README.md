@@ -2,6 +2,41 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.8.0
+
+- **Se guarda solo**: unos segundos después de cada cambio, al salir de la app y antes de abrir otro mapa o crear uno
+  nuevo. Al abrir ATLAS vuelve el último mapa.
+  - Cada mapa va en su carpeta de `user://mapas/` (relieve y capas comprimidas con zstd, en otro hilo para no congelar la
+    app; se escribe en `.tmp` y se cambia al final, así que un cierre a medias no rompe el mapa).
+  - Mundo → «Este mapa» (nombre, guardar ahora, duplicar) y «Mis mapas» (abrir y borrar, con miniatura del relieve).
+- **Relaciones entre reinos, en sus fronteras comunes**: alianza (dorada), comercio (verde azulado a trazos), tregua (blanca a
+  trazos), guerra (rayada en rojo y negro) y vasallaje (morada). Se eligen en el editor de cada reino, con leyenda, y se deshacen.
+- **Zonas en conflicto**: cuatro tipos de región nuevos (zona en conflicto, frente, asedio, tierra de nadie). Llevan rayado rojo,
+  borde rojo siempre visible y el nombre en rojo con espadas cruzadas.
+- **Viajes** (sección nueva):
+  - Tocas etapas en el mapa (los lugares atraen la ruta) y da distancia y tiempo a pie, a caballo, en carro o en barco.
+  - Cuenta las cuestas, la alta montaña y el agua (y al revés en barco).
+  - Calibrado: marcas un viaje que conozcas y dices cuánto dura («3 días a pie»); opcionalmente, cuántos km mide.
+  - Las rutas se guardan con el mapa.
+- **Modo vertical**: la app gira con el dispositivo. En vertical el panel va abajo a lo ancho, la interfaz se calcula sobre
+  800×1280 (el texto mide lo mismo) y la cabecera se compacta.
+- **Mapas más grandes**: nuevos tamaños «Gigante» (6.144 px) y «Colosal» (8.192 px), y ampliar lienzo hasta 8.192 px. Medido
+  aquí, un mapa de 8.192 tarda ~6 s en crearse, ~2,5 s en guardarse y ocupa ~36 MB.
+
+
+## 0.7.0
+
+- El 3D se dibuja a la resolución real de la pantalla (antes a la mitad y estirado en tablets): era el «titileo» al alejarse.
+  MSAA 4× con protector (si una entrada en 3D con MSAA se cuelga, el siguiente arranque lo apaga), filtrado anisótropo y malla
+  de hasta 768 divisiones.
+- Mapa 2D sin parpadeo al alejarse: el sombreado mide la pendiente a la escala del zoom y las curvas de nivel se desvanecen
+  cuando se juntan.
+- Rótulos 2D que se adaptan al zoom, con prioridad y sin solapes (cada nombre prueba cuatro posiciones). Los reinos llevan una
+  pestaña de su color, también en 3D.
+- Panel lateral táctil: el arrastre vertical desplaza siempre (también empezando sobre un botón) y ya no mueve los deslizadores.
+- Cañón con cauce de agua, fondo seco y paredes escalonadas; estratos de colores en las paredes 3D y hachures a tinta en 2D.
+- 20 texturas de suelo a 1.024 px (4 nuevas de Poly Haven: hierba alpina, hierba rala, guijarros y pared de roca).
+
 ## 0.6.0
 
 - **Suelos con textura en el 3D**: 16 texturas CC0 de [Poly Haven](https://polyhaven.com) en un `Texture2DArray` (comprimido

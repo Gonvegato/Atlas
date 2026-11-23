@@ -16,8 +16,15 @@ signal areas_changed()
 signal area_shapes_changed(shapes: Dictionary)
 ## Una capa ha cambiado (trazo, deshacer, ampliar…): "height", "biome", "realm" o "area".
 signal layer_changed(layer_name: String)
+## Guardado terminado (ok) o fallido.
+signal saved(ok: bool)
+## El mundo ha cambiado desde el último guardado (para el autoguardado).
+signal dirty_changed()
 
-const MAX_SIDE: int = 4096
+## Lado máximo: 8.192 px (Adreno 7xx admite texturas de 16.384). A ese tamaño son ~1 GB entre GPU y CPU.
+const MAX_SIDE: int = 8192
+const MAPS_DIR: String = "user://mapas"
+const SAVE_VERSION: int = 1
 const MAX_HISTORY: int = 40
 const MAX_HISTORY_BYTES: int = 96 * 1024 * 1024
 const STATS_SIDE: int = 128
@@ -37,7 +44,18 @@ var realms: Array = []
 var places: Array = []
 ## Regiones con nombre (bosques, montes, mares…): {id, name, kind, biome (0 = no pinta bioma)}
 var areas: Array = []
+## Relaciones entre reinos: {"a": id, "b": id (a < b), "kind": "alianza" | "comercio" | "tregua" | "guerra" | "vasallaje"}
+var relations: Array = []
+## Calibrado de viajes: horas por píxel de mapa ponderado (0 = sin calibrar) y km por píxel (0 = sin escala).
+var travel: Dictionary = {"hours_per_px": 0.0, "km_per_px": 0.0, "sample": ""}
+## Rutas guardadas: {"id", "name", "points": [Vector2 uv...], "mode": "pie"|"caballo"|"carro"|"barco"}
+var routes: Array = []
 var world_ready: bool = false
+## Mapa abierto: carpeta en user://mapas y nombre.
+var map_id: String = ""
+var map_name: String = "Mi mundo"
+var _saving: bool = false
+var _save_again: bool = false
 
 var height: PaintLayer
 var biome: PaintLayer
@@ -86,9 +104,16 @@ func _ready() -> void:
 	area.name = "Area"
 	for l in [height, biome, realm, area]:
 		add_child(l)
-	# Nada de leer texturas durante _ready(): el mundo se crea y se lee unos fotogramas después.
+	# Nada de leer texturas durante _ready(): el mundo se crea (o se abre el último) unos fotogramas después.
 	await get_tree().create_timer(0.25).timeout
-	await create_world(map_size, world_seed, 0)
+	var cfg := ConfigFile.new()
+	cfg.load(CONFIG_PATH)
+	var last: String = str(cfg.get_value("mapas", "ultimo", ""))
+	var opened: bool = false
+	if last != "" and FileAccess.file_exists(MAPS_DIR + "/" + last + "/mundo.bin"):
+		opened = await load_map(last)
+	if not opened:
+		await create_world(map_size, world_seed, 0)
 	get_tree().create_timer(3.0).timeout.connect(_boot_guard_done)
 
 func _mat(path: String) -> ShaderMaterial:
@@ -163,8 +188,13 @@ func create_world(size: Vector2i, seed: int, mode: int) -> void:
 	realms.clear()
 	places.clear()
 	areas.clear()
+	relations.clear()
+	routes.clear()
+	travel = {"hours_per_px": 0.0, "km_per_px": 0.0, "sample": ""}
 	_next_place_id = 1
 	stroke_count = 0
+	map_id = _new_map_id()
+	map_name = "Mundo nº %04d" % seed
 	world_ready = true
 	layers_ready.emit(map_size)
 	_emit_history()
@@ -209,6 +239,11 @@ func extend(dir: String, frac: float = 0.5) -> bool:
 	for p in places:
 		var uv: Vector2 = p["uv"]
 		p["uv"] = (uv * Vector2(old_size) + Vector2(offset)) / Vector2(new_size)
+	for r in routes:
+		var pts: Array = r["points"]
+		for i in pts.size():
+			pts[i] = (Vector2(pts[i]) * Vector2(old_size) + Vector2(offset)) / Vector2(new_size)
+	# La escala (km y horas por píxel) no cambia: los píxeles viejos miden lo mismo.
 	undo_stack.clear()
 	redo_stack.clear()
 	world_ready = true
@@ -400,6 +435,7 @@ func _push(e: Dictionary) -> void:
 
 func _emit_history() -> void:
 	history_changed.emit(not undo_stack.is_empty(), not redo_stack.is_empty())
+	dirty_changed.emit()
 
 func undo() -> void:
 	if undo_stack.is_empty() or not world_ready:
@@ -446,7 +482,9 @@ func _reversed(a: Array) -> Array:
 	return r
 
 func _meta_snapshot() -> Dictionary:
-	return {"realms": realms.duplicate(true), "places": places.duplicate(true), "areas": areas.duplicate(true), "next_place": _next_place_id}
+	return {"realms": realms.duplicate(true), "places": places.duplicate(true), "areas": areas.duplicate(true),
+		"relations": relations.duplicate(true), "travel": travel.duplicate(true), "routes": routes.duplicate(true),
+		"next_place": _next_place_id}
 
 func _set_meta(snap: Dictionary) -> void:
 	var rs: Array = snap["realms"]
@@ -455,6 +493,12 @@ func _set_meta(snap: Dictionary) -> void:
 	places = ps.duplicate(true)
 	var ars: Array = snap.get("areas", [])
 	areas = ars.duplicate(true)
+	var rels: Array = snap.get("relations", [])
+	relations = rels.duplicate(true)
+	var tr: Dictionary = snap.get("travel", {"hours_per_px": 0.0, "km_per_px": 0.0, "sample": ""})
+	travel = tr.duplicate(true)
+	var rts: Array = snap.get("routes", [])
+	routes = rts.duplicate(true)
 	_next_place_id = int(snap["next_place"])
 	realms_changed.emit()
 	places_changed.emit()
@@ -510,6 +554,7 @@ func delete_realm(id: int) -> void:
 	m.set_shader_parameter("to_id", 0)
 	var after_img: Image = await realm.apply_full(m)
 	realms.erase(r)
+	relations = relations.filter(func(x): return int(x["a"]) != id and int(x["b"]) != id)
 	var full := Rect2i(Vector2i.ZERO, map_size)
 	_push({"t": "multi", "items": [
 		{"t": "paint", "layer": "realm", "rect": full, "before": before_img, "after": after_img},
@@ -517,6 +562,276 @@ func delete_realm(id: int) -> void:
 	]})
 	realms_changed.emit()
 	_compute_centroids()
+
+# ---------------------------------------------------------------- relaciones entre reinos
+
+const RELATION_KINDS = ["alianza", "comercio", "tregua", "guerra", "vasallaje"]
+
+func relation(a: int, b: int) -> String:
+	var lo: int = mini(a, b)
+	var hi: int = maxi(a, b)
+	for r in relations:
+		if int(r["a"]) == lo and int(r["b"]) == hi:
+			return str(r["kind"])
+	return ""
+
+## [kind] vacío quita la relación. Un paso del historial.
+func set_relation(a: int, b: int, kind: String) -> void:
+	if a == b or relation(a, b) == kind:
+		return
+	var before: Dictionary = _meta_snapshot()
+	var lo: int = mini(a, b)
+	var hi: int = maxi(a, b)
+	relations = relations.filter(func(x): return not (int(x["a"]) == lo and int(x["b"]) == hi))
+	if kind != "":
+		relations.append({"a": lo, "b": hi, "kind": kind})
+	_commit_meta(before)
+
+# ---------------------------------------------------------------- viajes
+
+func set_travel(data: Dictionary) -> void:
+	var before: Dictionary = _meta_snapshot()
+	travel = data.duplicate(true)
+	_commit_meta(before)
+
+func add_route(points: Array, mode: String, name: String) -> int:
+	var before: Dictionary = _meta_snapshot()
+	var id: int = 1
+	for r in routes:
+		id = maxi(id, int(r["id"]) + 1)
+	routes.append({"id": id, "name": name, "points": points.duplicate(), "mode": mode})
+	_commit_meta(before)
+	return id
+
+func delete_route(id: int) -> void:
+	var before: Dictionary = _meta_snapshot()
+	routes = routes.filter(func(r): return int(r["id"]) != id)
+	_commit_meta(before)
+
+## Longitud ponderada de una ruta (en píxeles del mapa): cada tramo cuesta más si sube o baja mucho, si va por
+## montaña o si cruza agua yendo por tierra (y al revés en barco). Muestreo cada ~4 px.
+func route_cost(points: Array, mode: String) -> Dictionary:
+	var total_px: float = 0.0
+	var weighted: float = 0.0
+	var water_px: float = 0.0
+	var climb: float = 0.0
+	var by_sea: bool = mode == "barco"
+	for i in range(points.size() - 1):
+		var a: Vector2 = Vector2(points[i]) * Vector2(map_size)
+		var b: Vector2 = Vector2(points[i + 1]) * Vector2(map_size)
+		var seg: float = a.distance_to(b)
+		var n: int = maxi(1, int(seg / 4.0))
+		var prev_h: float = height.sample_mirror(Vector2i(a))
+		for k in n:
+			var p: Vector2 = a.lerp(b, float(k + 1) / float(n))
+			var h: float = height.sample_mirror(Vector2i(p))
+			var step: float = seg / float(n)
+			var cost: float = 1.0
+			var wet: bool = h <= sea_level
+			if wet:
+				water_px += step
+			if by_sea:
+				cost = 1.0 if wet else 6.0
+			else:
+				# Pendiente: cada unidad de altura subida o bajada por píxel encarece el paso.
+				var dh: float = absf(h - prev_h) * 255.0 / maxf(step, 0.001)
+				cost = 1.0 + clampf(dh * 0.6, 0.0, 3.0)
+				# Alta montaña, más lento; el agua (vado, barca) mucho más.
+				cost *= 1.0 + smoothstep(0.25, 0.45, h - sea_level) * 0.8
+				if wet:
+					cost *= 4.0
+				climb += maxf(h - prev_h, 0.0)
+			total_px += step
+			weighted += step * cost
+			prev_h = h
+	return {"px": total_px, "weighted": weighted, "water_px": water_px, "climb": climb}
+
+# ---------------------------------------------------------------- guardar y abrir
+
+func _new_map_id() -> String:
+	var t: Dictionary = Time.get_datetime_dict_from_system()
+	return "%04d%02d%02d-%02d%02d%02d-%03d" % [t["year"], t["month"], t["day"], t["hour"], t["minute"], t["second"], randi() % 1000]
+
+func _remember_map() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(CONFIG_PATH)
+	cfg.set_value("mapas", "ultimo", map_id)
+	cfg.save(CONFIG_PATH)
+
+## Guarda el mapa abierto en user://mapas/<id>/. Las copias de las capas se hacen aquí (rápido) y la compresión y
+## la escritura, en otro hilo. [extra]: lo de la vista (estilo, sol…), que pone main.
+func save_map(extra: Dictionary = {}) -> void:
+	if not world_ready or map_id == "":
+		return
+	if _saving:
+		_save_again = true
+		return
+	_saving = true
+	var dir: String = MAPS_DIR + "/" + map_id
+	DirAccess.make_dir_recursive_absolute(dir)
+	var meta: Dictionary = _meta_snapshot()
+	meta["version"] = SAVE_VERSION
+	meta["name"] = map_name
+	meta["size"] = map_size
+	meta["seed"] = world_seed
+	meta["sea_level"] = sea_level
+	meta["stroke_count"] = stroke_count
+	meta["hdr"] = height.mirror_format == Image.FORMAT_RH
+	meta["saved_at"] = Time.get_unix_time_from_system()
+	meta["extra"] = extra
+	var layers: Array = [["relieve", height.mirror.duplicate()], ["biomas", biome.mirror.duplicate()], ["reinos", realm.mirror.duplicate()], ["regiones", area.mirror.duplicate()]]
+	var thumb: Image = _thumbnail()
+	var task := func() -> bool:
+		var ok: bool = true
+		for l in layers:
+			var img: Image = l[1]
+			var f := FileAccess.open_compressed(dir + "/" + str(l[0]) + ".bin.tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
+			if f == null:
+				ok = false
+				continue
+			f.store_32(img.get_width())
+			f.store_32(img.get_height())
+			f.store_32(img.get_format())
+			f.store_buffer(img.get_data())
+			f.close()
+		var mf := FileAccess.open(dir + "/mundo.bin.tmp", FileAccess.WRITE)
+		if mf == null:
+			return false
+		mf.store_var(meta, false)
+		mf.close()
+		thumb.save_png(dir + "/miniatura.png")
+		if ok:
+			# Se cambia de golpe al terminar: un cierre a medias nunca deja el mapa roto.
+			for n in ["relieve", "biomas", "reinos", "regiones", "mundo"]:
+				DirAccess.rename_absolute(dir + "/" + n + ".bin.tmp", dir + "/" + n + ".bin")
+		return ok
+	var result: Array = [false]
+	var tid: int = WorkerThreadPool.add_task(func(): result[0] = task.call())
+	while not WorkerThreadPool.is_task_completed(tid):
+		await get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(tid)
+	var ok: bool = bool(result[0])
+	_remember_map()
+	_saving = false
+	saved.emit(ok)
+	if _save_again:
+		_save_again = false
+		save_map(extra)
+
+## Miniatura de 256 px del relieve (mar azul, tierra en tonos de altura) para la lista de mapas.
+func _thumbnail() -> Image:
+	var small: Image = _small(height, Image.INTERPOLATE_BILINEAR)
+	small.resize(maxi(small.get_width() * 2, 1), maxi(small.get_height() * 2, 1), Image.INTERPOLATE_BILINEAR)
+	var out := Image.create(small.get_width(), small.get_height(), false, Image.FORMAT_RGB8)
+	var sea_col := Color(0.24, 0.36, 0.50)
+	for y in out.get_height():
+		for x in out.get_width():
+			var h: float = small.get_pixel(x, y).r
+			if h <= sea_level:
+				out.set_pixel(x, y, sea_col.lerp(Color(0.40, 0.55, 0.68), clampf((h - sea_level + 0.15) / 0.15, 0.0, 1.0)))
+			else:
+				var e: float = clampf((h - sea_level) * 2.6, 0.0, 1.0)
+				out.set_pixel(x, y, Color(0.93, 0.89, 0.78).lerp(Color(0.55, 0.50, 0.42), e))
+	return out
+
+static func _read_layer(path: String) -> Image:
+	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
+	if f == null:
+		return null
+	var w: int = f.get_32()
+	var h: int = f.get_32()
+	var fmt: int = f.get_32()
+	var data: PackedByteArray = f.get_buffer(f.get_length())
+	f.close()
+	return Image.create_from_data(w, h, false, fmt, data)
+
+## Abre un mapa guardado. Devuelve false si no se pudo (y deja el mundo como estaba).
+func load_map(id: String) -> bool:
+	var dir: String = MAPS_DIR + "/" + id
+	var mf := FileAccess.open(dir + "/mundo.bin", FileAccess.READ)
+	if mf == null:
+		return false
+	var meta: Variant = mf.get_var(false)
+	mf.close()
+	if typeof(meta) != TYPE_DICTIONARY:
+		return false
+	var m: Dictionary = meta
+	var imgs: Array = []
+	var task := func():
+		for n in ["relieve", "biomas", "reinos", "regiones"]:
+			imgs.append(_read_layer(dir + "/" + n + ".bin"))
+	var tid: int = WorkerThreadPool.add_task(task)
+	while not WorkerThreadPool.is_task_completed(tid):
+		await get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(tid)
+	for im in imgs:
+		if im == null:
+			return false
+	world_ready = false
+	map_size = m["size"]
+	map_id = id
+	map_name = str(m.get("name", "Mi mundo"))
+	world_seed = int(m.get("seed", 42))
+	sea_level = float(m.get("sea_level", 0.5))
+	stroke_count = int(m.get("stroke_count", 0))
+	var layers: Array[PaintLayer] = [height, biome, realm, area]
+	for i in 4:
+		var l: PaintLayer = layers[i]
+		l.setup(map_size, hdr if i == 0 else false)
+		await l.load_image(imgs[i])
+	undo_stack.clear()
+	redo_stack.clear()
+	_set_meta(m)
+	loaded_extra = m.get("extra", {})
+	world_ready = true
+	_remember_map()
+	layers_ready.emit(map_size)
+	_emit_history()
+	_compute_stats()
+	_compute_centroids()
+	_compute_area_shapes()
+	layer_changed.emit("height")
+	layer_changed.emit("biome")
+	map_loaded.emit()
+	return true
+
+## Lo que la vista guardó con el mapa (estilo, sol…), para que main lo aplique al abrirlo.
+var loaded_extra: Dictionary = {}
+signal map_loaded()
+
+## Los mapas guardados, el más reciente primero: [{id, name, size, saved_at}].
+static func list_maps() -> Array:
+	var out: Array = []
+	var d := DirAccess.open(MAPS_DIR)
+	if d == null:
+		return out
+	for id in d.get_directories():
+		var f := FileAccess.open(MAPS_DIR + "/" + id + "/mundo.bin", FileAccess.READ)
+		if f == null:
+			continue
+		var meta: Variant = f.get_var(false)
+		f.close()
+		if typeof(meta) != TYPE_DICTIONARY:
+			continue
+		var m: Dictionary = meta
+		out.append({"id": id, "name": str(m.get("name", id)), "size": m.get("size", Vector2i.ZERO), "saved_at": float(m.get("saved_at", 0.0))})
+	out.sort_custom(func(a, b): return float(a["saved_at"]) > float(b["saved_at"]))
+	return out
+
+static func delete_map_files(id: String) -> void:
+	var dir: String = MAPS_DIR + "/" + id
+	var d := DirAccess.open(dir)
+	if d == null:
+		return
+	for f in d.get_files():
+		d.remove(f)
+	DirAccess.remove_absolute(dir)
+
+## Copia del mapa abierto con otro id y nombre (y pasa a ser el abierto).
+func duplicate_map(new_name: String, extra: Dictionary) -> void:
+	map_id = _new_map_id()
+	map_name = new_name
+	await save_map(extra)
 
 # ---------------------------------------------------------------- regiones con nombre
 

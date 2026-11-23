@@ -63,6 +63,10 @@ const PREFIJOS_REGION = {
 	"golfo": ["Golfo de "],
 	"estrecho": ["Estrecho de "],
 	"rio": ["Río ", "Río "],
+	"conflicto": ["Guerra de ", "Conflicto de ", "Disputa de "],
+	"frente": ["Frente de ", "Línea de "],
+	"asedio": ["Asedio de ", "Cerco de "],
+	"tierra_nadie": ["Tierra de nadie de ", "Marca rota de "],
 }
 
 static func region(tipo: String, rng: RandomNumberGenerator) -> String:

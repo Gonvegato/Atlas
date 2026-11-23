@@ -7,6 +7,10 @@ uniform sampler2D height_tex : filter_linear, repeat_disable;
 uniform sampler2D biome_tex : filter_nearest, repeat_disable;
 uniform sampler2D realm_tex : filter_nearest, repeat_disable;
 uniform sampler2D area_tex : filter_nearest, repeat_disable;
+// Relaciones entre reinos (64×64, r = tipo / 255: 1 alianza, 2 comercio, 3 tregua, 4 guerra, 5 vasallaje).
+uniform sampler2D relation_tex : filter_nearest, repeat_disable;
+// Estilo de cada región (256×1, r = 1 si es zona en conflicto).
+uniform sampler2D area_style : filter_nearest, repeat_disable;
 // Regiones con nombre: su contorno solo se ve al editarlas (sección Regiones).
 uniform bool show_area_edges = false;
 uniform int selected_area = 0;
@@ -459,17 +463,71 @@ void fragment() {
 			if (rid > 0) {
 				vec3 rc = texelFetch(realm_pal, ivec2(rid, 0), 0).rgb;
 				float band = 0.0;
+				int other = 0;
 				float br_px = max(texel_px * 7.0, 3.0);
 				for (int k = 0; k < 8; k++) {
 					float ang = float(k) * 0.7853982;
 					vec2 o = vec2(cos(ang), sin(ang)) * br_px / tex_size;
-					if (id_at(realm_tex, UV + o) != rid) band = 1.0;
+					int n8 = id_at(realm_tex, UV + o);
+					if (n8 != rid) {
+						band = 1.0;
+						other = max(other, n8);
+					}
 				}
 				color = mix(color, rc, 0.13 + band * 0.42);
+				// La relación con el reino vecino, en la banda de la frontera (por los dos lados).
+				if (band > 0.0 && other > 0) {
+					int rel = int(round(texelFetch(relation_tex, ivec2(rid, other), 0).r * 255.0));
+					if (rel > 0) {
+						float diag = fract((FRAGCOORD.x + FRAGCOORD.y) / 9.0);
+						float dash = step(0.45, fract((FRAGCOORD.x - FRAGCOORD.y) / 22.0));
+						float dots = step(0.55, fract(FRAGCOORD.x / 7.0)) * step(0.55, fract(FRAGCOORD.y / 7.0));
+						if (rel == 1) {
+							color = mix(color, vec3(0.79, 0.64, 0.15), 0.85);
+						} else if (rel == 2) {
+							color = mix(color, vec3(0.18, 0.50, 0.48), 0.8 * dash);
+						} else if (rel == 3) {
+							color = mix(color, vec3(0.97, 0.95, 0.90), 0.9 * dash);
+						} else if (rel == 4) {
+							color = mix(color, diag < 0.5 ? vec3(0.70, 0.07, 0.10) : col_ink, 0.85);
+						} else {
+							color = mix(color, vec3(0.42, 0.25, 0.48), 0.85 * max(dots, 0.35));
+						}
+					}
+				}
 			}
 			if (edge && (rid > 0 || nb > 0)) {
 				color = mix(color, col_ink, 0.82);
 			}
+		}
+	}
+
+	// Zonas en conflicto: rayado rojo dentro y borde rojo a trazos, siempre visibles.
+	{
+		int cid = id_at(area_tex, UV);
+		vec2 cp = vec2(max(texel_px * 1.2, 0.75)) / tex_size;
+		bool cedge = false;
+		int cnb = 0;
+		for (int k = 0; k < 4; k++) {
+			vec2 o = k == 0 ? vec2(1.0, 0.0) : (k == 1 ? vec2(-1.0, 0.0) : (k == 2 ? vec2(0.0, 1.0) : vec2(0.0, -1.0)));
+			int n = id_at(area_tex, UV + o * cp);
+			if (n != cid) {
+				cedge = true;
+				cnb = max(cnb, n);
+			}
+		}
+		float cs_here = cid > 0 ? texelFetch(area_style, ivec2(cid, 0), 0).r : 0.0;
+		float cs_nb = cnb > 0 ? texelFetch(area_style, ivec2(cnb, 0), 0).r : 0.0;
+		vec3 war = vec3(0.72, 0.08, 0.10);
+		if (cs_here > 0.5) {
+			// Rayado pegado al mapa (no a la pantalla): no baila al mover.
+			vec2 mp = UV * tex_size / max(texel_px, 0.2);
+			float hatch = 1.0 - smoothstep(0.18, 0.32, abs(fract((mp.x + mp.y) / 10.0) - 0.5));
+			color = mix(color, war, 0.10 + hatch * 0.45);
+		}
+		if (cedge && (cs_here > 0.5 || cs_nb > 0.5)) {
+			float dash = step(0.35, fract((FRAGCOORD.x + FRAGCOORD.y) * 0.06));
+			color = mix(color, war, 0.95 * dash);
 		}
 	}
 

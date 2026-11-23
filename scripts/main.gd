@@ -25,7 +25,9 @@ const Labels3D = preload("res://scripts/ui/labels_3d.gd")
 @onready var cam_pivot: Node3D = $Workspace/View3DContainer/SubViewport3D/CameraPivot
 @onready var cam_3d: Camera3D = $Workspace/View3DContainer/SubViewport3D/CameraPivot/Camera3D
 
-const SECTIONS = [["relieve", "RELIEVE"], ["biomas", "BIOMAS"], ["regiones", "REGIONES"], ["politico", "POLÍTICO"], ["lugares", "LUGARES"], ["mundo", "MUNDO"]]
+const SECTIONS = [["relieve", "RELIEVE"], ["biomas", "BIOMAS"], ["regiones", "REGIONES"], ["politico", "POLÍTICO"], ["lugares", "LUGARES"], ["viajes", "VIAJES"], ["mundo", "MUNDO"]]
+## [id, nombre, velocidad relativa a ir a pie]
+const TRAVEL_MODES = [["pie", "A PIE", 1.0], ["caballo", "A CABALLO", 2.0], ["carro", "EN CARRO", 1.4], ["barco", "EN BARCO", 2.5]]
 
 ## [id, nombre, qué hace]
 const TOOLS = [
@@ -40,7 +42,7 @@ const TOOLS = [
 	["plateau", "MESETA", "Aplana a la altura del punto donde empiezas el trazo."],
 ]
 
-const SIZES = [["PEQUEÑO", 1024], ["MEDIANO", 2048], ["GRANDE", 3072], ["ENORME", 4096]]
+const SIZES = [["PEQUEÑO", 1024], ["MEDIANO", 2048], ["GRANDE", 3072], ["ENORME", 4096], ["GIGANTE", 6144], ["COLOSAL", 8192]]
 const SHAPES = [["CUADRADO", Vector2(1, 1)], ["3:2", Vector2(3, 2)], ["APAISADO 2:1", Vector2(2, 1)], ["VERTICAL 2:3", Vector2(2, 3)]]
 
 const THEMES = [
@@ -134,6 +136,31 @@ var lbl_area_hint: Label
 var lbl_trees: Label
 var density_chips: Array[Button] = []
 var lbl_msaa_note: Label
+# --- relaciones, viajes, mapas guardados y modo vertical
+var relation_box: VBoxContainer
+var route_pts: Array = []
+var route_mode: String = "pie"
+var travel_mode_chips: Array[Button] = []
+var val_route_dist: Label
+var val_route_time: Label
+var val_route_legs: Label
+var lbl_travel_calib: Label
+var calib_amount: LineEdit
+var calib_unit: String = "dias"
+var calib_unit_chips: Array[Button] = []
+var scale_km_edit: LineEdit
+var route_list: VBoxContainer
+var map_name_edit: LineEdit
+var lbl_save_state: Label
+var maps_list: VBoxContainer
+var sea_slider: HSlider
+var sun_slider: HSlider
+var autosave_timer: Timer
+var panel_node: Panel
+var header_name_lbl: Label
+var header_dot_lbl: Label
+var b_fit_btn: Button
+var portrait: bool = false
 
 # --- interfaz
 var btn_mode_3d: Button
@@ -211,6 +238,8 @@ func _ready() -> void:
 	subviewport_3d.anisotropic_filtering_level = Viewport.ANISOTROPY_16X
 	workspace.resized.connect(_fit_3d_viewport)
 	get_viewport().size_changed.connect(_fit_3d_viewport)
+	get_window().size_changed.connect(_apply_layout)
+	_apply_layout()
 	await get_tree().process_frame
 	_center_map()
 	_fit_3d_viewport()
@@ -310,6 +339,65 @@ func _process(delta: float) -> void:
 	elif _pg_state == 0:
 		_pg_vel = 0.0
 
+# ---------------------------------------------------------------- modo vertical
+
+## En vertical el panel pasa abajo (a lo ancho) y el mapa arriba; la interfaz se calcula sobre 800×1280 en vez de
+## 1280×800 para que el texto mida lo mismo que en horizontal.
+func _apply_layout() -> void:
+	var win: Vector2i = get_window().size
+	var now_portrait: bool = win.y > win.x
+	get_tree().root.content_scale_size = Vector2i(800, 1280) if now_portrait else Vector2i(1280, 800)
+	if now_portrait == portrait and panel_node != null and panel_node.has_meta("laid"):
+		return
+	portrait = now_portrait
+	if panel_node == null:
+		return
+	panel_node.set_meta("laid", true)
+	var sb: StyleBoxFlat = Estilo.caja(Estilo.PAPEL)
+	sb.border_color = Estilo.TINTA
+	if portrait:
+		var ph: int = 520
+		panel_node.anchor_left = 0.0
+		panel_node.anchor_right = 1.0
+		panel_node.anchor_top = 1.0
+		panel_node.anchor_bottom = 1.0
+		panel_node.offset_left = 0
+		panel_node.offset_right = 0
+		panel_node.offset_top = -ph
+		panel_node.offset_bottom = 0
+		sb.border_width_top = 3
+		panel_scroll.offset_left = 0
+		panel_scroll.offset_top = 3
+		workspace.offset_right = 0
+		workspace.offset_bottom = -ph
+	else:
+		panel_node.anchor_left = 1.0
+		panel_node.anchor_right = 1.0
+		panel_node.anchor_top = 0.0
+		panel_node.anchor_bottom = 1.0
+		panel_node.offset_left = -PANEL_W
+		panel_node.offset_right = 0
+		panel_node.offset_top = HEADER_H + TABS_H
+		panel_node.offset_bottom = 0
+		sb.border_width_left = 3
+		panel_scroll.offset_left = 3
+		panel_scroll.offset_top = 0
+		workspace.offset_right = -PANEL_W
+		workspace.offset_bottom = 0
+	panel_node.add_theme_stylebox_override("panel", sb)
+	# Cabecera más compacta en vertical.
+	var fs: int = 40 if portrait else 54
+	header_name_lbl.add_theme_font_size_override("font_size", fs)
+	header_dot_lbl.add_theme_font_size_override("font_size", fs)
+	lbl_world.visible = not portrait
+	b_fit_btn.visible = not portrait
+	lbl_hint.visible = not portrait
+	for k in tab_buttons.keys():
+		(tab_buttons[k] as Button).add_theme_font_size_override("font_size", 11 if portrait else 13)
+	_select_section(section)
+	_center_map.call_deferred()
+	_fit_3d_viewport.call_deferred()
+
 ## Píxeles reales de pantalla por unidad de la interfaz (2 en una tablet de 2560×1600 con la base de 1280×800).
 func _screen_scale() -> float:
 	var logical: Vector2 = get_viewport().get_visible_rect().size
@@ -369,7 +457,9 @@ func _on_layers_ready(size: Vector2i) -> void:
 	mat_3d.set_shader_parameter("terrain_size", world)
 	mat_3d.set_shader_parameter("vertex_step", 1.0 / subdiv)
 	lbl_map_px.text = "%s × %s PX" % [Estilo.miles(size.x), Estilo.miles(size.y)]
-	lbl_world.text = "MUNDO Nº %04d · %s" % [engine.world_seed, Estilo.fecha_corta()]
+	lbl_world.text = engine.map_name.to_upper()
+	if map_name_edit != null and not map_name_edit.has_focus():
+		map_name_edit.text = engine.map_name
 	_center_map()
 	_refresh_quality()
 
@@ -398,6 +488,15 @@ func _connect_signals() -> void:
 		_update_3d_camera()
 	)
 	engine.layers_ready.connect(_on_layers_ready)
+	autosave_timer = Timer.new()
+	autosave_timer.one_shot = true
+	autosave_timer.wait_time = 4.0
+	autosave_timer.timeout.connect(_do_save)
+	add_child(autosave_timer)
+	engine.dirty_changed.connect(_schedule_save)
+	engine.saved.connect(_on_saved)
+	engine.map_loaded.connect(_on_map_loaded)
+	engine.realms_changed.connect(func(): _refresh_route.call_deferred())
 	engine.history_changed.connect(func(can_undo: bool, can_redo: bool):
 		btn_undo.disabled = not can_undo
 		btn_redo.disabled = not can_redo
@@ -478,6 +577,17 @@ func _on_stroke_started(pos: Vector2, pressure: float) -> void:
 			engine.begin_stroke("realm", 0 if realm_erase else current_realm, uv)
 		"lugares":
 			_place_down(pos, uv)
+			return
+		"viajes":
+			_stroke_kind = "route"
+			if uv.x < 0.0 or uv.y < 0.0 or uv.x > 1.0 or uv.y > 1.0:
+				return
+			# Si se toca un lugar, la ruta pasa justo por él.
+			var hit: int = _hit_place(pos)
+			if hit > 0:
+				uv = engine.place_by_id(hit)["uv"]
+			route_pts.append(uv)
+			_refresh_route()
 			return
 		_:
 			_stroke_kind = "pan"
@@ -712,6 +822,8 @@ func _update_hint() -> void:
 	match section:
 		"lugares":
 			lbl_hint.text = "TOCA PARA PONER · ARRASTRA PARA MOVER"
+		"viajes":
+			lbl_hint.text = "TOCA PARA AÑADIR ETAPAS · LOS LUGARES ATRAEN"
 		"mundo":
 			lbl_hint.text = "UN DEDO MUEVE · DOS DEDOS ACERCAN"
 		_:
@@ -791,7 +903,11 @@ func _new_world() -> void:
 	var s: int = randi_range(1, 9999)
 	selected_place = -1
 	current_realm = -1
-	engine.create_world(size, s, new_mode)
+	route_pts.clear()
+	await engine.save_map(_view_extra())
+	await engine.create_world(size, s, new_mode)
+	map_name_edit.text = engine.map_name
+	_refresh_route()
 
 ## Botones que borran trabajo sin vuelta atrás: el primer toque pregunta, el segundo hace.
 func _confirm(key: String, b: Button, text_ready: String, action: Callable) -> void:
@@ -822,6 +938,10 @@ func _select_section(id: String) -> void:
 		var c: Control = sections_ui[k]
 		c.visible = (str(k) == id)
 	brush_box.visible = id in ["relieve", "biomas", "politico", "regiones"]
+	overlay.show_route = id == "viajes"
+	overlay.queue_redraw()
+	if id == "mundo":
+		_refresh_maps_list()
 	mat_2d.set_shader_parameter("show_area_edges", id == "regiones")
 	_refresh_brush_rows()
 	_update_hint()
@@ -862,9 +982,18 @@ func _rebuild_realm_palette() -> void:
 		var c: Color = r["color"]
 		img.set_pixel(int(r["id"]), 0, c)
 	var tex := ImageTexture.create_from_image(img)
+	var rimg := Image.create(64, 64, false, Image.FORMAT_R8)
+	for rel in engine.relations:
+		var k: float = float(Catalogo.relacion_idx(str(rel["kind"]))) / 255.0
+		var a: int = int(rel["a"])
+		var b: int = int(rel["b"])
+		if a < 64 and b < 64:
+			rimg.set_pixel(a, b, Color(k, 0, 0))
+			rimg.set_pixel(b, a, Color(k, 0, 0))
 	if mat_2d != null:
 		mat_2d.set_shader_parameter("realm_pal", tex)
 		mat_3d.set_shader_parameter("realm_pal", tex)
+		mat_2d.set_shader_parameter("relation_tex", ImageTexture.create_from_image(rimg))
 
 func _on_realms_changed() -> void:
 	_rebuild_realm_palette()
@@ -907,6 +1036,7 @@ func _refresh_realm_editor() -> void:
 	var kind: String = r["kind"]
 	for i in realm_kind_chips.size():
 		_paint_filter(realm_kind_chips[i], Catalogo.TIPOS_REINO[i] == kind)
+	_refresh_relations()
 	var col: Color = r["color"]
 	for i in realm_color_buttons.size():
 		var c: Color = Catalogo.COLORES_REINO[i]
@@ -916,6 +1046,52 @@ func _refresh_realm_editor() -> void:
 		b.add_theme_stylebox_override("normal", sb)
 		b.add_theme_stylebox_override("hover", sb)
 		b.add_theme_stylebox_override("pressed", sb)
+
+func _refresh_relations() -> void:
+	for c in relation_box.get_children():
+		c.queue_free()
+	var others: int = 0
+	for o in engine.realms:
+		var oid: int = int(o["id"])
+		if oid == current_realm:
+			continue
+		others += 1
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		relation_box.add_child(row)
+		var nm := Estilo.etiqueta(str(o["name"]).to_upper(), 11, Estilo.TINTA)
+		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nm.clip_text = true
+		var oc: Color = o["color"]
+		var sw := TextureRect.new()
+		sw.texture = _swatch(oc)
+		sw.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+		row.add_child(sw)
+		row.add_child(nm)
+		var ob := _option_button()
+		for rk in Catalogo.RELACIONES:
+			ob.add_item(str(rk[1]))
+		ob.select(Catalogo.relacion_idx(engine.relation(current_realm, oid)))
+		ob.item_selected.connect(func(i: int): engine.set_relation(current_realm, oid, str(Catalogo.RELACIONES[i][0])))
+		row.add_child(ob)
+	if others == 0:
+		relation_box.add_child(_note_label("Crea otro reino para poder relacionarlos."))
+
+func _option_button() -> OptionButton:
+	var ob := OptionButton.new()
+	ob.focus_mode = Control.FOCUS_NONE
+	ob.add_theme_font_override("font", Estilo.versalitas())
+	ob.add_theme_font_size_override("font_size", 11)
+	for k in ["normal", "hover", "pressed", "focus"]:
+		ob.add_theme_stylebox_override(k, Estilo.caja(Color(0, 0, 0, 0), Estilo.TINTA, 2, 10, 8))
+	for k in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		ob.add_theme_color_override(k, Estilo.TINTA)
+	return ob
+
+func _note_label(text: String) -> Label:
+	var l := Estilo.etiqueta(text, 13, Estilo.GRIS, Estilo.F_TEXTO)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	return l
 
 func _flash(l: Label) -> void:
 	l.add_theme_color_override("font_color", Estilo.ACENTO)
@@ -1038,8 +1214,10 @@ func _build_header() -> void:
 	var name_box := HBoxContainer.new()
 	name_box.add_theme_constant_override("separation", 0)
 	name_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	name_box.add_child(Estilo.etiqueta("ATLAS", 54, Estilo.TINTA, Estilo.grotesca_prieta()))
-	name_box.add_child(Estilo.etiqueta(".", 54, Estilo.ACENTO, Estilo.F_GROTESCA))
+	header_name_lbl = Estilo.etiqueta("ATLAS", 54, Estilo.TINTA, Estilo.grotesca_prieta())
+	header_dot_lbl = Estilo.etiqueta(".", 54, Estilo.ACENTO, Estilo.F_GROTESCA)
+	name_box.add_child(header_name_lbl)
+	name_box.add_child(header_dot_lbl)
 	row.add_child(name_box)
 
 	var gap := Control.new()
@@ -1068,6 +1246,7 @@ func _build_header() -> void:
 	links.add_child(btn_redo)
 
 	var b_fit := Estilo.boton("ENCUADRAR", 13, Estilo.TINTA, transparent, pressed_bg, 10, 12)
+	b_fit_btn = b_fit
 	b_fit.pressed.connect(_center_map)
 	links.add_child(b_fit)
 
@@ -1148,6 +1327,7 @@ func _build_panel() -> void:
 	panel.offset_left = -PANEL_W
 	panel.offset_top = HEADER_H + TABS_H
 	add_child(panel)
+	panel_node = panel
 
 	var scroll := ScrollContainer.new()
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -1182,6 +1362,7 @@ func _build_panel() -> void:
 	_build_section_regiones(col)
 	_build_section_politico(col)
 	_build_section_lugares(col)
+	_build_section_viajes(col)
 	_build_section_mundo(col)
 	_build_brush(col)
 
@@ -1411,6 +1592,25 @@ func _build_section_politico(col: Control) -> void:
 		b.pressed.connect(func(): engine.update_realm(current_realm, "color", Catalogo.COLORES_REINO[idx]))
 		colors.add_child(b)
 		realm_color_buttons.append(b)
+	realm_editor.add_child(Estilo.filete(1, Color(Estilo.TINTA, 0.25)))
+	realm_editor.add_child(Estilo.etiqueta("RELACIONES (SE VEN EN LAS FRONTERAS COMUNES)", 11, Estilo.GRIS))
+	relation_box = VBoxContainer.new()
+	relation_box.add_theme_constant_override("separation", 6)
+	realm_editor.add_child(relation_box)
+	var legend := VBoxContainer.new()
+	legend.add_theme_constant_override("separation", 2)
+	realm_editor.add_child(legend)
+	for rk in Catalogo.RELACIONES:
+		if str(rk[0]) == "":
+			continue
+		var lr := HBoxContainer.new()
+		lr.add_theme_constant_override("separation", 8)
+		var sw := TextureRect.new()
+		sw.texture = _swatch(rk[2])
+		sw.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+		lr.add_child(sw)
+		lr.add_child(Estilo.etiqueta("%s · %s" % [rk[1], str(rk[3]).to_lower()], 11, Estilo.GRIS, Estilo.F_TEXTO))
+		legend.add_child(lr)
 	var b_del := _accent_button(realm_editor, "ELIMINAR ESTE REINO")
 	b_del.pressed.connect(func():
 		_confirm("realm_del", b_del, "ELIMINAR ESTE REINO", func(): engine.delete_realm(current_realm))
@@ -1496,6 +1696,11 @@ func _on_areas_changed() -> void:
 	overlay.areas = engine.areas
 	overlay.queue_redraw()
 	_set_tab_count("regiones", engine.areas.size())
+	var simg := Image.create(256, 1, false, Image.FORMAT_R8)
+	for a in engine.areas:
+		if Catalogo.es_conflicto(str(a["kind"])):
+			simg.set_pixel(int(a["id"]), 0, Color(1, 0, 0))
+	mat_2d.set_shader_parameter("area_style", ImageTexture.create_from_image(simg))
 	lbl_area_count.text = "%d REGIONES" % engine.areas.size() if engine.areas.size() != 1 else "1 REGIÓN"
 	mat_2d.set_shader_parameter("selected_area", current_area)
 	for c in area_list.get_children():
@@ -1580,8 +1785,291 @@ func _build_section_lugares(col: Control) -> void:
 	var b_done := _accent_link(row, "LISTO", func(): _select_place(-1))
 	b_done.add_theme_color_override("font_color", Estilo.TINTA)
 
+# ---------------------------------------------------------------- viajes
+
+func _build_section_viajes(col: Control) -> void:
+	var v := _section_box(col, "viajes")
+	_title(v, "Viajes", "")
+	_note(v, "Toca el mapa para marcar etapas (si tocas un lugar, la ruta pasa por él). La ruta cuenta las cuestas, la montaña y el agua.")
+	travel_mode_chips = _chips(v, TRAVEL_MODES.map(func(m): return m[1]), func(i: int):
+		route_mode = str(TRAVEL_MODES[i][0])
+		_refresh_route()
+	, 11)
+	var bl := _blocks(v, [["—", "DISTANCIA"], ["—", "TIEMPO"], ["0", "ETAPAS"]])
+	val_route_dist = bl[0]
+	val_route_time = bl[1]
+	val_route_legs = bl[2]
+	var row := HFlowContainer.new()
+	row.add_theme_constant_override("h_separation", 14)
+	v.add_child(row)
+	_accent_link(row, "QUITAR ÚLTIMA", func():
+		if not route_pts.is_empty():
+			route_pts.pop_back()
+			_refresh_route()
+	)
+	_accent_link(row, "BORRAR RUTA", func():
+		route_pts.clear()
+		_refresh_route()
+	)
+	_accent_link(row, "GUARDAR RUTA", func():
+		if route_pts.size() >= 2:
+			engine.add_route(route_pts, route_mode, "Ruta %d" % (engine.routes.size() + 1))
+	)
+	v.add_child(Estilo.filete(2))
+	_title(v, "Calibrar", "")
+	lbl_travel_calib = _note(v, "")
+	_note(v, "Marca un viaje que conozcas y di cuánto se tarda (con el medio elegido arriba). Todas las rutas se calculan a partir de él.")
+	var crow := HBoxContainer.new()
+	crow.add_theme_constant_override("separation", 8)
+	v.add_child(crow)
+	calib_amount = _line_edit(crow, func(_t: String): pass)
+	calib_amount.placeholder_text = "3"
+	calib_amount.custom_minimum_size = Vector2(70, 0)
+	calib_amount.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_NUMBER_DECIMAL
+	var unit_box := HBoxContainer.new()
+	crow.add_child(unit_box)
+	calib_unit_chips = _chips(unit_box, ["DÍAS", "HORAS"], func(i: int):
+		calib_unit = "dias" if i == 0 else "horas"
+		for k in calib_unit_chips.size():
+			_paint_filter(calib_unit_chips[k], k == i)
+	, 11)
+	_paint_filter(calib_unit_chips[0], true)
+	_paint_filter(calib_unit_chips[1], false)
+	_accent_link(v, "ESTE VIAJE DURA ESO →", _calibrate_time)
+	var srow := HBoxContainer.new()
+	srow.add_theme_constant_override("separation", 8)
+	v.add_child(srow)
+	scale_km_edit = _line_edit(srow, func(_t: String): pass)
+	scale_km_edit.placeholder_text = "120"
+	scale_km_edit.custom_minimum_size = Vector2(90, 0)
+	scale_km_edit.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_NUMBER_DECIMAL
+	srow.add_child(Estilo.etiqueta("KM", 11, Estilo.GRIS))
+	_accent_link(v, "ESTA RUTA MIDE ESOS KM →", _calibrate_km)
+	v.add_child(Estilo.filete(2))
+	_title(v, "Rutas guardadas", "")
+	route_list = VBoxContainer.new()
+	route_list.add_theme_constant_override("separation", 6)
+	v.add_child(route_list)
+	for k in travel_mode_chips.size():
+		_paint_filter(travel_mode_chips[k], k == 0)
+
+func _mode_speed(mode: String) -> float:
+	for m in TRAVEL_MODES:
+		if m[0] == mode:
+			return float(m[2])
+	return 1.0
+
+func _route_cost(points: Array, mode: String) -> Dictionary:
+	return engine.route_cost(points, "barco" if mode == "barco" else "tierra")
+
+static func _fmt_hours(h: float) -> String:
+	# Se redondea una sola vez (a minutos o a horas) y luego se reparte: si no, salían «3 D 24 H».
+	if h < 24.0:
+		var mins: int = int(round(h * 60.0))
+		if mins < 60:
+			return "%d MIN" % mins
+		return "%d H %02d" % [mins / 60, mins % 60] if mins % 60 != 0 else "%d H" % (mins / 60)
+	var hours: int = int(round(h))
+	var d: int = hours / 24
+	var rest: int = hours % 24
+	return "%d D %d H" % [d, rest] if rest > 0 else ("%d DÍAS" % d if d != 1 else "1 DÍA")
+
+func _route_texts(points: Array, mode: String) -> Array:
+	if points.size() < 2:
+		return ["—", "—"]
+	var c: Dictionary = _route_cost(points, mode)
+	var km_pp: float = float(engine.travel.get("km_per_px", 0.0))
+	var hpp: float = float(engine.travel.get("hours_per_px", 0.0))
+	var dist: String = (Estilo.miles(int(round(float(c["px"]) * km_pp))) + " KM") if km_pp > 0.0 else (Estilo.miles(int(round(float(c["px"])))) + " PX")
+	var time: String = _fmt_hours(float(c["weighted"]) * hpp / _mode_speed(mode)) if hpp > 0.0 else "SIN CALIBRAR"
+	return [dist, time]
+
+func _refresh_route() -> void:
+	for k in travel_mode_chips.size():
+		_paint_filter(travel_mode_chips[k], TRAVEL_MODES[k][0] == route_mode)
+	var t: Array = _route_texts(route_pts, route_mode)
+	val_route_dist.text = t[0]
+	val_route_time.text = t[1]
+	val_route_legs.text = str(maxi(route_pts.size() - 1, 0))
+	var hpp: float = float(engine.travel.get("hours_per_px", 0.0))
+	lbl_travel_calib.text = ("Referencia: " + str(engine.travel.get("sample", ""))) if hpp > 0.0 else "Aún sin referencia: el tiempo saldrá cuando calibres un viaje."
+	overlay.route = route_pts
+	overlay.route_label = t[1] if t[1] != "SIN CALIBRAR" else t[0]
+	overlay.routes = engine.routes
+	overlay.queue_redraw()
+	for c in route_list.get_children():
+		c.queue_free()
+	for r in engine.routes:
+		var rid: int = int(r["id"])
+		var rt: Array = _route_texts(r["points"], str(r["mode"]))
+		var line := HBoxContainer.new()
+		route_list.add_child(line)
+		var b := Estilo.boton("%s · %s · %s" % [str(r["name"]).to_upper(), rt[0], rt[1]], 11, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 10, 8)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.clip_text = true
+		var pts: Array = r["points"]
+		var md: String = r["mode"]
+		b.pressed.connect(func():
+			route_pts = pts.duplicate()
+			route_mode = md
+			_refresh_route()
+		)
+		_paint_filter(b, false)
+		line.add_child(b)
+		var x := _accent_button(line, "BORRAR")
+		x.pressed.connect(func(): engine.delete_route(rid))
+	if engine.routes.is_empty():
+		route_list.add_child(_note_label("Ninguna todavía."))
+
+func _calibrate_time() -> void:
+	var amount: float = calib_amount.text.replace(",", ".").to_float()
+	if route_pts.size() < 2 or amount <= 0.0:
+		_flash(lbl_travel_calib)
+		return
+	var hours: float = amount * (24.0 if calib_unit == "dias" else 1.0)
+	var c: Dictionary = _route_cost(route_pts, route_mode)
+	var tr: Dictionary = engine.travel.duplicate()
+	# Horas por píxel ponderado yendo a pie: así vale para cualquier medio.
+	tr["hours_per_px"] = hours * _mode_speed(route_mode) / maxf(float(c["weighted"]), 1.0)
+	var mname: String = "a pie"
+	for m in TRAVEL_MODES:
+		if m[0] == route_mode:
+			mname = str(m[1]).to_lower()
+	tr["sample"] = "%s %s %s, %d etapas." % [calib_amount.text, "días" if calib_unit == "dias" else "horas", mname, route_pts.size() - 1]
+	engine.set_travel(tr)
+
+func _calibrate_km() -> void:
+	var km: float = scale_km_edit.text.replace(",", ".").to_float()
+	if route_pts.size() < 2 or km <= 0.0:
+		_flash(lbl_travel_calib)
+		return
+	var c: Dictionary = _route_cost(route_pts, route_mode)
+	var tr: Dictionary = engine.travel.duplicate()
+	tr["km_per_px"] = km / maxf(float(c["px"]), 1.0)
+	engine.set_travel(tr)
+
+# ---------------------------------------------------------------- mapas guardados
+
+func _view_extra() -> Dictionary:
+	return {"theme": current_theme_idx, "sun": sun_azimuth, "relief": relief_mult}
+
+func _schedule_save() -> void:
+	if engine.world_ready:
+		lbl_save_state.text = "CAMBIOS SIN GUARDAR…"
+		autosave_timer.start()
+
+func _do_save() -> void:
+	lbl_save_state.text = "GUARDANDO…"
+	await engine.save_map(_view_extra())
+
+func _on_saved(ok: bool) -> void:
+	var t: Dictionary = Time.get_time_dict_from_system()
+	lbl_save_state.text = ("GUARDADO · %02d:%02d" % [t["hour"], t["minute"]]) if ok else "NO SE PUDO GUARDAR"
+	if section == "mundo":
+		_refresh_maps_list()
+
+func _notification(what: int) -> void:
+	if engine == null or not engine.world_ready:
+		return
+	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		engine.save_map(_view_extra())
+	elif what == NOTIFICATION_WM_CLOSE_REQUEST:
+		await engine.save_map(_view_extra())
+		get_tree().quit()
+
+func _on_map_loaded() -> void:
+	var ex: Dictionary = engine.loaded_extra
+	selected_place = -1
+	current_realm = -1
+	current_area = -1
+	route_pts.clear()
+	_apply_theme(int(ex.get("theme", current_theme_idx)))
+	sun_azimuth = float(ex.get("sun", sun_azimuth))
+	sun_slider.set_value_no_signal(sun_azimuth)
+	_apply_sun()
+	relief_mult = float(ex.get("relief", relief_mult))
+	mat_3d.set_shader_parameter("height_scale", 2.6 * relief_mult)
+	_set_sea_level(engine.sea_level)
+	map_name_edit.text = engine.map_name
+	_refresh_route()
+	# Abrir no es un cambio: sin autoguardado.
+	autosave_timer.stop()
+	lbl_save_state.text = "ABIERTO"
+
+func _set_sea_level(x: float) -> void:
+	sea_level = x
+	mat_2d.set_shader_parameter("sea_level", x)
+	mat_3d.set_shader_parameter("sea_level", x)
+	engine.sea_level = x
+	engine.set_sea_level(x)
+	val_sea.text = "%d %%" % int(round(x * 100.0))
+	if sea_slider != null:
+		sea_slider.set_value_no_signal(x)
+	_world3d_dirty = true
+	_places3d_dirty = true
+
+func _refresh_maps_list() -> void:
+	if maps_list == null:
+		return
+	for c in maps_list.get_children():
+		c.queue_free()
+	for m in engine.list_maps():
+		var mid: String = m["id"]
+		var sz: Vector2i = m["size"]
+		var d: Dictionary = Time.get_datetime_dict_from_unix_time(int(m["saved_at"]))
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", 6)
+		maps_list.add_child(line)
+		var txt: String = "%s · %s×%s · %02d.%02d.%02d" % [str(m["name"]).to_upper(), Estilo.miles(sz.x), Estilo.miles(sz.y), d["day"], d["month"], int(d["year"]) % 100]
+		var b := Estilo.boton(txt, 11, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 10, 8)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.clip_text = true
+		_paint_filter(b, mid == engine.map_id)
+		b.pressed.connect(func():
+			if mid == engine.map_id:
+				return
+			await engine.save_map(_view_extra())
+			await engine.load_map(mid)
+		)
+		line.add_child(b)
+		if mid != engine.map_id:
+			var x := _accent_button(line, "BORRAR")
+			x.pressed.connect(func():
+				_confirm("del_" + mid, x, "BORRAR", func():
+					engine.delete_map_files(mid)
+					_refresh_maps_list()
+				)
+			)
+
 func _build_section_mundo(col: Control) -> void:
 	var v := _section_box(col, "mundo")
+	_title(v, "Este mapa", "")
+	map_name_edit = _line_edit(v, func(t: String):
+		if t.strip_edges() != "" and t.strip_edges() != engine.map_name:
+			engine.map_name = t.strip_edges()
+			lbl_world.text = engine.map_name.to_upper()
+			_do_save()
+	)
+	lbl_save_state = Estilo.etiqueta("", 11, Estilo.GRIS)
+	v.add_child(lbl_save_state)
+	var srow := HFlowContainer.new()
+	srow.add_theme_constant_override("h_separation", 14)
+	v.add_child(srow)
+	_accent_link(srow, "GUARDAR AHORA", _do_save)
+	_accent_link(srow, "DUPLICAR", func():
+		await engine.duplicate_map(engine.map_name + " (copia)", _view_extra())
+		map_name_edit.text = engine.map_name
+		lbl_world.text = engine.map_name.to_upper()
+		_refresh_maps_list()
+	)
+	_note(v, "Se guarda solo unos segundos después de cada cambio y al salir de la app.")
+	v.add_child(Estilo.etiqueta("MIS MAPAS", 11, Estilo.GRIS))
+	maps_list = VBoxContainer.new()
+	maps_list.add_theme_constant_override("separation", 6)
+	v.add_child(maps_list)
+	v.add_child(Estilo.filete(2))
 	_title(v, "Nuevo mundo", "")
 	v.add_child(Estilo.etiqueta("TAMAÑO (LADO MAYOR)", 11, Estilo.GRIS))
 	var size_labels: Array = []
@@ -1618,7 +2106,7 @@ func _build_section_mundo(col: Control) -> void:
 	btn_create.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn_create.pressed.connect(func(): _confirm("create", btn_create, "CREAR MUNDO  →", _new_world))
 	v.add_child(btn_create)
-	_note(v, "Borra el mundo actual (aún no se guarda en el móvil). «Enorme» usa mucha memoria.")
+	_note(v, "El mapa actual queda guardado en «Mis mapas». «Gigante» y «Colosal» usan mucha memoria (hasta ~1 GB) y tardan más en guardarse.")
 
 	v.add_child(Estilo.filete(2))
 	_title(v, "Ampliar lienzo", "")
@@ -1637,25 +2125,22 @@ func _build_section_mundo(col: Control) -> void:
 		b.pressed.connect(func(): _confirm("ext_" + key, b, label, func(): engine.extend(key)))
 		dirs.add_child(b)
 		extend_buttons[key] = b
-	_note(v, "Añade la mitad del tamaño en mar por ese lado (hasta 4.096 px). Lo pintado se queda igual; el historial se vacía.")
+	_note(v, "Añade la mitad del tamaño en mar por ese lado (hasta 8.192 px). Lo pintado se queda igual; el historial se vacía.")
 
 	v.add_child(Estilo.filete(2))
 	_title(v, "Mar y sol", "")
 	val_sea = _slider_row(v, "NIVEL DEL MAR", 0.30, 0.70, 0.01, sea_level, func(x: float):
-		sea_level = x
-		mat_2d.set_shader_parameter("sea_level", x)
-		mat_3d.set_shader_parameter("sea_level", x)
-		engine.sea_level = x
-		engine.set_sea_level(x)
-		_world3d_dirty = true
-		_places3d_dirty = true
+		_set_sea_level(x)
+		_schedule_save()
 		val_sea.text = "%d %%" % int(round(x * 100.0))
 	)
 	val_sea.text = "%d %%" % int(round(sea_level * 100.0))
+	sea_slider = val_sea.get_parent().get_parent().get_child(1)
 	val_sun = _slider_row(v, "LUZ DESDE", 0.0, 359.0, 1.0, sun_azimuth, func(x: float):
 		sun_azimuth = x
 		_apply_sun()
 	)
+	sun_slider = val_sun.get_parent().get_parent().get_child(1)
 
 	v.add_child(Estilo.filete(2))
 	_title(v, "Estilo del mapa", "")
