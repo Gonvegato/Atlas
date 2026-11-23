@@ -47,7 +47,9 @@ void fragment() {
 	vec2 uv = UV;
 	float dist = length((uv - 0.5) * vec2(1.85, 2.0));
 	float continent = fbm(uv * 4.5) - dist * 0.65 + 0.18;
-	float mountains = ridged(uv * 9.0) * smoothstep(0.05, 0.45, continent) * 0.42;
-	float h = clamp(0.5 + continent * 0.45 + mountains, 0.02, 0.98);
+	// Las cordilleras solo donde una máscara de baja frecuencia lo permite: cadenas, no un macizo nevado entero.
+	float range_mask = smoothstep(0.36, 0.60, fbm(uv * 2.2 + vec2(7.3, 1.9)));
+	float mountains = ridged(uv * 9.0) * smoothstep(0.05, 0.45, continent) * range_mask * 0.40;
+	float h = clamp(0.5 + continent * 0.30 + mountains, 0.02, 0.98);
 	COLOR = vec4(h, h, h, 1.0);
 }

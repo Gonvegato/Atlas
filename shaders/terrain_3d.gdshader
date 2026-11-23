@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_back, diffuse_burley, specular_schlick_ggx;
+render_mode cull_back, diffuse_lambert, specular_schlick_ggx;
 
 uniform sampler2D height_tex : filter_linear, repeat_disable;
 uniform float sea_level = 0.5;
@@ -29,7 +29,7 @@ void fragment() {
 		vec3 water = mix(col_shallow_sea, col_deep_sea, pow(depth, 0.6));
 		float foam = smoothstep(0.015, 0.0, -coast_dist);
 		ALBEDO = mix(water, vec3(0.95, 0.96, 0.97), foam * 0.7);
-		ROUGHNESS = mix(0.12, 0.45, foam);
+		ROUGHNESS = mix(0.35, 0.6, foam);
 		METALLIC = 0.05;
 		NORMAL = normalize((VIEW_MATRIX * MODEL_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
 	} else {
@@ -61,7 +61,9 @@ void fragment() {
 		land = mix(land, col_snow, smoothstep(0.68, 0.90, elev) * (1.0 - smoothstep(0.35, 0.65, slope)));
 
 		ALBEDO = land;
-		ROUGHNESS = 0.86;
+		ROUGHNESS = 0.92;
 		METALLIC = 0.0;
+		// Papel mate: sin esto, a contraluz el Fresnel rasante quema el primer plano a blanco puro.
+		SPECULAR = 0.08;
 	}
 }

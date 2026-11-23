@@ -16,6 +16,7 @@ var pending_stroke: bool = false
 var stroke_active: bool = false
 var pending_start_ms: int = 0
 var pending_pos: Vector2 = Vector2.ZERO
+var pending_down_pos: Vector2 = Vector2.ZERO
 var last_pinch_dist: float = 0.0
 var mouse_painting: bool = false
 var mouse_panning: bool = false
@@ -25,9 +26,18 @@ func _process(_delta: float) -> void:
 		if Time.get_ticks_msec() - pending_start_ms >= palm_buffer_ms:
 			pending_stroke = false
 			stroke_active = true
-			stroke_started.emit(pending_pos, 1.0)
+			# Empieza donde se apoyó el lápiz y recupera lo recorrido durante el búfer antipalma.
+			stroke_started.emit(pending_down_pos, 1.0)
+			if pending_pos.distance_to(pending_down_pos) > 0.5:
+				stroke_moved.emit(pending_pos, 1.0)
 
+## Las posiciones llegan en coordenadas locales del Workspace (las de gui_input) y salen igual.
 func handle_input(event: InputEvent) -> void:
+	# Godot emula ratón desde el táctil (input_devices/pointing/emulate_mouse_from_touch, activo por defecto):
+	# esos eventos llegan con device == DEVICE_ID_EMULATION y, si se atendieran, pintarían sin búfer antipalma
+	# y seguirían pintando durante el pellizco. El táctil ya se trata con ScreenTouch/ScreenDrag.
+	if event.device == InputEvent.DEVICE_ID_EMULATION and (event is InputEventMouseButton or event is InputEventMouseMotion):
+		return
 	if event is InputEventScreenTouch:
 		_handle_touch(event)
 	elif event is InputEventScreenDrag:
@@ -44,6 +54,7 @@ func _handle_touch(e: InputEventScreenTouch) -> void:
 			pending_stroke = true
 			pending_start_ms = Time.get_ticks_msec()
 			pending_pos = e.position
+			pending_down_pos = e.position
 		else:
 			pending_stroke = false
 			if stroke_active:

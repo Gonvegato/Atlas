@@ -44,7 +44,10 @@ void fragment() {
 	vec3 normal = normalize(vec3(-dx * relief_strength * 0.25, -dy * relief_strength * 0.25, 1.0));
 	float shade = clamp(dot(normal, normalize(sun_dir)), 0.0, 1.0);
 
-	float coast_dist = h - sea_level;
+	// Altura suavizada (núcleo 1-2-1) con las mismas 9 muestras: el heightmap es de 8 bits y, sin esto,
+	// la costa y las curvas de nivel siguen los escalones de 1/255 y salen con ruido.
+	float hs = (tl + 2.0 * tc + tr + 2.0 * ml + 4.0 * h + 2.0 * mr + bl + 2.0 * bc + br) / 16.0;
+	float coast_dist = hs - sea_level;
 	float fw = max(fwidth(coast_dist), 0.0005);
 
 	vec3 color;
