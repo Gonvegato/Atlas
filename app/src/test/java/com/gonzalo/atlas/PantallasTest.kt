@@ -45,15 +45,36 @@ class PantallasTest {
         m.territorios += Territorio(2, "Reino de Kar", "Reino", 0xFF3E6A8A.toInt(), 1)
         m.territorios += Territorio(3, "Marca de Olm", "Provincia", 0xFF6E8B3D.toInt(), 2)
         m.lugares += Lugar("p1", "Valdrín", "capital", 1000f, 900f, 7)
-        e.seccion = "portada"
+        m.territorios += Territorio(4, "Liga de Sarn", "Reino", 0xFF8A6A3E.toInt())
+        m.tipo = "continente"; m.guardaMeta()
+        e.bib.creaMapa(w.id, "Valdrín, la capital", 0, 0, tipo = "ciudad"); e.bib.creaMapa(w.id, "Ithria entera", 0, 0, tipo = "mundo")
+        // La política del mundo: potencias (la del mapa queda ligada por su nombre), relaciones y una guerra
+        val cr = e.cronica(w.id)
+        cr.situacion = "El Imperio de Valdor se agrieta: Kar quiere la corona y la Liga de Sarn cierra los puertos del sur."
+        val valdor = cr.fichaDe("reino", "Imperio de Valdor", "${m.id}:t:1"); val kar = cr.fichaDe("reino", "Reino de Kar", "${m.id}:t:2"); val sarn = cr.nueva("reino", "Liga de Sarn")
+        valdor.campos["Tipo"] = "Imperio"; valdor.campos["Gobernante"] = "Emperatriz Ysolde III"; valdor.campos["Capital"] = "Valdrín"; valdor.campos["Situación actual"] = "Arcas vacías; las marcas del norte no pagan tributo."
+        kar.campos["Tipo"] = "Reino vasallo"; kar.campos["Gobernante"] = "Rey Oddar"
+        cr.ponRelacion(valdor, kar, "vasallo"); cr.ponRelacion(valdor, sarn, "enemigo")
+        val guerra = cr.nueva("guerra", "Guerra de los Puertos"); guerra.campos["Estado"] = "En curso"; guerra.campos["Causa"] = "El cierre de los puertos del sur"
+        cr.ponEnBando(guerra, "a", valdor, true); cr.ponEnBando(guerra, "a", kar, true); cr.ponEnBando(guerra, "b", sarn, true); cr.ponRelacion(valdor, sarn, "guerra")
+        org.junit.Assert.assertEquals("senor", cr.relacion(kar, valdor)); org.junit.Assert.assertEquals(2, cr.guerrasDe(valdor).size + cr.guerrasDe(sarn).size)
+        e.mundoActual = null; e.seccion = "portada"; e.listas++
         compose.setContent { App(e) }
         captura("portada.png")
-        e.fichaDe(m, "t", "1", "reino", "Imperio de Valdor")
+        e.seccion = "mundos"
+        captura("mundos.png")
+        e.entraMundo(w.id)
+        captura("mundo_mapas.png")
+        e.potenciaPedida = valdor.id; e.seccion = "politica"
+        captura("politica.png")
+        e.fichaPedida = guerra.id; e.seccion = "guerras"
+        captura("guerras.png")
+        e.seccion = "cronica"
         captura("cronica.png")
-        e.seccion = "mundo"
+        // Lo pintado en el mapa sin ficha aparece en Política; su ficha, por el nombre, es la misma aunque salga en otro mapa
+        org.junit.Assert.assertEquals(sarn.id, e.cronica(w.id).fichaDe("reino", "liga de sarn", "${m.id}:t:4").id)
+        e.saleMundo(); e.seccion = "mundo"
         captura("mundo.png")
-        e.seccion = "mapa"; e.dibujando = false
-        captura("mapas.png")
         e.seccion = "taller"
         captura("taller.png")
     }
@@ -103,6 +124,12 @@ class PantallaMapaTest {
         pulsa("Acciones"); captura("mapa_acciones.png")
         pulsa("Selección"); ed.ponMarco(com.gonzalo.atlas.lienzo.Seleccion.elipse(android.graphics.RectF(600f, 600f, 1400f, 1300f))); captura("mapa_seleccion.png")
         ed.ponMarco(null)
+        // La política del mundo, consultada sin salir del mapa
+        val cr = e.cronica(w.id); cr.situacion = "Valdor domina el norte; el sur aún no tiene dueño."
+        cr.fichaDe("reino", "Valdor", "${ed.mapa.id}:t:1").let { f -> f.campos["Tipo"] = "Reino"; f.campos["Gobernante"] = "Reina Aldara"; f.campos["Situación actual"] = "En paz, pero con hambre."; f.texto = "Fundado por los jinetes del este tras la caída de la Vieja Corona." }
+        cr.guarda(); e.listas++
+        compose.onNodeWithText("CONSULTAR SIN SALIR").performClick(); captura("mapa_consulta.png")
+        compose.onNodeWithText("Valdor").performClick(); captura("mapa_consulta.png")
         pulsa("Mundo"); captura("mapa_mundo.png")
         compose.onNodeWithText("Generar un continente").performClick(); repeat(3) { captura("mapa_continente.png") }
         pulsa("Mundo")

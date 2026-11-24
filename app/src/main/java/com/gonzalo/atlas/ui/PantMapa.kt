@@ -119,7 +119,7 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
             }
         }
         if (ed.aviso.isNotBlank() || ed.ocupado) {
-            Box(Modifier.align(Alignment.TopCenter).padding(top = 64.dp).clip(RoundedCornerShape(20.dp)).background(O.CABECERA.copy(alpha = 0.92f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Box(Modifier.align(Alignment.TopCenter).padding(top = 100.dp).clip(RoundedCornerShape(20.dp)).background(O.CABECERA.copy(alpha = 0.92f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Text(if (ed.ocupado) "Un momento…" else ed.aviso, style = O.texto(13.sp, O.TINTA))
             }
         }
@@ -130,8 +130,8 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
             }
         }
         panel?.let { p ->
-            val ancho = if (p == "pinceles" || p == "estudio") 520.dp else 380.dp
-            Column(Modifier.align(Alignment.TopEnd).padding(top = 110.dp, start = 10.dp, end = 10.dp, bottom = 10.dp).widthIn(max = ancho).fillMaxWidth().heightIn(max = 760.dp)
+            val ancho = if (p == "pinceles" || p == "estudio") 520.dp else if (p == "consulta") 440.dp else 380.dp
+            Column(Modifier.align(Alignment.TopEnd).padding(top = if (taller) 110.dp else 144.dp, start = 10.dp, end = 10.dp, bottom = 10.dp).widthIn(max = ancho).fillMaxWidth().heightIn(max = 760.dp)
                 .shadow(16.dp, RoundedCornerShape(14.dp)).clip(RoundedCornerShape(14.dp)).background(O.PAPEL)) {
                 Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(titulos[p] ?: p, Modifier.weight(1f), style = O.titular(20.sp))
@@ -148,6 +148,7 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
                         "ajustes" -> PanelAjustes(ed) { panel = it }
                         "licuar" -> PanelLicuar(ed)
                         "marco" -> PanelMarco(ed)
+                        "consulta" -> PanelConsulta(e, ed)
                         "continente" -> PanelContinente(ed, mesa)
                         "transformar" -> PanelTransformar(ed, mesa)
                         "mundo" -> PanelMundo(ed) { panel = it }
@@ -168,7 +169,7 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
 private val titulos = mapOf("pinceles" to "Biblioteca de pinceles", "estudio" to "Estudio del pincel", "color" to "Color", "capas" to "Capas",
     "acciones" to "Acciones", "ajustes" to "Ajustes", "transformar" to "Transformar", "mundo" to "Mundo", "territorios" to "Territorios",
     "lugares" to "Lugares", "rutas" to "Rutas", "dibujos" to "Tus dibujos", "calco" to "Imagen para calcar", "secciones" to "Secciones del terreno", "sel" to "Lo elegido",
-    "marco" to "Selección", "licuar" to "Licuar", "continente" to "Generar un continente")
+    "marco" to "Selección", "licuar" to "Licuar", "continente" to "Generar un continente", "consulta" to "Política del mundo")
 
 private fun nuevaCapa(ed: Editor) {
     val lz = ed.lienzo
@@ -214,6 +215,7 @@ private fun BarraSuperior(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean,
             Spacer(Modifier.width(6.dp))
         }
         Column(Modifier.fillMaxWidth().background(O.CABECERA.copy(alpha = 0.96f)).statusBarsPadding()) {
+            if (!taller) FilaMundo(e, ed.mapa, panel == "consulta") { abre("consulta") }
             Row(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Izquierda()
                 if (!estrecho) { Spacer(Modifier.weight(1f)); Derecha() }
@@ -293,7 +295,7 @@ private fun BibliotecaPinceles(e: EstadoApp, ed: Editor, abreEstudio: () -> Unit
         }
         Column(Modifier.weight(1f).padding(start = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             val lista = Pinceles.defs().filter { it.categoria == cat }
-            if (lista.isEmpty()) Text(if (cat == "Importados") "Importa pinceles .brush o .brushset (los de Procreate o los exportados desde ATLAS). De los de Procreate se leen la punta, el grano y los ajustes principales; no salen idénticos." else "Aún no hay.", style = O.texto(13.sp, O.GRIS))
+            if (lista.isEmpty()) Text(if (cat == "Importados") "Importa pinceles .brush o .brushset (los de Procreate o los exportados desde ATLAS). Los que traen su propia punta salen muy parecidos; los que usan puntas internas de Procreate (que no vienen en el archivo) llevan la de ATLAS que más se le parece." else "Aún no hay.", style = O.texto(13.sp, O.GRIS))
             for (d in lista) {
                 val sel = d.id == actual
                 val muestra by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, d.json().toString()) {
@@ -368,13 +370,14 @@ private fun EstudioPincel(ed: Editor, volver: () -> Unit) {
         if (d.grano.contains(":")) FichaO("El importado", true) {}
     }
     if (d.grano.isNotBlank()) {
-        S("Escala del grano", d.escalaGrano, 16f..512f, "${d.escalaGrano.roundToInt()} px") { d.copy(escalaGrano = it) }
+        S("Escala del grano", d.escalaGrano, 16f..2048f, "${d.escalaGrano.roundToInt()} px") { d.copy(escalaGrano = it) }
         P("Cuánto se nota", d.profGrano) { d.copy(profGrano = it) }
         InterruptorO("El grano se mueve con cada estampa", d.granoMovil) { pon(d.copy(granoMovil = it)) }
     }
     EtiquetaO("Pintura", tam = 11.sp, color = O.ACENTO)
     S("Flujo (pintura de cada estampa)", d.flujo, 0.02f..1f, "${(d.flujo * 100).roundToInt()}%") { d.copy(flujo = it) }
     InterruptorO("Acumula donde se cruza (acuarela, aerógrafo)", d.acumula) { pon(d.copy(acumula = it)) }
+    InterruptorO("Veladura: la presión marca la opacidad máxima (como los pinceles de Procreate)", d.velado) { pon(d.copy(velado = it)) }
     P("Bordes húmedos", d.bordes) { d.copy(bordes = it) }
     P("Mezcla con lo que hay (óleo)", d.mezcla) { d.copy(mezcla = it) }
     EtiquetaO("Lápiz", tam = 11.sp, color = O.ACENTO)
@@ -775,7 +778,7 @@ private fun EditaTerritorio(e: EstadoApp, ed: Editor, t: Territorio) {
     Text("Para mover el nombre: «Elegir», tócalo y arrástralo.", style = O.texto(12.sp, O.GRIS))
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         BotonO("Pintarlo", lleno = true) { ed.territorio = t.id; ed.herramienta = Herramienta.TERRITORIO; ed.seleccion = null }
-        BotonO("Su ficha") { e.fichaDe(m, "t", t.id.toString(), "reino", t.nombre) }
+        BotonO("Su ficha en Política") { e.fichaDe(m, "t", t.id.toString(), "reino", t.nombre) }
     }
     MapaVinculado(e, ed, t.mapa, t.nombre) { t.mapa = it }
     BotonO("Borrar territorio", color = O.ROJO) { ed.borraTerritorio(t) }

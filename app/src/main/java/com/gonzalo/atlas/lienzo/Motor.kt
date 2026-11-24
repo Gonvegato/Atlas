@@ -30,16 +30,16 @@ import kotlin.math.sqrt
 /** Los sellos de un trazo: dónde, de qué tamaño, cuánto y de qué color estampa la punta. En píxeles del lienzo. */
 class Sellos(cap: Int = 256) {
     var n = 0; private set
-    /** Por sello: x, y, diámetro, opacidad (0..1), ángulo (radianes), achatado. */
+    /** Por sello: x, y, diámetro, opacidad (0..1), ángulo (radianes), achatado y tope (hasta dónde puede llegar la opacidad con este sello, en los pinceles de veladura). */
     var f = FloatArray(cap * P); private set
     /** El color (RGB) y unos bits al azar (volteo, sitio del grano móvil). */
     var c = IntArray(cap); private set
     var b = IntArray(cap); private set
 
-    fun pon(x: Float, y: Float, d: Float, a: Float, ang: Float, ach: Float, color: Int, bits: Int) {
+    fun pon(x: Float, y: Float, d: Float, a: Float, ang: Float, ach: Float, color: Int, bits: Int, tope: Float = 1f) {
         if (n == c.size) { f = f.copyOf(n * 2 * P); c = c.copyOf(n * 2); b = b.copyOf(n * 2) }
         val o = n * P
-        f[o] = x; f[o + 1] = y; f[o + 2] = d; f[o + 3] = a; f[o + 4] = ang; f[o + 5] = ach
+        f[o] = x; f[o + 1] = y; f[o + 2] = d; f[o + 3] = a; f[o + 4] = ang; f[o + 5] = ach; f[o + 6] = tope
         c[n] = color; b[n] = bits; n++
     }
 
@@ -53,7 +53,7 @@ class Sellos(cap: Int = 256) {
         return r
     }
 
-    companion object { const val P = 6 }
+    companion object { const val P = 7 }
 }
 
 /**
@@ -168,9 +168,12 @@ class Caminante(
         val base = (tam * fT).coerceAtLeast(min(tam, 0.12f))
         val nx = -sin(dir); val ny = cos(dir)
         for (j in 0 until d.numero) {
-            var dd = base; var al = d.flujo * fO
+            var dd = base
             if (d.azarTamano > 0.001f) dd *= 1f - d.azarTamano * azar(1, j)
-            if (d.azarOpacidad > 0.001f) al *= 1f - d.azarOpacidad * azar(2, j)
+            val azarO = if (d.azarOpacidad > 0.001f) 1f - d.azarOpacidad * azar(2, j) else 1f
+            // En veladura, la presión marca hasta dónde llega la opacidad (el tope) y el flujo, lo deprisa que llega; si no, todo es la pintura del sello
+            val tope = if (d.velado) fO else fO * azarO
+            val al = if (d.velado) d.flujo * azarO else d.flujo * tope
             var ang = (d.angulo * (PI / 180.0)).toFloat()
             if (d.sigueDireccion) ang += dir
             if (d.acimut && lapiz) ang += aci
@@ -189,7 +192,7 @@ class Caminante(
             }
             if (muestra != null && d.mezcla > 0.001f) col = mezcla(col, muestra.invoke(sx, sy))
             val bits = Ruido.hash(idx, j, semilla + 77) and (if (d.volteo) -1 else -2)
-            if (dd >= 0.05f && al > 0.0005f) sal.pon(sx, sy, dd, al.coerceAtMost(1f), ang, d.achatado.coerceIn(0.05f, 1f), col, bits)
+            if (dd >= 0.05f && al > 0.0005f && tope > 0.0005f) sal.pon(sx, sy, dd, al.coerceAtMost(1f), ang, d.achatado.coerceIn(0.05f, 1f), col, bits, tope.coerceAtMost(1f))
         }
         return max(0.02f, esp * base)
     }
@@ -307,6 +310,9 @@ class Raster(val def: DefPincel, val escala: Float) {
     private val prof = def.profGrano.coerceIn(0f, 1f)
     private val blando = (1f - def.dureza).coerceIn(0f, 1f)
     private val acumula = def.acumula
+    private val velado = def.velado
+    /** El grano de un pincel importado (una foto de papel) se multiplica tal cual; los de ATLAS dejan pasar la pintura según la presión. */
+    private val granoTalCual = def.velado && def.grano.contains(':')
 
     /** Cuánto se sale un sello de su centro, en píxeles escalados. */
     fun alcance(s: Sellos, i: Int): Float { val r = s.f[i * Sellos.P + 2] * escala / 2f; return (if (tex != null) r * 1.4143f else r).coerceAtLeast(0.5f) + 1.5f }
@@ -331,6 +337,7 @@ class Raster(val def: DefPincel, val escala: Float) {
         val color = s.c[i]
         val a = l.a; val rgb = l.rgb; val w = l.w
         val c15 = alfa * 32768f; val c16 = alfa * 65535f
+        val tope16 = (s.f[o + 6] * 65535f).toInt()
         // El grano: en coordenadas del lienzo (o movido con cada sello)
         val g = grano
         var gox = 0f; var goy = 0f
@@ -397,14 +404,21 @@ class Raster(val def: DefPincel, val escala: Float) {
                         gv = (arriba + (abajo - arriba) * ty) * (1f / 255f)
                     } else gv = (g.a[((gy.toInt()) and gm) * g.lado + (gx.toInt() and gm)].toInt() and 255) * (1f / 255f)
                     // El papel: con poca presión el grafito solo se queda en lo que sobresale; apretando, lo llena casi todo
-                    var sg = (gv - umbral) * 3.3f + 0.5f
-                    if (sg < 0f) sg = 0f else if (sg > 1f) sg = 1f
+                    var sg = gv
+                    if (!granoTalCual) { sg = (gv - umbral) * 3.3f + 0.5f; if (sg < 0f) sg = 0f else if (sg > 1f) sg = 1f }
                     cov *= (1f - prof) + prof * sg
                     if (cov <= 0.002f) { idx++; continue }
                 }
                 val viejo = a[idx].code
                 val nuevo: Int
-                if (acumula) {
+                if (velado) {
+                    // Veladura: la pintura se acerca al tope del sello sin pasarlo (los sellos suaves se funden sin cargarse de más)
+                    val c = (cov * c15).toInt()
+                    if (c <= 0 || tope16 <= viejo) { idx++; continue }
+                    nuevo = viejo + (((tope16 - viejo) * c) ushr 15)
+                    if (nuevo <= viejo) { idx++; continue }
+                    if (rgb != null) rgb[idx] = if (viejo == 0) color else mezclaColor(rgb[idx], color, c.toFloat() / 32768f, viejo / 65535f)
+                } else if (acumula) {
                     val c = (cov * c15).toInt()
                     if (c <= 0) { idx++; continue }
                     nuevo = viejo + (((65535 - viejo) * c) ushr 15)

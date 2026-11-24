@@ -36,7 +36,8 @@ class ProcreateTest {
         val dirPrimero = d
         val j = JSONObject(File(d, "pincel.json").readText())
         assertEquals("Tinta seca", j.getString("n"))
-        assertEquals(0.5, j.getDouble("esp"), 1e-6) // el espaciado se guarda al cuadrado
+        assertEquals(0.5f, def.espaciado, 1e-4f) // el espaciado se guarda al cuadrado: 0,25 es un 50 %
+        assertTrue(def.grano.endsWith(":grano") && def.forma.endsWith(":forma") && def.velado)
         // Exportar un pincel de ATLAS y volver a importarlo: vuelve idéntico (con su punta y su grano)
         val orig = com.gonzalo.atlas.lienzo.Pinceles.def("carboncillo")
         val archivo = Procreate.exporta(orig)
@@ -48,7 +49,6 @@ class ProcreateTest {
         assertEquals(orig.copy(id = vuelto.id, categoria = "Importados", forma = vuelto.forma, grano = vuelto.grano), vuelto)
         assertTrue(vuelto.forma.endsWith(":forma") && vuelto.grano.endsWith(":grano"))
         assertTrue(com.gonzalo.atlas.lienzo.MuestrasPincel.de(vuelto) != null)
-        assertTrue(j.getBoolean("grano"))
         val forma = BitmapFactory.decodeFile(File(d, "forma.png").path)
         assertTrue("el centro de la punta pinta", Color.alpha(forma.getPixel(32, 32)) > 240)
         assertTrue("el borde no", Color.alpha(forma.getPixel(2, 2)) < 10)

@@ -30,7 +30,7 @@ object MuestrasPincel {
                 pts[o] = 18 + t * (w - 36); pts[o + 1] = h / 2f + sin(t * 2 * PI).toFloat() * h * 0.22f
                 pts[o + 2] = (0.1f + 0.9f * sin(t * PI).toFloat()).coerceIn(0f, 1f); pts[o + 3] = 0.35f; pts[o + 4] = 0f; pts[o + 5] = t * 700f
             }
-            val tam = min(d.tamano, h * 0.36f).coerceAtLeast(2f)
+            val tam = min(d.tamano, h * 0.46f).coerceAtLeast(2f)
             val datos = TrazoDatos(d, color, tam, d.opacidad.coerceAtLeast(0.35f), TrazoDatos.PINTAR, false, listOf(pts), 7, 1f, true, null, null)
             val hm = Humedo(1f, d.colorVariable); hm.sella(Raster(d, 1f), datos.sellos())
             val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); val c = Canvas(b)

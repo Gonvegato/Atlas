@@ -169,6 +169,8 @@ class Sello(val id: String, var recurso: String, var x: Float, var y: Float, var
  */
 class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int, val alto: Int, val dir: File?) {
     val infinito get() = ancho == 0
+    /** De qué es el mapa: "mundo", "continente", "region", "ciudad", "lugar" u "otro" ("" en los de antes). */
+    var tipo = ""
     var kmPorPx = 1.0f
     var escalaPuesta = false
     val obras = CopyOnWriteArrayList<String>()
@@ -251,7 +253,7 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         if (o.has("capas")) lista("capas", capas, CapaInfo::de)
     }
 
-    fun metaJson(): JSONObject = JSONObject().put("v", 2).put("id", id).put("mundo", mundo).put("nombre", nombre).put("w", ancho).put("h", alto)
+    fun metaJson(): JSONObject = JSONObject().put("v", 2).put("id", id).put("mundo", mundo).put("nombre", nombre).put("tipo", tipo).put("w", ancho).put("h", alto)
         .put("km", kmPorPx.toDouble()).put("kmPuesta", escalaPuesta).put("obras", JSONArray(obras.toList())).put("creado", creado).put("modificado", modificado)
         .put("papel", papel).put("grano", granoPapel).put("verT", verTerritorios).put("tinte", tinteTerritorios.toDouble()).put("nivel", colorPorNivel)
         .put("vista", JSONArray().also { a -> vista.forEach { a.put(if (it.isNaN()) JSONObject.NULL else it.toDouble()) } })
@@ -268,6 +270,7 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
             val o = JSONObject(File(dir, "mapa.json").readText())
             if (o.optInt("v") < 2) return null
             val m = Mapa(o.getString("id"), o.optString("mundo"), o.optString("nombre"), o.optInt("w"), o.optInt("h"), dir)
+            m.tipo = o.optString("tipo")
             m.kmPorPx = o.optDouble("km", 1.0).toFloat(); m.escalaPuesta = o.optBoolean("kmPuesta")
             o.optJSONArray("obras")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotBlank() }?.let { m.obras += it } }
             m.creado = o.optLong("creado", m.creado); m.modificado = o.optLong("modificado", m.modificado)

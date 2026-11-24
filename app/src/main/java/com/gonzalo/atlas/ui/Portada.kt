@@ -93,7 +93,8 @@ fun Portada(e: EstadoApp) {
             val suyos = mapas.filter { it.mundo == w.id }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(w.nombre, Modifier.weight(1f), style = T.nombre(26.sp))
+                    Text(w.nombre, Modifier.weight(1f).pulsable { e.entraMundo(w.id) }, style = T.nombre(26.sp))
+                    Enlace("Entrar") { e.entraMundo(w.id) }
                     Enlace("+ Mapa") { nuevo = w.id }
                     Enlace("Renombrar") { renombrar = "w:${w.id}" to w.nombre }
                     Enlace("Borrar", color = T.ROJO) { borrar = "w:${w.id}" to w.nombre }
@@ -172,6 +173,7 @@ private val TAMANOS = listOf(
 @Composable
 internal fun DialogoNuevo(e: EstadoApp, mundo: String?, cerrar: () -> Unit) {
     var nombre by remember { mutableStateOf(Nombres.raiz()) }
+    var tipo by remember { mutableStateOf("continente") }
     var nombreMundo by remember { mutableStateOf(Nombres.mundo()) }
     var tam by remember { mutableStateOf(TAMANOS[0]) }
     var papel by remember { mutableStateOf(Catalogo.PAPELES[0].second) }
@@ -179,7 +181,11 @@ internal fun DialogoNuevo(e: EstadoApp, mundo: String?, cerrar: () -> Unit) {
         Column(Modifier.background(T.PAPEL).border(2.dp, T.TINTA).padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(if (mundo == null) "Mundo nuevo" else "Mapa nuevo", style = T.titular(28.sp))
             if (mundo == null) { Etiqueta("El mundo", tam = 10.sp, color = T.GRIS); Campo(nombreMundo, { nombreMundo = it }, Modifier.fillMaxWidth()) }
-            Etiqueta("El mapa", tam = 10.sp, color = T.GRIS)
+            Etiqueta("¿Mapa de qué?", tam = 10.sp, color = T.GRIS)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                for ((k, n, _) in Catalogo.TIPOS_MAPA) Ficha(n, tipo == k) { tipo = k }
+            }
+            Etiqueta("Su nombre", tam = 10.sp, color = T.GRIS)
             Campo(nombre, { nombre = it }, Modifier.fillMaxWidth())
             Etiqueta("Tamaño del lienzo", tam = 10.sp, color = T.GRIS)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -195,7 +201,7 @@ internal fun DialogoNuevo(e: EstadoApp, mundo: String?, cerrar: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Boton("Crear", lleno = true) {
                     val w = mundo ?: e.bib.creaMundo(nombreMundo).id
-                    e.nuevoMapa(w, nombre, tam.second, tam.third, papel); cerrar()
+                    e.nuevoMapa(w, nombre, tam.second, tam.third, papel, tipo); cerrar()
                 }
                 Boton("Cancelar") { cerrar() }
             }
@@ -315,40 +321,73 @@ object Uniones {
 @Suppress("unused") @Composable private fun nada() = FlowRow {}
 
 /**
- * Mapas: elegir dónde dibujar. Seguir con el que estabas, abrir cualquiera de tus mundos, hacer un mapa nuevo en un mundo que
- * ya tienes o empezar un mundo nuevo.
+ * Los mapas del mundo en el que estás, por lo que son (el mundo entero, continentes, regiones y reinos, ciudades, lugares):
+ * seguir con el que estabas, abrir otro o hacer uno nuevo diciendo de qué es.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PantMapas(e: EstadoApp) {
     @Suppress("UNUSED_VARIABLE") val l = e.listas
-    val mapas = remember(e.listas) { e.bib.mapas() }
-    val mundos = remember(e.listas) { e.bib.mundos() }
-    var nuevo by remember { mutableStateOf<String?>(null) }
+    val w = e.mundoActual ?: run { Vacio("Entra en un mundo"); return }
+    val mapas = remember(e.listas, w) { e.bib.mapas().filter { it.mundo == w } }
+    var nuevo by remember { mutableStateOf(false) }
+    var unir by remember { mutableStateOf<Biblioteca.MapaInfo?>(null) }
+    var renombrar by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var tipoDe by remember { mutableStateOf<Biblioteca.MapaInfo?>(null) }
+    var borrar by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val abierto = e.editor?.mapa?.takeIf { it.mundo == w }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(Relleno).navigationBarsPadding(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("¿Dónde dibujas?", style = T.titular(36.sp))
+        Text("Mapas", style = T.titular(36.sp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            e.mapa?.let { m -> Boton("Seguir con «${m.nombre}»", lleno = true) { e.abreMapa(m) } }
-            Boton("+ Mundo nuevo", lleno = e.mapa == null) { nuevo = "" }
+            abierto?.let { m -> Boton("Seguir con «${m.nombre}»", lleno = true) { e.abreMapa(m) } }
+            Boton("+ Mapa nuevo", lleno = abierto == null) { nuevo = true }
         }
-        if (mundos.isEmpty()) Text("Aún no tienes mundos. Empieza uno: luego puedes hacer en él tantos mapas como quieras (el continente, una región, una ciudad…).", style = T.texto(15.sp, T.GRIS))
+        if (mapas.isEmpty()) Text("Este mundo aún no tiene mapas. Haz el primero: te pregunta de qué es (el mundo entero, un continente, una región, una ciudad…).", style = T.texto(15.sp, T.GRIS))
         var n = 1
-        for (w in mundos) {
-            val suyos = mapas.filter { it.mundo == w.id }
-            Seccion(n++, w.nombre, derecha = { Enlace("+ Mapa en este mundo") { nuevo = w.id } })
-            if (suyos.isEmpty()) Text("Sin mapas todavía.", style = T.texto(14.sp, T.GRIS))
-            @OptIn(ExperimentalLayoutApi::class)
+        for ((clave, _, grupo) in Catalogo.TIPOS_MAPA) {
+            val suyos = mapas.filter { (it.tipo.ifBlank { "otro" }.takeIf { t -> Catalogo.TIPOS_MAPA.any { x -> x.first == t } } ?: "otro") == clave }
+            if (suyos.isEmpty()) continue
+            Seccion(n++, grupo)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                for (m in suyos) Column(Modifier.width(220.dp).pulsable { e.abreMapa(m.id) }) {
-                    Miniatura(e.bib.miniatura(m.id), Modifier.fillMaxWidth().aspectRatio(1.4f).border(if (e.mapa?.id == m.id) 3.dp else 1.dp, if (e.mapa?.id == m.id) T.ACENTO else T.TINTA).background(T.MESA), e.listas)
+                for (m in suyos) Column(Modifier.width(250.dp)) {
+                    Miniatura(e.bib.miniatura(m.id), Modifier.fillMaxWidth().aspectRatio(1.4f).border(if (abierto?.id == m.id) 3.dp else 1.dp, if (abierto?.id == m.id) T.BLOQUE2 else T.TINTA).background(T.MESA).pulsable { e.abreMapa(m.id) }, e.listas)
                     Text(m.nombre, style = T.nombre(18.sp), maxLines = 1)
                     Text((if (m.infinito) "Infinito" else "${m.ancho} × ${m.alto}") + " · ${m.reinos} territorios · ${m.lugares} lugares", style = T.texto(12.sp, T.GRIS))
-                }
-                Column(Modifier.width(220.dp).aspectRatio(1.4f).border(1.5.dp, T.GRIS_CLARO).pulsable { nuevo = w.id }, verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("+", style = T.titular(40.sp, T.ACENTO)); Etiqueta("Mapa nuevo", tam = 11.sp, color = T.ACENTO)
+                    FlowRow {
+                        Enlace("Abrir") { e.abreMapa(m.id) }
+                        Enlace("Nombre") { renombrar = m.id to m.nombre }
+                        Enlace("Tipo") { tipoDe = m }
+                        if (mapas.count { !it.infinito } > 1 && !m.infinito) Enlace("Unir") { unir = m }
+                        Enlace("Borrar", color = T.ROJO) { borrar = m.id to m.nombre }
+                    }
                 }
             }
         }
+        if (e.mensaje.isNotBlank()) Text(e.mensaje, style = T.texto(14.sp, T.ACENTO))
         Spacer(Modifier.height(30.dp))
     }
-    nuevo?.let { w -> DialogoNuevo(e, w.ifBlank { null }) { nuevo = null } }
+    if (nuevo) DialogoNuevo(e, w) { nuevo = false }
+    unir?.let { m -> DialogoUnir(e, m) { unir = null } }
+    fun cambia(id: String, f: (com.gonzalo.atlas.motor.Mapa) -> Unit) { val ed = e.editor?.takeIf { it.mapa.id == id }; if (ed != null) { f(ed.mapa); ed.guardaYa() } else e.bib.abre(id)?.let { f(it); it.guardaMeta() }; e.listas++ }
+    renombrar?.let { (id, nombre) -> DialogoTexto("Nuevo nombre", nombre, { renombrar = null }) { t -> cambia(id) { it.nombre = t }; renombrar = null } }
+    tipoDe?.let { m ->
+        Dialog({ tipoDe = null }) {
+            Column(Modifier.background(T.PAPEL).border(2.dp, T.TINTA).padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("«${m.nombre}» es un mapa de…", style = T.titular(22.sp))
+                for ((k, nombre, _) in Catalogo.TIPOS_MAPA) Ficha(nombre, m.tipo == k) { cambia(m.id) { it.tipo = k }; tipoDe = null }
+            }
+        }
+    }
+    borrar?.let { (id, nombre) ->
+        Dialog({ borrar = null }) {
+            Column(Modifier.background(T.PAPEL).border(2.dp, T.TINTA).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("¿Borrar «$nombre»?", style = T.titular(24.sp))
+                Text("Se borra el mapa de este dispositivo (lo subido a la nube sigue allí).", style = T.texto(14.sp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Boton("Borrar", lleno = true, color = T.ROJO) { e.cierraMapaSiEs(id); e.bib.borraMapa(id); e.listas++; borrar = null }
+                    Boton("No") { borrar = null }
+                }
+            }
+        }
+    }
 }

@@ -4,6 +4,31 @@ App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma fir
 Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
 etiqueta `v0.15.0`.
 
+## 2.2.0 — la app, por mundos
+
+- **Fuera y dentro.** Fuera: Portada, **Mundos**, Taller y Ajustes. Al entrar en un mundo cambia la interfaz (misma
+  familia, cabecera azul con el nombre del mundo) y su barra es **Mapas · Política · Guerras · Crónica**.
+- **Mapas del mundo**: «+ Mapa nuevo» pregunta **de qué es** (el mundo entero, un continente, una región o un reino, una
+  ciudad, un lugar, otra cosa) y quedan agrupados así. Se puede cambiar después.
+- **Política**: la situación general del mundo y sus potencias (tipo, gobierno, gobernante, capital, situación actual,
+  ejército, economía…), con sus **relaciones** entre ellas (aliados, enemigos, en guerra, vasallo y señor, comercio,
+  tregua; al ponerla en una queda puesta en la otra) y las guerras en las que andan. Los territorios que pintas en los
+  mapas aparecen aquí solos, y un reino pintado en varios mapas con el mismo nombre es la misma ficha.
+- **Guerras**: estado (se avecina, en curso, en tregua, terminada), los dos bandos (las potencias de Política), causa,
+  dónde se lucha, resultado y cómo va. En curso o en tregua, los bandos quedan así también en sus relaciones.
+- **Crónica**: lo demás (personajes, lugares, pueblos, historia, fe).
+- **Al dibujar sigue arriba la barra del mundo**: saltas a Política o Guerras y, al volver a Mapas, sigues dibujando
+  donde estabas. Y «Consultar sin salir» abre al lado del lienzo la situación, las guerras y lo escrito de cada potencia
+  (la del territorio que tengas elegido, abierta).
+- **Pinceles de Procreate, decodificados con archivos reales.** Se han decodificado 561 pinceles reales (los de serie de
+  Procreate y colecciones de autores, de un repositorio público; no van en este repositorio) y se ha comparado cada uno
+  con la miniatura del trazo que Procreate guarda dentro. De ahí sale el importador nuevo: el espaciado se guarda al
+  cuadrado; la punta se invertía dos veces (por eso algunos salían como cuadrados macizos); lo blanco pinta;
+  «shapeRotation» sigue la dirección; el grano va a su tamaño real. Motor: modo **veladura** (la presión marca la
+  opacidad máxima, como pinta Procreate) y las puntas finas ya no se apagan al estampar pequeño. Límite que queda: 418
+  de esos 561 no traen su punta (usan imágenes internas de Procreate que no vienen en el archivo); esos llevan la punta
+  de ATLAS que más se parece y no salen iguales.
+
 ## 2.1.1
 
 - **Continentes**: se eligen los colores de la tierra y del mar (o el color que tengas puesto).

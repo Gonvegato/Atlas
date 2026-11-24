@@ -93,6 +93,10 @@ class EstadoApp(val ctx: Context) {
     private val prefs = ctx.getSharedPreferences("atlas", Context.MODE_PRIVATE)
 
     var seccion by mutableStateOf("portada")
+    /** El mundo en el que estás dentro (null: fuera, en la portada o en la lista de mundos). */
+    var mundoActual by mutableStateOf<String?>(null)
+    /** La ficha de política que hay que enseñar al entrar en Política (o en la consulta mientras dibujas). */
+    var potenciaPedida by mutableStateOf<String?>(null)
     /** En «Mapas»: dibujando el mapa abierto (si no, eligiendo dónde dibujar). */
     var dibujando by mutableStateOf(false)
     var editor by mutableStateOf<Editor?>(null)
@@ -126,10 +130,10 @@ class EstadoApp(val ctx: Context) {
     fun mesaAbierta(ed: Editor): Mesa? = mesas[ed]
 
     fun abreMapa(m: Mapa, irAlMapa: Boolean = true) {
-        editor?.let { if (it.mapa.id == m.id) { if (irAlMapa) { seccion = "mapa"; dibujando = true }; return }; cierraEditor(it) }
+        editor?.let { if (it.mapa.id == m.id) { if (irAlMapa) { mundoActual = m.mundo; seccion = "mapa"; dibujando = true }; return }; cierraEditor(it) }
         editor = Editor(m, ctx.resources) { listas++; cuenta.programaSubida(this) }.also { recuerda(it) }
         prefs.edit().putString("ultimo", m.id).apply()
-        if (irAlMapa) { seccion = "mapa"; dibujando = true }
+        if (irAlMapa) { mundoActual = m.mundo; seccion = "mapa"; dibujando = true }
         listas++
     }
 
@@ -155,22 +159,30 @@ class EstadoApp(val ctx: Context) {
 
     fun vuelve() { val id = pila.removeLastOrNull() ?: return; bib.abre(id)?.let { abreMapa(it) } }
 
-    fun nuevoMapa(mundo: String?, nombre: String, ancho: Int, alto: Int, papel: Int) {
+    fun nuevoMapa(mundo: String?, nombre: String, ancho: Int, alto: Int, papel: Int, tipo: String = "") {
         val w = mundo ?: bib.creaMundo("").id
-        abreMapa(bib.creaMapa(w, nombre, ancho, alto, papel))
+        abreMapa(bib.creaMapa(w, nombre, ancho, alto, papel, tipo))
     }
+
+    /** Entra en un mundo: su interfaz propia (mapas, política, guerras, crónica). */
+    fun entraMundo(id: String, apartado: String = "mapa") { mundoActual = id; seccion = apartado; dibujando = false; listas++ }
+    fun saleMundo() { editor?.guardaYa(); mundoActual = null; seccion = "mundos" }
+
+    /** Los mapas del mundo, abiertos para leer lo que tienen (el que se está dibujando, tal como está ahora). */
+    fun mapasDe(mundo: String): List<Mapa> = bib.mapas().filter { it.mundo == mundo }.mapNotNull { i -> editor?.mapa?.takeIf { it.id == i.id } ?: bib.abre(i.id) }
 
     fun cierraMapaSiEs(id: String) { if (editor?.mapa?.id == id) { editor?.let { cierraEditor(it) }; editor = null } }
 
     fun cronica(mundo: String) = Cronica(File(bib.dirCronica, "$mundo.json"))
 
-    /** Abre (o crea) la ficha de la crónica ligada a algo del mapa. */
+    /**
+     * Abre (o crea) la ficha ligada a algo del mapa: la de un reino, en Política; las demás, en la Crónica. Si ya hay una
+     * ficha con ese nombre (el mismo reino dibujado en otro mapa del mundo), es la misma.
+     */
     fun fichaDe(m: Mapa, tipo: String, id: String, cat: String, titulo: String) {
-        val cr = cronica(m.mundo)
-        val enlace = "${m.id}:$tipo:$id"
-        val f = cr.deEnlace(enlace) ?: cr.nueva(cat, titulo, enlace)
-        fichaPedida = f.id
-        seccion = "cronica"
+        val f = cronica(m.mundo).fichaDe(cat, titulo, "${m.id}:$tipo:$id")
+        mundoActual = m.mundo
+        if (cat == "reino") { potenciaPedida = f.id; seccion = "politica" } else { fichaPedida = f.id; seccion = "cronica" }
         listas++
     }
 
@@ -237,21 +249,28 @@ class EstadoApp(val ctx: Context) {
     fun alSalir() { mesas.values.forEach { it.recuerdaVista() }; (editorTaller ?: editor)?.let { apunta(it) }; editor?.guardaYa(); editorTaller?.guardaYa() }
 }
 
-val SECCIONES = listOf("portada" to "Portada", "mapa" to "Mapas", "cronica" to "Crónica", "taller" to "Taller", "mundo" to "Mundo")
+/** Los apartados de fuera (la app) y los de dentro de un mundo. */
+val SECCIONES = listOf("portada" to "Portada", "mundos" to "Mundos", "taller" to "Taller", "mundo" to "Ajustes")
+val SECCIONES_MUNDO = listOf("mapa" to "Mapas", "politica" to "Política", "guerras" to "Guerras", "cronica" to "Crónica")
 
 @Composable
 fun App(e: EstadoApp) {
-    // Dibujando, el lienzo ocupa toda la pantalla (como en Procreate): «Galería» vuelve a la portada
-    val dibujando = (e.seccion == "mapa" && e.editor != null && e.dibujando) || (e.seccion == "taller" && e.editorTaller != null)
+    val w = e.mundoActual
+    val dentro = w != null && SECCIONES_MUNDO.any { it.first == e.seccion }
+    // Dibujando, el lienzo ocupa la pantalla (como en Procreate), con la barra del mundo encima para ir a Política, Guerras…
+    val dibujando = (dentro && e.seccion == "mapa" && e.editor?.mapa?.mundo == w && e.dibujando) || (e.seccion == "taller" && e.editorTaller != null)
     Column(Modifier.fillMaxSize().background(if (dibujando) O.MESA else T.PAPEL)) {
-        if (!dibujando) { Cabecera(e); Pestanas(e) }
+        if (!dibujando) { if (dentro) { CabeceraMundo(e); PestanasMundo(e) } else { Cabecera(e); Pestanas(e) } }
         Box(Modifier.fillMaxWidth().weight(1f)) {
-            when (e.seccion) {
-                "portada" -> Portada(e)
-                "mapa" -> if (dibujando) PantMapa(e) else PantMapas(e)
-                "cronica" -> PantCronica(e)
-                "taller" -> PantMapa(e, taller = true)
-                "mundo" -> PantMundo(e)
+            when {
+                dentro && e.seccion == "mapa" -> if (dibujando) PantMapa(e) else PantMapas(e)
+                dentro && e.seccion == "politica" -> PantPolitica(e)
+                dentro && e.seccion == "guerras" -> PantGuerras(e)
+                dentro && e.seccion == "cronica" -> PantCronica(e)
+                e.seccion == "taller" -> PantMapa(e, taller = true)
+                e.seccion == "mundo" -> PantMundo(e)
+                e.seccion == "portada" -> Portada(e)
+                else -> PantMundos(e)
             }
         }
     }
@@ -261,14 +280,14 @@ fun App(e: EstadoApp) {
 @Composable
 fun Cabecera(e: EstadoApp) {
     val enMapa = false
-    val mundo = e.mapa?.let { m -> e.bib.mundo(m.mundo)?.nombre }.orEmpty()
+    val mundo = ""
     Column(Modifier.fillMaxWidth().background(T.CABECERA).statusBarsPadding().padding(horizontal = 20.dp, vertical = if (enMapa) 6.dp else 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (enMapa) {
                 Text(buildAnnotatedString { append("ATLAS"); withStyle(SpanStyle(color = T.ACENTO_NEGRO)) { append(".") } }, style = T.titular(24.sp, T.PAPEL))
                 Spacer(Modifier.width(16.dp))
             }
-            Etiqueta(if (mundo.isNotBlank()) "Mundo · $mundo" else "Tus mundos", Modifier.weight(1f), 11.sp, T.SOBRE_CABECERA)
+            Etiqueta(if (mundo.isNotBlank()) "Mundo · $mundo" else "Tus mundos de fantasía", Modifier.weight(1f), 11.sp, T.SOBRE_CABECERA)
             Etiqueta(if (e.cuenta.dentro) "Familia · " + e.cuenta.usuario else "Sin cuenta", Modifier.pulsable { e.seccion = "mundo" }, 11.sp, T.SOBRE_CABECERA)
         }
         if (!enMapa) {
@@ -285,10 +304,10 @@ fun Pestanas(e: EstadoApp) {
         Row(Modifier.fillMaxWidth().height(46.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             for ((k, n) in SECCIONES) {
                 val sel = e.seccion == k
-                Box(Modifier.fillMaxHeight().background(if (sel) T.ACENTO else T.PAPEL).pulsable { e.seccion = k; if (k == "mapa") e.dibujando = false }.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxHeight().background(if (sel) T.ACENTO else T.PAPEL).pulsable { e.seccion = k }.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Etiqueta(n, tam = 13.sp, color = if (sel) T.PAPEL else T.TINTA)
-                        val cuenta = androidx.compose.runtime.remember(e.listas, e.recursos.version, k) { when (k) { "portada" -> e.bib.mapas().size; "cronica" -> e.mapa?.let { m -> e.cronica(m.mundo).entradas.size } ?: 0; "taller" -> e.recursos.lista().size; else -> 0 } }
+                        val cuenta = androidx.compose.runtime.remember(e.listas, e.recursos.version, k) { when (k) { "mundos" -> e.bib.mundos().size; "taller" -> e.recursos.lista().size; else -> 0 } }
                         if (cuenta > 0) { Spacer(Modifier.width(6.dp)); Text("$cuenta", style = T.titular(14.sp, if (sel) T.PAPEL else T.ACENTO)) }
                     }
                 }

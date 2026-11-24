@@ -12,7 +12,7 @@ class Biblioteca(val raiz: File) {
     class MundoInfo(val id: String, var nombre: String, val creado: Long)
     class MapaInfo(
         val id: String, val nombre: String, val mundo: String, val modificado: Long, val infinito: Boolean,
-        val ancho: Int, val alto: Int, val obras: List<String>, val lugares: Int, val reinos: Int, val km: Float,
+        val ancho: Int, val alto: Int, val obras: List<String>, val lugares: Int, val reinos: Int, val km: Float, val tipo: String = "",
     )
 
     val dirMapas = File(raiz, "mapas")
@@ -65,15 +65,15 @@ class Biblioteca(val raiz: File) {
             val v = o.optJSONObject("vector") ?: JSONObject()
             MapaInfo(o.getString("id"), o.optString("nombre"), o.optString("mundo"), o.optLong("modificado"), o.optInt("w") == 0,
                 o.optInt("w"), o.optInt("h"), (o.optJSONArray("obras") ?: JSONArray()).let { a -> (0 until a.length()).map { a.optString(it) } },
-                v.optJSONArray("lugares")?.length() ?: 0, v.optJSONArray("territorios")?.length() ?: 0, o.optDouble("km", 1.0).toFloat())
+                v.optJSONArray("lugares")?.length() ?: 0, v.optJSONArray("territorios")?.length() ?: 0, o.optDouble("km", 1.0).toFloat(), o.optString("tipo"))
         }.getOrNull()
     }.sortedByDescending { it.modificado }
 
     /** Un mapa nuevo (vacío: lo dibujas tú) con dos capas: «Color» debajo y «Líneas» encima (la de referencia). */
-    fun creaMapa(mundo: String, nombre: String, ancho: Int, alto: Int, papel: Int = Catalogo.PAPELES[0].second): Mapa {
+    fun creaMapa(mundo: String, nombre: String, ancho: Int, alto: Int, papel: Int = Catalogo.PAPELES[0].second, tipo: String = ""): Mapa {
         val id = "m" + id36()
         val m = Mapa(id, mundo, nombre.ifBlank { Nombres.raiz() }, ancho, alto, dirMapa(id))
-        m.papel = papel
+        m.papel = papel; m.tipo = tipo
         m.capas += CapaInfo("c" + id36(), "Color")
         m.capas += CapaInfo("c" + id36() + "l", "Líneas", referencia = true)
         m.guardaMeta()

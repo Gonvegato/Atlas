@@ -113,11 +113,9 @@ object Bplist {
 }
 
 /**
- * Importar pinceles de Procreate (.brush y .brushset): son zips con, por pincel, un Brush.archive (sus ajustes, en un
- * NSKeyedArchiver), Shape.png (la punta) y, si tiene, Grain.png (el grano). La punta se usa como sello repetido a lo largo
- * del trazo y el grano como textura. Procreate no documenta su formato: el nombre, el espaciado y el tamaño se leen de las
- * claves que usan los lectores conocidos («name», «plotSpacing», «paintSize», «textureScale»); el resto de sus ajustes
- * (dinámicas, afilado, color…) no se traducen.
+ * Importar y exportar pinceles de Procreate (.brush y .brushset): son zips con, por pincel, un Brush.archive (sus ajustes,
+ * en un NSKeyedArchiver), Shape.png (la punta) y Grain.png (el grano), cuando los trae. La traducción de los ajustes está en
+ * [deAjustes]: sale de decodificar pinceles reales y compararlos con la miniatura que Procreate guarda de cada uno.
  */
 object Procreate {
     fun dir(recursos: File) = File(recursos, "pinceles")
@@ -132,6 +130,7 @@ object Procreate {
             }
         }
         val carpetas = archivos.keys.filter { it.substringAfterLast('/').equals("Brush.archive", true) }.map { it.substringBeforeLast('/', "") }
+            .filter { c -> val u = c.substringAfterLast('/'); !u.startsWith("Sub") && u != "Reset" }.sorted()
         var n = 0
         for (c in carpetas) {
             fun f(nombre: String) = archivos.entries.firstOrNull { (k, _) -> k.substringBeforeLast('/', "") == c && k.substringAfterLast('/').equals(nombre, true) }?.value
@@ -140,10 +139,14 @@ object Procreate {
             val grano = f("Grain.png")?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
             val id = "pc" + System.nanoTime().toString(36)
             val d = File(dir(recursos), id); d.mkdirs()
-            (if (forma != null) aAlfa(forma, true) else puntoRedondo()).let { b -> File(d, "forma.png").outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) } }
-            grano?.let { g -> aAlfa(g, false).let { b -> File(d, "grano.png").outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) } } }
+            // En los archivos de Procreate lo blanco pinta (y «shapeInverted» o «textureInverted» le dan la vuelta). Si el archivo
+            // no dice nada de la punta, se separa del fondo (el color de sus bordes)
+            val inv = { k: String -> ajustes[k] == true }
+            if (forma != null) aAlfa(forma, !ajustes.containsKey("shapeInverted"), inv("shapeInverted")).let { b -> File(d, "forma.png").outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) } }
+            grano?.let { g -> aAlfa(g, false, inv("textureInverted")).let { b -> File(d, "grano.png").outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) } } }
             val nombre = (ajustes["name"] as? String)?.takeIf { it.isNotBlank() } ?: c.substringAfterLast('/').ifBlank { "Pincel de Procreate" }.removeSuffix(".brush")
-            File(d, "pincel.json").writeText(ajustesAJson(ajustes, nombre, grano != null).toString())
+            val def = deAjustes(id, ajustes, nombre, forma != null, grano != null, grano?.let { maxOf(it.width, it.height) } ?: 0)
+            File(d, "pincel.json").writeText(JSONObject().put("n", nombre).put("def", def.json()).put("interna", forma == null && (ajustes["bundledShapePath"] as? String).orEmpty().isNotBlank()).toString())
             n++
         }
         if (n > 0) Pinceles.cargaImportados(recursos)
@@ -151,25 +154,70 @@ object Procreate {
     }
 
     /**
-     * Los ajustes de un Brush.archive, traducidos a lo que guarda ATLAS de un pincel importado. Procreate no documenta su
-     * formato; los nombres de las claves son los que usan los lectores hechos por la comunidad, y de la mayoría solo se sabe
-     * que existen, no su escala exacta: se leen como fracciones (0 a 1) y se acotan. El espaciado se guarda al cuadrado.
-     * Si el pincel lo exportó ATLAS, trae sus ajustes exactos («atlasDef»).
+     * Los ajustes de un Brush.archive de Procreate, traducidos a un pincel de ATLAS. Procreate no documenta su formato: esto
+     * sale de decodificar 561 pinceles reales (los de serie de Procreate y colecciones de autores) y de comparar el
+     * resultado con la miniatura del trazo que Procreate guarda en cada uno. Lo comprobado así: el espaciado se guarda al
+     * cuadrado (plotSpacing); shapeRotation es seguir la dirección del trazo; shapeScatter 1 es un giro al azar de unos
+     * ±45°; los demás (presión, inclinación, velocidad, azar, grano, flujo, afilado, StreamLine) van de 0 a 1 tal cual.
+     * Muchos pinceles no traen su punta ni su grano: usan imágenes internas de Procreate (bundledShapePath); para esos se
+     * pone la punta o el grano de ATLAS que más se parece por el nombre. Si el pincel lo exportó ATLAS, trae sus ajustes
+     * exactos («atlasDef»).
      */
-    fun ajustesAJson(a: Map<String, Any?>, nombre: String, conGrano: Boolean): JSONObject {
+    fun deAjustes(id: String, a: Map<String, Any?>, nombre: String, conForma: Boolean, conGrano: Boolean, ladoGrano: Int = 0): DefPincel {
+        (a["atlasDef"] as? String)?.let { t -> runCatching { DefPincel.de(JSONObject(t)) }.getOrNull()?.let { o ->
+            return o.copy(id = id, categoria = "Importados", forma = if (o.forma == "redonda" || o.forma == "plana" || !conForma) o.forma.takeIf { it == "redonda" || it == "plana" } ?: "redonda" else "$id:forma",
+                grano = if (o.grano.isBlank() || !conGrano) "" else "$id:grano", propio = false)
+        } }
         fun num(k: String): Double? = when (val v = a[k]) { is Number -> v.toDouble(); is Boolean -> if (v) 1.0 else 0.0; else -> null }
-        fun n(k: String, def: Double) = num(k) ?: def
-        val j = JSONObject().put("n", nombre).put("grano", conGrano).put("inv", false)
-        j.put("esp", Math.sqrt(n("plotSpacing", 0.01).coerceAtLeast(0.0))).put("tam", n("paintSize", 0.3)).put("tex", n("textureScale", 0.5))
-        j.put("disp", n("plotJitter", 0.0)).put("giro", n("shapeScatter", 0.0).coerceIn(0.0, 1.0))
-        j.put("sigue", Math.abs(n("shapeRotation", 0.0)) > 0.5).put("acimut", n("shapeAzimuth", 0.0) > 0.5).put("num", n("shapeCount", 1.0).toInt().coerceIn(1, 16))
-        j.put("pt", Math.abs(n("dynamicsPressureSize", 0.6)).coerceIn(0.0, 1.0)).put("po", Math.abs(n("dynamicsPressureOpacity", 0.0)).coerceIn(0.0, 1.0))
-        j.put("zt", Math.abs(n("dynamicsJitterSize", 0.0)).coerceIn(0.0, 1.0)).put("zo", Math.abs(n("dynamicsJitterOpacity", 0.0)).coerceIn(0.0, 1.0))
-        j.put("ai", n("taperStartLength", 0.0).coerceIn(0.0, 1.0) * 8.0).put("af", n("taperEndLength", 0.0).coerceIn(0.0, 1.0) * 8.0)
-        j.put("op", (num("maxOpacity") ?: n("paintOpacity", 1.0)).coerceIn(0.05, 1.0)).put("fl", (num("dynamicsGlazedFlow") ?: n("dynamicsGlazeFlow", 1.0)).coerceIn(0.05, 1.0))
-        j.put("pg", n("grainDepth", 1.0).coerceIn(0.0, 1.0)).put("gm", num("textureMovement")?.let { it < 0.5 } ?: false).put("est", n("plotSmoothing", 0.1).coerceIn(0.0, 1.0))
-        (a["atlasDef"] as? String)?.let { t -> runCatching { JSONObject(t) }.getOrNull()?.let { j.put("atlas", it) } }
-        return j
+        fun n(k: String, def: Double) = (num(k) ?: def).toFloat()
+        fun u(k: String, def: Double = 0.0) = kotlin.math.abs(n(k, def)).coerceIn(0f, 1f)
+        val punta = (a["bundledShapePath"] as? String).orEmpty().lowercase(); val papel = (a["bundledGrainPath"] as? String).orEmpty().lowercase()
+        fun tiene(t: String, vararg ps: String) = ps.any { it in t }
+        var forma = "$id:forma"; var dureza = 1f; var achatado = n("shapeRoundness", 1.0).coerceIn(0.05f, 1f)
+        if (!conForma) when {
+            tiene(punta, "ultra-soft") || (tiene(punta, "soft") && !tiene(punta, "medium")) -> { forma = "redonda"; dureza = 0f }
+            tiene(punta, "medium-hard") -> { forma = "redonda"; dureza = 0.8f }
+            tiene(punta, "medium") -> { forma = "redonda"; dureza = 0.5f }
+            punta.isBlank() || tiene(punta, "hard", "point") -> forma = "redonda"
+            tiene(punta, "oval") -> { forma = "redonda"; achatado = if (tiene(punta, "slim")) 0.3f else 0.5f }
+            tiene(punta, "charcoal", "crayon", "chalk", "pastel", "pencil", "brick", "scribble", "conte", "stamp") -> forma = "t_tiza"
+            tiene(punta, "blotch", "mess", "splatter", "dots", "spray", "water", "sponge", "ink") -> forma = "t_esponja"
+            tiene(punta, "streak", "bristle", "dash", "oil") -> forma = "t_cerdas"
+            else -> forma = "t_aspera"
+        }
+        val grano = if (conGrano) "$id:grano" else when {
+            papel.isBlank() || tiene(papel, "blank") || papel == "none" -> ""
+            tiene(papel, "canvas", "board", "leather", "bark", "wood", "linen") -> "g_lienzo"
+            tiene(papel, "cloud", "wash", "stain", "water", "foam", "mix") -> "g_acuarela"
+            tiene(papel, "noise", "procedural") -> "g_ruido"
+            tiene(papel, "splatter", "grit", "sand", "spray", "aggate") -> "g_arena"
+            tiene(papel, "stone", "concrete", "rock") -> "g_piedra"
+            else -> "g_papel"
+        }
+        val esp = Math.sqrt(n("plotSpacing", 0.0).coerceAtLeast(0f).toDouble()).toFloat()
+        val scat = n("shapeScatter", 0.0).coerceIn(0f, 2f)
+        val maxT = n("maxSize", 0.3); val minT = n("minSize", 0.0); val pos = n("paintSize", 0.3).coerceIn(0f, 1f)
+        val afila = u("taperSize", 1.0)
+        return DefPincel(id, nombre, "Importados", forma = forma, dureza = dureza,
+            tamano = ((minT + (maxT - minT) * pos) * 256f).coerceIn(2f, 120f),
+            opacidad = u("maxOpacity", 1.0).coerceIn(0.05f, 1f),
+            flujo = ((num("dynamicsGlazedFlow") ?: num("dynamicsGlazeFlow") ?: 1.0).toFloat()).coerceIn(0.05f, 1f),
+            presionTamano = u("dynamicsPressureSize"), presionOpacidad = u("dynamicsPressureOpacity"),
+            velocidadTamano = n("dynamicsSpeedSize", 0.0).coerceIn(-0.9f, 1f), velocidadOpacidad = -u("dynamicsSpeedOpacity").coerceAtMost(0.9f),
+            inclinacion = u("dynamicsTiltSize"), inclinacionOpacidad = u("dynamicsTiltOpacity"),
+            afiladoInicio = u("taperStartLength") * afila * 6f, afiladoFin = u("taperEndLength") * afila * 6f,
+            // «Sin espaciado» en una punta con dibujo: muy junto, para que sus motas se fundan en rayas a lo largo del trazo
+            espaciado = if (esp < 0.025f) (if (forma == "redonda") 0f else 0.025f) else esp.coerceAtMost(3f), dispersion = n("plotJitter", 0.0).coerceIn(0f, 4f),
+            numero = (1 + Math.round(n("shapeCount", 0.0).coerceIn(0f, 1f) * 16f)).coerceIn(1, 8),
+            // (Una punta de ATLAS puesta en lugar de la interna de Procreate se gira al azar: si no, su dibujo se repite a rayas)
+            giroAzar = if (!conForma && forma.startsWith("t_") && forma != "t_cerdas") 1f else scat * 0.25f, sigueDireccion = kotlin.math.abs(n("shapeRotation", 0.0)) > 0.5f, acimut = a["shapeAzimuth"] == true, volteo = a["shapeFlipXJitter"] == true,
+            achatado = achatado, grano = grano,
+            // El grano del archivo, a su tamaño (un punto suyo, un píxel del lienzo) por su escala; los de ATLAS, a la suya
+            escalaGrano = (n("textureScale", 1.0).let { if (it <= 0.001f) 1f else it } * (if (conGrano && ladoGrano > 0) ladoGrano.toFloat() else 128f)).coerceIn(24f, 4096f),
+            profGrano = u("grainDepth", 1.0), granoMovil = n("textureMovement", 1.0) < 0.5f,
+            velado = true, bordes = u("wetEdgesAmount"),
+            azarTamano = u("dynamicsJitterSize"), azarOpacidad = u("dynamicsJitterOpacity"), azarTono = u("dynamicsJitterHue"), azarSat = u("dynamicsJitterSaturation"), azarBrillo = u("dynamicsJitterDarkness"),
+            mezcla = u("dynamicsMix") * 0.9f, estabilizacion = u("plotSmoothing"))
     }
 
     /**
@@ -183,16 +231,20 @@ object Procreate {
         fun gris(t: Textura): ByteArray { val b = Bitmap.createBitmap(IntArray(t.lado * t.lado) { val v = t.a[it].toInt() and 255; Color.rgb(v, v, v) }, t.lado, t.lado, Bitmap.Config.ARGB_8888); return java.io.ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray() }
         val raiz = LinkedHashMap<String, Any?>()
         raiz["\$class"] = Bplist.Uid(3); raiz["name"] = Bplist.Uid(2); raiz["version"] = 2
-        raiz["paintSize"] = ((d.tamano - 4f) / 120f).coerceIn(0.01f, 1f).toDouble(); raiz["maxOpacity"] = d.opacidad.toDouble(); raiz["paintOpacity"] = d.opacidad.toDouble()
+        // Como en los archivos reales: el tamaño es un sitio (paintSize) entre minSize y maxSize, que van en unidades de 256 px
+        raiz["paintSize"] = 0.5; raiz["minSize"] = 0.0; raiz["maxSize"] = (d.tamano / 128f).toDouble(); raiz["maxOpacity"] = d.opacidad.toDouble(); raiz["minOpacity"] = 0.0; raiz["paintOpacity"] = 1.0
+        raiz["shapeInverted"] = false; raiz["textureInverted"] = false; raiz["plotSpacingVersion"] = 1
         val esp = if (d.espaciado < 0.02f) 0.07 else d.espaciado.toDouble()
         raiz["plotSpacing"] = esp * esp; raiz["plotJitter"] = d.dispersion.toDouble(); raiz["plotSmoothing"] = d.estabilizacion.toDouble()
-        raiz["shapeScatter"] = d.giroAzar.toDouble(); raiz["shapeRotation"] = if (d.sigueDireccion) 1.0 else 0.0; raiz["shapeAzimuth"] = d.acimut; raiz["shapeCount"] = d.numero
+        raiz["shapeScatter"] = (d.giroAzar / 0.25f).coerceAtMost(2f).toDouble(); raiz["shapeRotation"] = if (d.sigueDireccion) 1.0 else 0.0; raiz["shapeAzimuth"] = d.acimut; raiz["shapeCount"] = d.numero
         raiz["shapeFlipXJitter"] = d.volteo; raiz["shapeRoundness"] = d.achatado.toDouble()
         raiz["dynamicsPressureSize"] = d.presionTamano.toDouble(); raiz["dynamicsPressureOpacity"] = d.presionOpacidad.toDouble()
         raiz["dynamicsJitterSize"] = d.azarTamano.toDouble(); raiz["dynamicsJitterOpacity"] = d.azarOpacidad.toDouble(); raiz["dynamicsSpeedSize"] = d.velocidadTamano.toDouble()
-        raiz["dynamicsGlazedFlow"] = d.flujo.toDouble(); raiz["grainDepth"] = d.profGrano.toDouble(); raiz["textureScale"] = ((d.escalaGrano - 64f) / 448f).coerceIn(0f, 1f).toDouble()
+        raiz["dynamicsGlazedFlow"] = d.flujo.toDouble(); raiz["grainDepth"] = d.profGrano.toDouble(); raiz["textureScale"] = (d.escalaGrano / (grano?.lado ?: 128)).toDouble()
         raiz["textureMovement"] = if (d.granoMovil) 0.0 else 1.0
-        raiz["taperStartLength"] = (d.afiladoInicio / 8f).coerceIn(0f, 1f).toDouble(); raiz["taperEndLength"] = (d.afiladoFin / 8f).coerceIn(0f, 1f).toDouble()
+        raiz["taperStartLength"] = (d.afiladoInicio / 6f).coerceIn(0f, 1f).toDouble(); raiz["taperEndLength"] = (d.afiladoFin / 6f).coerceIn(0f, 1f).toDouble(); raiz["taperSize"] = 1.0
+        raiz["dynamicsTiltSize"] = d.inclinacion.toDouble().coerceAtMost(1.0); raiz["dynamicsTiltOpacity"] = d.inclinacionOpacidad.toDouble(); raiz["dynamicsMix"] = d.mezcla.toDouble(); raiz["wetEdgesAmount"] = d.bordes.toDouble()
+        raiz["dynamicsJitterHue"] = d.azarTono.toDouble(); raiz["dynamicsJitterSaturation"] = d.azarSat.toDouble(); raiz["dynamicsJitterDarkness"] = d.azarBrillo.toDouble()
         raiz["atlasDef"] = Bplist.Uid(4)
         val archivo = Bplist.escribe(linkedMapOf("\$version" to 100000, "\$archiver" to "NSKeyedArchiver", "\$top" to mapOf("root" to Bplist.Uid(1)),
             "\$objects" to listOf("\$null", raiz, d.nombre, mapOf("\$classname" to "SilicaBrush", "\$classes" to listOf("SilicaBrush", "ValkyrieBrush", "NSObject")), d.json().toString())))

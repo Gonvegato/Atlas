@@ -32,4 +32,10 @@ object Catalogo {
     /** Papeles de fondo. */
     val PAPELES = listOf("Pergamino" to 0xFFF1E6C8.toInt(), "Papel" to 0xFFFBF8F0.toInt(), "Crudo" to 0xFFE9DDBF.toInt(),
         "Viejo" to 0xFFDCC9A0.toInt(), "Gris" to 0xFFE3E2DE.toInt(), "Noche" to 0xFF22262B.toInt(), "Transparente" to 0x00000000)
+
+    /** De qué puede ser un mapa (clave, cómo se pregunta y cómo se agrupan en la lista del mundo). */
+    val TIPOS_MAPA = listOf(
+        Triple("mundo", "El mundo entero", "El mundo"), Triple("continente", "Un continente", "Continentes"), Triple("region", "Una región o un reino", "Regiones y reinos"),
+        Triple("ciudad", "Una ciudad", "Ciudades"), Triple("lugar", "Un lugar (castillo, templo, mazmorra…)", "Lugares"), Triple("otro", "Otra cosa", "Otros mapas"))
+    fun tipoMapa(k: String) = TIPOS_MAPA.firstOrNull { it.first == k } ?: TIPOS_MAPA.last()
 }

@@ -19,15 +19,21 @@ import kotlin.math.sin
  * Una textura del motor de pinceles: cuadrada, un byte por píxel (cuánto pinta: 0 nada, 255 todo). Sirve de punta (la forma
  * que se estampa) o de grano (el papel que asoma). Las mitades sucesivas ([mitad]) evitan dientes al estampar pequeño.
  */
-class Textura(val lado: Int, val a: ByteArray) {
+class Textura(val lado: Int, val a: ByteArray, val fina: Boolean = false) {
+    /**
+     * La mitad de grande. En las puntas ([fina]) no es la media sin más: se queda a medio camino del valor más alto, para
+     * que las líneas y motas finas (una montaña a tinta, las cerdas de un pincel seco) no se apaguen al estampar pequeño.
+     */
     val mitad: Textura? by lazy {
         if (lado <= 8) null else {
             val l = lado / 2; val o = ByteArray(l * l)
             for (y in 0 until l) for (x in 0 until l) {
                 val i = (y * 2) * lado + x * 2
-                o[y * l + x] = (((a[i].toInt() and 255) + (a[i + 1].toInt() and 255) + (a[i + lado].toInt() and 255) + (a[i + lado + 1].toInt() and 255) + 2) shr 2).toByte()
+                val p0 = a[i].toInt() and 255; val p1 = a[i + 1].toInt() and 255; val p2 = a[i + lado].toInt() and 255; val p3 = a[i + lado + 1].toInt() and 255
+                val media = (p0 + p1 + p2 + p3 + 2) shr 2
+                o[y * l + x] = (if (fina) (media + maxOf(maxOf(p0, p1), maxOf(p2, p3)) + 1) shr 1 else media).toByte()
             }
-            Textura(l, o)
+            Textura(l, o, fina)
         }
     }
 
@@ -42,7 +48,7 @@ class Textura(val lado: Int, val a: ByteArray) {
 
     companion object {
         /** De una imagen: su transparencia (si es toda opaca, su claridad). Se encaja en un cuadrado. */
-        fun de(b: Bitmap, maxLado: Int = 512): Textura {
+        fun de(b: Bitmap, maxLado: Int = 512, fina: Boolean = false): Textura {
             val l0 = max(b.width, b.height)
             val l = if (l0 > maxLado) maxLado else l0
             val src = if (b.width == l && b.height == l) b else Bitmap.createBitmap(l, l, Bitmap.Config.ARGB_8888).also { d ->
@@ -52,7 +58,7 @@ class Textura(val lado: Int, val a: ByteArray) {
             }
             val px = IntArray(l * l); src.getPixels(px, 0, l, 0, 0, l, l)
             val opaca = px.all { (it ushr 24) == 255 }
-            return Textura(l, ByteArray(l * l) { i -> (if (opaca) (Color.red(px[i]) * 299 + Color.green(px[i]) * 587 + Color.blue(px[i]) * 114) / 1000 else px[i] ushr 24).toByte() })
+            return Textura(l, ByteArray(l * l) { i -> (if (opaca) (Color.red(px[i]) * 299 + Color.green(px[i]) * 587 + Color.blue(px[i]) * 114) / 1000 else px[i] ushr 24).toByte() }, fina)
         }
     }
 }
@@ -73,7 +79,7 @@ object Texturas {
         if (id.isBlank()) return null
         puestas[id]?.let { return it }
         hechas[id]?.let { return it }
-        val t = runCatching { genera(id) }.getOrNull() ?: return null
+        val t = runCatching { genera(id) }.getOrNull()?.let { if (id.startsWith("t_")) Textura(it.lado, it.a, true) else it } ?: return null
         hechas[id] = t
         return t
     }

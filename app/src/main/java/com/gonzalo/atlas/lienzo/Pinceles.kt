@@ -74,8 +74,8 @@ object Pinceles {
         Procreate.dir(recursos).listFiles()?.sortedBy { it.name }?.forEach { d ->
             val j = runCatching { JSONObject(File(d, "pincel.json").readText()) }.getOrNull() ?: return@forEach
             val id = d.name
-            android.graphics.BitmapFactory.decodeFile(File(d, "forma.png").path)?.let { Texturas.pon("$id:forma", Textura.de(it)) }
-            val conGrano = android.graphics.BitmapFactory.decodeFile(File(d, "grano.png").path)?.let { Texturas.pon("$id:grano", Textura.de(it)); true } ?: false
+            android.graphics.BitmapFactory.decodeFile(File(d, "forma.png").path)?.let { Texturas.pon("$id:forma", Textura.de(it, 512, true)) }
+            val conGrano = android.graphics.BitmapFactory.decodeFile(File(d, "grano.png").path)?.let { Texturas.pon("$id:grano", Textura.de(it, 1024)); true } ?: false
             val def = j.optJSONObject("def")?.let { runCatching { DefPincel.de(it) }.getOrNull() }
             l += def ?: Procreate.def(id, j, conGrano)
         }

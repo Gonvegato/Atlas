@@ -43,10 +43,11 @@ import com.gonzalo.atlas.motor.Medidas
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PantCronica(e: EstadoApp) {
-    val m = e.mapa ?: run { Vacio("Abre o crea un mapa: la crónica es de su mundo"); return }
-    val cr = remember(m.mundo, e.listas) { e.cronica(m.mundo) }
+    val mundo = e.mundoActual ?: run { Vacio("Entra en un mundo: la crónica es suya"); return }
+    val m = e.editor?.mapa?.takeIf { it.mundo == mundo }
+    val cr = remember(mundo, e.listas) { e.cronica(mundo) }
     var version by remember { mutableIntStateOf(0) }
-    var cat by remember { mutableStateOf("reino") }
+    var cat by remember { mutableStateOf("personaje") }
     var elegida by remember { mutableStateOf<String?>(null) }
     // La ficha pedida desde el mapa (o al tocar algo del mapa sin ficha)
     e.fichaPedida?.let { id -> if (elegida != id) { elegida = id; cr.entradas[id]?.let { cat = it.cat } } }
@@ -58,16 +59,14 @@ fun PantCronica(e: EstadoApp) {
         val ancho = maxWidth > 760.dp
         val lista = @Composable { mod: Modifier ->
             Column(mod.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Crónica de " + (e.bib.mundo(m.mundo)?.nombre ?: "tu mundo"), style = T.titular(30.sp))
+                Text("Crónica de " + (e.bib.mundo(mundo)?.nombre ?: "tu mundo"), style = T.titular(30.sp))
+                Text("Personajes, lugares, pueblos, historia, fe… Los reinos están en Política y las guerras en Guerras.", style = T.texto(13.sp, T.GRIS))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    for (c in Cronica.CATEGORIAS) Ficha(c.nombre + " " + cr.de(c.clave).size, cat == c.clave) { cat = c.clave }
+                    for (c in Cronica.CATEGORIAS) if (c.clave !in Cronica.APARTE) Ficha(c.nombre + " " + cr.de(c.clave).size, cat == c.clave) { cat = c.clave }
                 }
                 Seccion(null, Cronica.categoria(cat).nombre, derecha = { Enlace("+ Nueva") { val f = cr.nueva(cat, "Sin nombre"); elegida = f.id; version++; e.listas++ } })
                 // Lo del mapa que aún no tiene ficha
-                if (cat == "reino") for (t in m.territorios.filter { cr.deEnlace("${m.id}:t:${it.id}") == null }) {
-                    Fila(t.nombre, t.tipo + " · en el mapa, sin ficha", Color(t.color), false) { e.fichaDe(m, "t", t.id.toString(), "reino", t.nombre); elegida = e.fichaPedida; version++ }
-                }
-                if (cat == "lugar") for (l in m.lugares.filter { cr.deEnlace("${m.id}:p:${it.id}") == null }) {
+                if (cat == "lugar" && m != null) for (l in m.lugares.filter { cr.deEnlace("${m.id}:p:${it.id}") == null }) {
                     Fila(l.nombre, com.gonzalo.atlas.motor.Catalogo.lugar(l.tipo).nombre + " · en el mapa, sin ficha", null, false) { e.fichaDe(m, "p", l.id, "lugar", l.nombre); elegida = e.fichaPedida; version++ }
                 }
                 for (f in cr.de(cat)) Fila(f.titulo, f.campos.values.filter { it.isNotBlank() }.take(2).joinToString(" · ").ifBlank { if (f.enlace.isNotBlank()) "En el mapa" else "" }, null, f.id == elegida) { elegida = f.id }
@@ -83,7 +82,7 @@ fun PantCronica(e: EstadoApp) {
                 Campo(titulo, { titulo = it; f.titulo = it; f.u = System.currentTimeMillis(); cr.guarda(); version++ }, Modifier.fillMaxWidth(), "Nombre", T.titular(26.sp))
                 Etiqueta(Cronica.categoria(f.cat).nombre, tam = 10.sp, color = T.ACENTO)
                 Datos(e, f)
-                for (campo in Cronica.categoria(f.cat).campos + f.campos.keys.filter { k -> Cronica.categoria(f.cat).campos.none { it == k } }) {
+                for (campo in Cronica.categoria(f.cat).campos + f.campos.keys.filter { k -> !k.startsWith("_") && Cronica.categoria(f.cat).campos.none { it == k } }) {
                     var valor by remember(f.id, campo) { mutableStateOf(f.campos[campo].orEmpty()) }
                     Etiqueta(campo, tam = 10.sp, color = T.GRIS)
                     Campo(valor, { valor = it; f.campos[campo] = it; f.u = System.currentTimeMillis(); cr.guarda() }, Modifier.fillMaxWidth())
@@ -148,7 +147,7 @@ fun verEnMapa(e: EstadoApp, enlace: String) {
     val p = enlace.split(':'); if (p.size != 3) return
     if (e.mapa?.id != p[0]) e.abreMapa(p[0], irAlMapa = false)
     val ed = e.editor ?: return
-    e.seccion = "mapa"; e.dibujando = true
+    e.mundoActual = ed.mapa.mundo; e.seccion = "mapa"; e.dibujando = true
     // Se apunta dónde mirar: la mesa lo usa al abrirse (o ya, si está abierta)
     val punto = when (p[1]) {
         "t" -> { val id = p[2].toIntOrNull() ?: return; ed.territorio = id; ed.herramienta = Herramienta.ELEGIR; ed.seleccion = ed.mapa.territorio(id)

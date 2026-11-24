@@ -51,6 +51,8 @@ data class DefPincel(
     var granoMovil: Boolean = false,
     /** Acumula donde se cruza consigo mismo (acuarela, aerógrafo) o no (tinta, lápiz). */
     var acumula: Boolean = false,
+    /** Veladura (como pinta Procreate): la presión marca hasta dónde llega la opacidad y los sellos se funden sin pasarse de ahí. */
+    var velado: Boolean = false,
     /** Bordes húmedos: el contorno del trazo queda más cargado (acuarela). */
     var bordes: Float = 0f,
     /** Azar en cada estampa: tamaño, opacidad y color (tono, saturación, brillo). */
@@ -70,7 +72,7 @@ data class DefPincel(
         .put("i", inclinacion.toDouble()).put("io", inclinacionOpacidad.toDouble()).put("ai", afiladoInicio.toDouble()).put("af", afiladoFin.toDouble()).put("e", espaciado.toDouble())
         .put("d", dispersion.toDouble()).put("nu", numero).put("ga", giroAzar.toDouble()).put("sd", sigueDireccion).put("az", acimut).put("vl", volteo)
         .put("ac", achatado.toDouble()).put("an", angulo.toDouble()).put("g", grano).put("eg", escalaGrano.toDouble()).put("pg", profGrano.toDouble()).put("gm", granoMovil)
-        .put("acu", acumula).put("bo", bordes.toDouble()).put("zt", azarTamano.toDouble()).put("zo", azarOpacidad.toDouble()).put("zh", azarTono.toDouble())
+        .put("acu", acumula).put("ve", velado).put("bo", bordes.toDouble()).put("zt", azarTamano.toDouble()).put("zo", azarOpacidad.toDouble()).put("zh", azarTono.toDouble())
         .put("zs", azarSat.toDouble()).put("zb", azarBrillo.toDouble()).put("mz", mezcla.toDouble()).put("est", estabilizacion.toDouble()).put("p", propio)
 
     /** Hay que guardar el color píxel a píxel mientras se pinta (cada estampa puede traer un color distinto). */
@@ -84,7 +86,7 @@ data class DefPincel(
             fun f(k: String, def: Double = 0.0) = o.optDouble(k, def).toFloat()
             val d = DefPincel(o.getString("id"), o.optString("n"), o.optString("c", "Míos"), o.optString("f", "redonda"), f("du", 1.0), f("t", 8.0), f("o", 1.0), f("fl", 1.0),
                 f("pt", 0.6), f("po"), f("v"), f("vo"), f("i"), f("io"), f("ai"), f("af"), f("e"), f("d"), o.optInt("nu", 1).coerceIn(1, 16), f("ga"), o.optBoolean("sd"), o.optBoolean("az"),
-                o.optBoolean("vl"), f("ac", 1.0), f("an"), o.optString("g"), f("eg", 128.0), f("pg", 1.0), o.optBoolean("gm"), o.optBoolean("acu"), f("bo"), f("zt"), f("zo"), f("zh"),
+                o.optBoolean("vl"), f("ac", 1.0), f("an"), o.optString("g"), f("eg", 128.0), f("pg", 1.0), o.optBoolean("gm"), o.optBoolean("acu"), o.optBoolean("ve"), f("bo"), f("zt"), f("zo"), f("zh"),
                 f("zs"), f("zb"), f("mz"), f("est", 0.15), o.optBoolean("p"))
             // Los pinceles guardados con el motor anterior (los de Ink «tal cual» y la punta suave)
             when (o.optString("s")) {
