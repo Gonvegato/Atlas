@@ -1,5 +1,3 @@
-@file:OptIn(androidx.ink.brush.ExperimentalInkCustomBrushApi::class)
-
 package com.gonzalo.atlas.lienzo
 
 import android.content.res.Resources
@@ -14,10 +12,10 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
-import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
-import androidx.ink.strokes.Stroke
 import com.gonzalo.atlas.motor.CapaInfo
 import com.gonzalo.atlas.motor.Mapa
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -36,42 +34,54 @@ class CapaPx(val info: CapaInfo) {
     val sucias: MutableSet<Long> = ConcurrentHashMap.newKeySet()
 
     /**
-     * Los trazos de tinta guardados también como vectores: de cerca se pintan a la resolución de la pantalla (nítidos a
-     * cualquier acercamiento) sobre [sinTrazos], que es lo que había en esas teselas sin ellos. Las teselas normales los
-     * llevan pintados (para ver de lejos, rellenar, exportar…). Una operación de píxeles en la capa (difuminar, ajustes…)
-     * los deja solo como píxeles ([aplana]).
+     * Los trazos guardados también como datos: de cerca se vuelven a pintar al tamaño de la pantalla (nítidos a cualquier
+     * acercamiento) sobre el [fondo] de cada tesela, que es lo que había en ella antes de esos trazos. Las teselas normales
+     * los llevan pintados (para ver de lejos, rellenar, exportar…). Una operación de píxeles en una tesela (rellenar,
+     * difuminar, ajustes…) quita su fondo: desde ahí, esa tesela es solo píxeles hasta el siguiente trazo.
      */
     @Volatile var trazos: List<TrazoV> = emptyList()
-    val sinTrazos = ConcurrentHashMap<Long, Bitmap>()
+    val fondo = ConcurrentHashMap<Long, Fondo>()
+    val fondoSucias: MutableSet<Long> = ConcurrentHashMap.newKeySet()
     @Volatile var trazosSucios = false
+    @Volatile var seq = 0L
 
-    fun antesDeTrazo(k: Long, viejo: Bitmap?) { sinTrazos[k] = viejo ?: TESELA_VACIA }
+    /** Deja la capa solo como píxeles (al combinarla, vaciarla o rellenarla entera). */
+    fun soloPixeles() { fondoSucias.addAll(fondo.keys); fondo.clear(); trazos = emptyList(); trazosSucios = true }
 
-    fun aplana() { if (trazos.isNotEmpty() || sinTrazos.isNotEmpty()) { trazos = emptyList(); sinTrazos.clear(); trazosSucios = true } }
+    /** Los trazos que aún hacen falta (los que alguna tesela tiene que rehacer de cerca). */
+    fun trazosVivos(): List<TrazoV> {
+        if (fondo.isEmpty()) return emptyList()
+        return trazos.filter { tr ->
+            val r = tr.caja
+            var hace = false
+            var ty = Math.floorDiv(floor(r.top).toInt(), Lienzo.L)
+            while (!hace && ty <= Math.floorDiv(ceil(r.bottom).toInt(), Lienzo.L)) {
+                for (tx in Math.floorDiv(floor(r.left).toInt(), Lienzo.L)..Math.floorDiv(ceil(r.right).toInt(), Lienzo.L)) { val f = fondo[Lienzo.clave(tx, ty)]; if (f != null && f.desde < tr.seq) { hace = true; break } }
+                ty++
+            }
+            hace
+        }
+    }
 }
 
-/** Un trazo de tinta como vector (ver [CapaPx.trazos]). [datos]: lo necesario para guardarlo y rehacerlo. */
-class TrazoV(val stroke: Stroke, val opacidad: Float, val goma: Boolean, val caja: RectF, val datos: org.json.JSONObject) {
-    /** Con textura (grano o sellos): antes de Android 14, Ink no la sabe pintar directamente en pantalla. */
-    val texturado: Boolean = datos.optJSONObject("def")?.let { d -> d.optString("s") == "lapiz" || d.optString("g").isNotBlank() || (d.optString("s").isBlank() && d.optString("f", "redonda") !in setOf("redonda", "plana")) } ?: false
-}
-
-/** Una tesela vacía (en [CapaPx.sinTrazos]: «aquí no había nada antes de los trazos»). */
+/** Una tesela vacía (en el fondo de una tesela: «aquí no había nada antes de los trazos»). */
 val TESELA_VACIA: Bitmap by lazy { Bitmap.createBitmap(Lienzo.L, Lienzo.L, Bitmap.Config.ARGB_8888) }
 
+/** El estado entero de una capa (para deshacer añadir, borrar, combinar u ordenar capas). */
+class EstadoCapa(val info: CapaInfo, val teselas: Map<Long, Bitmap>, val fondo: Map<Long, Fondo>, val trazos: List<TrazoV>, val seq: Long)
+
 sealed class Edicion(val nombre: String) {
-    class Teselas(nombre: String, val capa: String, val antes: Map<Long, Bitmap?>, val despues: Map<Long, Bitmap?>,
-                  val trazo: TrazoV? = null, val sinAntes: Map<Long, Bitmap?> = emptyMap()) : Edicion(nombre)
+    class Teselas(nombre: String, val capa: String, val antes: Map<Long, Bitmap?>, val despues: Map<Long, Bitmap?>, val trazo: TrazoV? = null,
+                  val fondoAntes: Map<Long, Fondo?> = emptyMap(), val fondoDespues: Map<Long, Fondo?> = emptyMap()) : Edicion(nombre)
     class Terr(nombre: String, val antes: Map<Long, ByteArray?>, val despues: Map<Long, ByteArray?>) : Edicion(nombre)
     class Vector(nombre: String, val antes: String, val despues: String) : Edicion(nombre)
-    /** Añadir, borrar, combinar u ordenar capas: el estado entero de las capas antes y después. */
-    class Capas(nombre: String, val antes: List<Pair<CapaInfo, Map<Long, Bitmap>>>, val despues: List<Pair<CapaInfo, Map<Long, Bitmap>>>) : Edicion(nombre)
+    class Capas(nombre: String, val antes: List<EstadoCapa>, val despues: List<EstadoCapa>) : Edicion(nombre)
     class Varias(nombre: String, val partes: List<Edicion>) : Edicion(nombre)
 }
 
 /**
  * El dibujo de un mapa: capas en teselas, los territorios (un número por píxel) y deshacer. Todos los cambios pasan por el
- * hilo del lienzo ([enHilo]), uno detrás de otro.
+ * hilo del lienzo ([enHilo]), uno detrás de otro; el trazo que se está dibujando se estampa en otro ([enVivo]).
  */
 class Lienzo(val mapa: Mapa, private val res: Resources) {
     val capas = CopyOnWriteArrayList<CapaPx>()
@@ -80,12 +90,19 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     private val terrSucias: MutableSet<Long> = ConcurrentHashMap.newKeySet()
     @Volatile var terrVersion = 0
     @Volatile var version = 0
-    /** El que pasa los trazos de Ink a píxeles (se crea al primer trazo: carga código nativo). */
-    val renderer: CanvasStrokeRenderer by lazy { CanvasStrokeRenderer.create(Pinceles.almacen(res)) }
     var activa: String = ""
     /** Se llama (en el hilo del lienzo) con la zona cambiada, en píxeles del lienzo. */
     val alCambiar = CopyOnWriteArrayList<(RectF) -> Unit>()
     private val hilo = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "atlas-lienzo").apply { isDaemon = true } }
+    private val hiloVivo = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "atlas-trazo").apply { isDaemon = true; priority = Thread.MAX_PRIORITY } }
+    /** Para que la pantalla no pinte a medias mientras un trazo pasa a la capa. */
+    val cierre = Any()
+    /** Los trazos que se están dibujando o asentando (la mesa los pinta encima de su capa). */
+    val vivos = CopyOnWriteArrayList<TrazoVivo>()
+    var alCambiarVivo: () -> Unit = {}
+    val nitidez = Nitidez(this)
+    /** La selección: si la hay, solo se pinta, borra, rellena y ajusta dentro. */
+    @Volatile var seleccion: Seleccion? = null
 
     private val atras = ArrayDeque<Edicion>()
     private val alante = ArrayDeque<Edicion>()
@@ -93,8 +110,10 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     val puedeDeshacer get() = atras.isNotEmpty()
     val puedeRehacer get() = alante.isNotEmpty()
 
-    fun enHilo(f: () -> Unit) { hilo.execute { runCatching(f) } }
-    fun cierra() { hilo.shutdown() }
+    fun enHilo(f: () -> Unit) { runCatching { hilo.execute { runCatching(f) } } }
+    fun enVivo(f: () -> Unit) { runCatching { hiloVivo.execute { runCatching(f) } } }
+    fun avisaVivo() = alCambiarVivo()
+    fun cierra() { hilo.shutdown(); hiloVivo.shutdown(); nitidez.cierra() }
 
     // ---------------------------------------------------------------- capas
 
@@ -117,37 +136,29 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     private fun leeTeselas() {
         val dir = mapa.dir ?: return
         for (c in capas) File(dir, "capas/${c.info.id}").listFiles()?.forEach { f -> clave(f.name, ".png")?.let { k -> if (!c.teselas.containsKey(k)) BitmapFactory.decodeFile(f.path, opcionesBmp)?.let { c.teselas.putIfAbsent(k, it) } } }
-        for (c in capas) runCatching { leeTrazos(c, File(dir, "capas/${c.info.id}")) }
+        for (c in capas) runCatching { leeTrazos(c, File(dir, "capas/${c.info.id}")) }.onFailure { c.trazos = emptyList(); c.fondo.clear() }
         File(dir, "terr").listFiles()?.forEach { f -> clave(f.name, ".bin")?.let { k -> runCatching { InflaterInputStream(f.inputStream()).use { it.readBytes() } }.getOrNull()?.takeIf { it.size == N }?.let { terr.putIfAbsent(k, it) } } }
         terrVersion++
     }
 
-    /** Rehace los trazos guardados como vectores (con su pincel tal como era). */
+    /** Los trazos guardados como datos y el fondo de sus teselas. */
     private fun leeTrazos(c: CapaPx, cd: File) {
-        val f = File(cd, "trazos.json"); if (!f.exists()) return
-        val a = org.json.JSONArray(f.readText())
-        val l = ArrayList<TrazoV>()
-        for (i in 0 until a.length()) runCatching {
-            val o = a.getJSONObject(i)
-            val d = DefPincel.de(o.getJSONObject("def"))
-            val pts = o.getJSONArray("pt")
-            val lote = androidx.ink.strokes.MutableStrokeInputBatch()
-            val tool = androidx.ink.brush.InputToolType.fromInt(o.optInt("tool", 2))
-            val u = o.optDouble("u", -1.0).toFloat()
-            var j = 0
-            while (j + 4 < pts.length()) {
-                val p = pts.getDouble(j + 3).toFloat(); val ti = pts.getDouble(j + 4).toFloat()
-                lote.add(tool, pts.getDouble(j).toFloat(), pts.getDouble(j + 1).toFloat(), pts.getLong(j + 2), if (u > 0) u else androidx.ink.strokes.StrokeInput.NO_STROKE_UNIT_LENGTH,
-                    if (p >= 0) p else androidx.ink.strokes.StrokeInput.NO_PRESSURE, if (ti >= 0) ti else androidx.ink.strokes.StrokeInput.NO_TILT, androidx.ink.strokes.StrokeInput.NO_ORIENTATION)
-                j += 5
+        // Los de la versión anterior (hechos con otro motor) se quedan solo como píxeles
+        File(cd, "trazos.json").delete(); File(cd, "sin").deleteRecursively()
+        val f = File(cd, "trazos.bin"); if (!f.exists()) return
+        DataInputStream(InflaterInputStream(f.inputStream().buffered())).use { i ->
+            if (i.readInt() != FORMATO) return
+            c.seq = i.readLong()
+            val desde = HashMap<Long, Long>()
+            repeat(i.readInt()) { desde[i.readLong()] = i.readLong() }
+            val l = ArrayList<TrazoV>()
+            repeat(i.readInt()) { val s = i.readLong(); l += TrazoV(TrazoDatos.lee(i), s) }
+            for ((k, d) in desde) {
+                val b = BitmapFactory.decodeFile(File(cd, "fondo/${tx(k)}_${ty(k)}.png").path, opcionesBmp) ?: continue
+                c.fondo[k] = Fondo(if (b.width == 1) TESELA_VACIA else b, d)
             }
-            lote.setNoiseSeed(o.optInt("seed"))
-            val st = Stroke(d.tipo().brush(o.getInt("c"), o.getDouble("s").toFloat()), lote)
-            val b = st.shape.computeBoundingBox() ?: return@runCatching
-            l += TrazoV(st, o.optDouble("o", 1.0).toFloat(), o.optBoolean("g"), RectF(b.xMin - 2, b.yMin - 2, b.xMax + 2, b.yMax + 2), o)
+            c.trazos = l
         }
-        File(cd, "sin").listFiles()?.forEach { s -> clave(s.name, ".png")?.let { k -> BitmapFactory.decodeFile(s.path, opcionesBmp)?.let { bm -> c.sinTrazos[k] = if (bm.width == 1) TESELA_VACIA else bm } } }
-        c.trazos = l
     }
 
     private val opcionesBmp = BitmapFactory.Options().apply { inMutable = false; inPreferredConfig = Bitmap.Config.ARGB_8888; inPremultiplied = true }
@@ -157,6 +168,7 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         val p = n.removeSuffix(ext).split('_'); if (p.size != 2) return null
         return clave(p[0].toIntOrNull() ?: return null, p[1].toIntOrNull() ?: return null)
     }
+
 
     /** Escribe lo cambiado (bloquea: se llama desde el hilo del lienzo). */
     fun guarda() {
@@ -171,15 +183,29 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
                 if (b == null) f.delete() else { val tmp = File(cd, f.name + ".tmp"); tmp.outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }; tmp.renameTo(f) }
             }
         }
-        // Los trazos como vectores y lo que había debajo de ellos
+        // Los trazos como datos y el fondo de sus teselas
         for (c in capas) if (c.trazosSucios) {
             c.trazosSucios = false
             val cd = File(d, "capas/${c.info.id}")
-            val sd = File(cd, "sin"); sd.deleteRecursively()
-            if (c.trazos.isEmpty()) { File(cd, "trazos.json").delete(); continue }
-            sd.mkdirs()
-            for ((k, b) in c.sinTrazos) File(sd, "${tx(k)}_${ty(k)}.png").outputStream().use { (if (b === TESELA_VACIA) Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) else b).compress(Bitmap.CompressFormat.PNG, 100, it) }
-            File(cd, "trazos.json").writeText(org.json.JSONArray().also { a -> c.trazos.forEach { a.put(it.datos) } }.toString())
+            if (c.trazos.size > TOPE_TRAZOS) hornea(c, c.trazos.size - TOPE_TRAZOS * 3 / 4)
+            val fd = File(cd, "fondo")
+            if (c.fondo.isEmpty()) { fd.deleteRecursively(); File(cd, "trazos.bin").delete(); c.fondoSucias.clear(); continue }
+            fd.mkdirs()
+            for (k in c.fondoSucias.toList()) {
+                c.fondoSucias.remove(k)
+                val f = File(fd, "${tx(k)}_${ty(k)}.png")
+                val b = c.fondo[k]?.bmp
+                if (b == null) f.delete() else f.outputStream().use { (if (b === TESELA_VACIA) Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) else b).compress(Bitmap.CompressFormat.PNG, 100, it) }
+            }
+            val vivos = c.trazosVivos()
+            val tmp = File(cd, "trazos.bin.tmp")
+            DataOutputStream(DeflaterOutputStream(tmp.outputStream().buffered(), Deflater(5))).use { o ->
+                o.writeInt(FORMATO); o.writeLong(c.seq)
+                val fs = c.fondo.entries.toList()
+                o.writeInt(fs.size); for ((k, f) in fs) { o.writeLong(k); o.writeLong(f.desde) }
+                o.writeInt(vivos.size); for (t in vivos) { o.writeLong(t.seq); t.datos.escribe(o) }
+            }
+            tmp.renameTo(File(cd, "trazos.bin"))
         }
         // Las carpetas de capas que ya no existen
         File(d, "capas").listFiles()?.forEach { f -> if (capas.none { it.info.id == f.name }) f.deleteRecursively() }
@@ -194,6 +220,30 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         mapa.guardaMeta()
     }
 
+    /**
+     * Cuando una capa junta demasiados trazos guardados, los [n] más antiguos pasan a formar parte del fondo de sus teselas
+     * (se quedan como píxeles: de cerca ya no se rehacen). El orden se respeta: son siempre los de más abajo.
+     */
+    private fun hornea(c: CapaPx, n: Int) {
+        val viejos = c.trazos.sortedBy { it.seq }.take(n); if (viejos.isEmpty()) return
+        val tope = viejos.last().seq
+        val porTesela = HashMap<Long, ArrayList<TrazoV>>()
+        for (tr in viejos) { val r = tr.caja; for (ty in Math.floorDiv(floor(r.top).toInt(), L)..Math.floorDiv(ceil(r.bottom).toInt(), L)) for (tx in Math.floorDiv(floor(r.left).toInt(), L)..Math.floorDiv(ceil(r.right).toInt(), L)) porTesela.getOrPut(clave(tx, ty)) { ArrayList() } += tr }
+        val nuevos = HashMap<Long, Fondo>()
+        for ((k, l) in porTesela) {
+            val f = c.fondo[k] ?: continue
+            val b = f.bmp.copy(Bitmap.Config.ARGB_8888, true)
+            val cv = Canvas(b); cv.translate(-tx(k) * L.toFloat(), -ty(k) * L.toFloat())
+            for (tr in l) if (tr.seq > f.desde) tr.datos.pintaTesela(cv, tx(k), ty(k), 1f)
+            nuevos[k] = Fondo(b, max(f.desde, tope))
+        }
+        synchronized(cierre) {
+            for ((k, f) in nuevos) { c.fondo[k] = f; c.fondoSucias += k }
+            for ((k, f) in c.fondo) if (f.desde < tope && k !in nuevos) { c.fondo[k] = Fondo(f.bmp, tope) }
+            c.trazos = c.trazos.filter { it.seq > tope }
+        }
+    }
+
     // ---------------------------------------------------------------- deshacer
 
     @Synchronized fun apunta(e: Edicion) {
@@ -205,7 +255,7 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     }
 
     private fun pesa(e: Edicion): Long = when (e) {
-        is Edicion.Teselas -> (e.antes.size + e.despues.size) * (N * 4L)
+        is Edicion.Teselas -> (e.antes.size + e.despues.size + e.fondoAntes.size) * (N * 4L)
         is Edicion.Terr -> (e.antes.size + e.despues.size) * N.toLong()
         is Edicion.Vector -> (e.antes.length + e.despues.length) * 2L
         is Edicion.Capas -> 0L
@@ -220,13 +270,13 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
             is Edicion.Teselas -> {
                 val c = capa(e.capa) ?: return
                 val m = if (atrasDe) e.antes else e.despues
-                for ((k, b) in m) { if (b == null) c.teselas.remove(k) else c.teselas[k] = b; c.sucias += k }
-                e.trazo?.let { tr ->
-                    if (atrasDe) { c.trazos = c.trazos - tr; for ((k, b) in e.sinAntes) if (b == null) c.sinTrazos.remove(k) else c.sinTrazos[k] = b }
-                    else { for (k in e.sinAntes.keys) if (!c.sinTrazos.containsKey(k)) c.antesDeTrazo(k, e.antes[k]); c.trazos = c.trazos + tr }
+                synchronized(cierre) {
+                    for ((k, b) in m) { if (b == null) c.teselas.remove(k) else c.teselas[k] = b; c.sucias += k }
+                    for ((k, f) in if (atrasDe) e.fondoAntes else e.fondoDespues) { if (f == null) c.fondo.remove(k) else c.fondo[k] = f; c.fondoSucias += k }
+                    e.trazo?.let { tr -> c.trazos = if (atrasDe) c.trazos - tr else (c.trazos + tr).sortedBy { it.seq } }
                     c.trazosSucios = true
                 }
-                avisaTeselas(m.keys)
+                avisaTeselas(m.keys, c)
             }
             is Edicion.Terr -> {
                 val m = if (atrasDe) e.antes else e.despues
@@ -239,132 +289,143 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         }
     }
 
+    private fun copia(c: CapaPx, info: CapaInfo = c.info) = CapaPx(info).also { n -> n.teselas.putAll(c.teselas); n.sucias.addAll(c.teselas.keys); n.fondo.putAll(c.fondo); n.fondoSucias.addAll(c.fondo.keys); n.trazos = c.trazos; n.seq = c.seq; n.trazosSucios = true }
+
     /** Si el JSON trae otro orden o datos de capas, se respetan (sin tocar los píxeles). */
     private fun reordenaPorInfo() {
-        val nuevas = mapa.capas.mapNotNull { ci -> capas.firstOrNull { it.info.id == ci.id }?.let { CapaPx(ci).also { n -> n.teselas.putAll(it.teselas); n.sucias.addAll(it.sucias) } } }
-        if (nuevas.size == capas.size) { capas.clear(); capas.addAll(nuevas) }
+        val nuevas = mapa.capas.mapNotNull { ci -> capas.firstOrNull { it.info.id == ci.id }?.let { copia(it, ci) } }
+        if (nuevas.size == capas.size) synchronized(cierre) { capas.clear(); capas.addAll(nuevas) }
     }
 
-    fun estadoCapas(): List<Pair<CapaInfo, Map<Long, Bitmap>>> = capas.map { CapaInfo.de(it.info.json()) to HashMap(it.teselas) }
+    fun estadoCapas(): List<EstadoCapa> = capas.map { EstadoCapa(CapaInfo.de(it.info.json()), HashMap(it.teselas), HashMap(it.fondo), it.trazos, it.seq) }
 
-    fun ponEstadoCapas(e: List<Pair<CapaInfo, Map<Long, Bitmap>>>) {
-        capas.clear()
-        for ((ci, t) in e) { val c = CapaPx(CapaInfo.de(ci.json())); c.teselas.putAll(t); c.sucias.addAll(t.keys); capas += c }
-        if (capa(activa) == null) activa = capas.lastOrNull()?.info?.id.orEmpty()
+    fun ponEstadoCapas(e: List<EstadoCapa>) {
+        synchronized(cierre) {
+            capas.clear()
+            for (s in e) { val c = CapaPx(CapaInfo.de(s.info.json())); c.teselas.putAll(s.teselas); c.sucias.addAll(s.teselas.keys); c.fondo.putAll(s.fondo); c.fondoSucias.addAll(s.fondo.keys); c.trazos = s.trazos; c.seq = s.seq; c.trazosSucios = true; capas += c }
+            if (capa(activa) == null) activa = capas.lastOrNull()?.info?.id.orEmpty()
+        }
+        nitidez.olvida()
         sincronizaInfo(); version++; mapa.avisaVector(); avisaTodo()
     }
 
     /** Cambia la estructura de capas con [f] y lo apunta para deshacer. */
     fun cambiaCapas(nombre: String, f: () -> Unit) = enHilo {
         val antes = estadoCapas()
-        // Las carpetas de las capas: se marcan sucias todas las teselas de las capas que quedan (se reescriben al guardar)
-        f()
+        synchronized(cierre) { f() }
         sincronizaInfo()
-        capas.forEach { it.sucias.addAll(it.teselas.keys) }
+        // Las carpetas de las capas: se marcan sucias todas las teselas de las capas que quedan (se reescriben al guardar)
+        capas.forEach { it.sucias.addAll(it.teselas.keys); it.fondoSucias.addAll(it.fondo.keys); it.trazosSucios = true }
         apunta(Edicion.Capas(nombre, antes, estadoCapas()))
+        nitidez.olvida()
         version++; mapa.avisaVector(); avisaTodo()
     }
 
     // ---------------------------------------------------------------- avisos
 
-    fun avisaTeselas(ks: Collection<Long>) {
+    fun avisaTeselas(ks: Collection<Long>, c: CapaPx? = null) {
         if (ks.isEmpty()) return
         var x0 = Int.MAX_VALUE; var y0 = Int.MAX_VALUE; var x1 = Int.MIN_VALUE; var y1 = Int.MIN_VALUE
         for (k in ks) { x0 = min(x0, tx(k)); y0 = min(y0, ty(k)); x1 = max(x1, tx(k)); y1 = max(y1, ty(k)) }
         version++
+        if (c != null) nitidez.ensucia(c.info.id, ks)
         val r = RectF(x0 * L.toFloat(), y0 * L.toFloat(), (x1 + 1) * L.toFloat(), (y1 + 1) * L.toFloat())
         alCambiar.forEach { it(r) }
     }
 
     fun avisaTodo() { version++; val r = RectF(-1e9f, -1e9f, 1e9f, 1e9f); alCambiar.forEach { it(r) } }
 
-    // ---------------------------------------------------------------- dibujar trazos
-
-    private val tmp: Bitmap by lazy { Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888) }
-    private val tmpC by lazy { Canvas(tmp) }
-    private val pComp = Paint(Paint.FILTER_BITMAP_FLAG)
-    private val mTrazo = Matrix()
+    // ---------------------------------------------------------------- cambiar píxeles
 
     /**
-     * Pasa un trazo terminado (en píxeles del lienzo) a la capa activa: se pinta opaco en una tesela aparte y se funde con la
-     * opacidad del pincel (así un trazo no se oscurece donde se cruza consigo mismo), borrando si es una goma y respetando el
-     * bloqueo de transparencia de la capa.
+     * Cambia teselas de una capa ([nuevas]: la tesela nueva, o null si queda vacía) y devuelve cómo deshacerlo. Si el cambio
+     * es un trazo guardado ([trazo]), las teselas que aún no tenían fondo se lo apuntan (lo que había); si es una operación
+     * de píxeles, lo pierden (desde ahí son solo píxeles).
      */
-    fun pintaTrazo(st: Stroke, tipo: TipoPincel, opacidad: Float, capaId: String = activa): Edicion? {
-        val c = capa(capaId) ?: return null
-        val box = st.shape.computeBoundingBox() ?: return null
-        val margen = 2f
-        val x0 = floor((box.xMin - margen) / L).toInt(); val y0 = floor((box.yMin - margen) / L).toInt()
-        val x1 = floor((box.xMax + margen) / L).toInt(); val y1 = floor((box.yMax + margen) / L).toInt()
-        if ((x1 - x0 + 1) * (y1 - y0 + 1) > 4096) return null
-        val antes = HashMap<Long, Bitmap?>(); val despues = HashMap<Long, Bitmap?>()
-        pComp.alpha = (opacidad.coerceIn(0f, 1f) * 255).toInt()
-        pComp.xfermode = when { tipo.goma -> PorterDuffXfermode(PorterDuff.Mode.DST_OUT); c.info.bloqueoAlfa -> PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP); else -> null }
-        // El trazo se pinta de una vez en la GPU por bloques de hasta 8×8 teselas (con texturas y partículas, igual que en
-        // pantalla); si la GPU no está disponible, tesela a tesela en la CPU (sin texturas)
-        val bloque = 8
-        // La sección activa: lo que caiga fuera de ella no se pinta
-        val rec = mapa.seccionActivaRect()
-        // Se guarda también como vector (para verlo nítido de cerca), salvo con la transparencia bloqueada o una sección activa
-        val vector = !c.info.bloqueoAlfa && rec == null
-        val sinAntes = HashMap<Long, Bitmap?>()
-        if (!vector) c.aplana()
-        var by = y0
-        while (by <= y1) {
-            var bx = x0
-            while (bx <= x1) {
-                val bw = min(bloque, x1 - bx + 1); val bh = min(bloque, y1 - by + 1)
-                // En la GPU (como en pantalla, con texturas); si sale vacío o no se puede, con nuestro propio pintor
-                val img = Rasterizador.pinta(renderer, st, bx * L, by * L, bw * L, bh * L)?.takeIf { !vacio(it) }
-                    ?: RasterPropio.pinta(st, tipo, res, bx * L, by * L, bw * L, bh * L)
-                for (ty in by until by + bh) for (tx in bx until bx + bw) {
-                    if (!dentro(tx, ty)) continue
-                    val k = clave(tx, ty)
-                    val viejo = c.teselas[k]
-                    if (viejo == null && (tipo.goma || c.info.bloqueoAlfa)) continue
-                    tmp.eraseColor(Color.TRANSPARENT)
-                    tmpC.drawBitmap(img, Rect((tx - bx) * L, (ty - by) * L, (tx - bx + 1) * L, (ty - by + 1) * L), Rect(0, 0, L, L), null)
-                    if (rec != null) recorta(tmp, rec, tx, ty)
-                    if (estaVacia(tmp)) continue
-                    val nuevo = viejo?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
-                    Canvas(nuevo).drawBitmap(tmp, 0f, 0f, pComp)
-                    antes[k] = viejo
-                    if (vector && !c.sinTrazos.containsKey(k)) { sinAntes[k] = null; c.antesDeTrazo(k, viejo) }
-                    val vacia = tipo.goma && estaVacia(nuevo)
-                    despues[k] = if (vacia) null else nuevo
-                    if (vacia) c.teselas.remove(k) else c.teselas[k] = nuevo
-                    c.sucias += k
-                }
-                bx += bloque
+    fun cambia(c: CapaPx, nombre: String, nuevas: Map<Long, Bitmap?>, trazo: TrazoV? = null): Edicion.Teselas? {
+        if (nuevas.isEmpty()) return null
+        val antes = HashMap<Long, Bitmap?>(); val fAntes = HashMap<Long, Fondo?>(); val fDespues = HashMap<Long, Fondo?>()
+        synchronized(cierre) {
+            for ((k, b) in nuevas) {
+                val viejo = c.teselas[k]; antes[k] = viejo
+                val f0 = c.fondo[k]
+                if (trazo != null) { if (f0 == null) { fAntes[k] = null; val f = Fondo(viejo ?: TESELA_VACIA, trazo.seq - 1); c.fondo[k] = f; fDespues[k] = f; c.fondoSucias += k } }
+                else if (f0 != null) { fAntes[k] = f0; fDespues[k] = null; c.fondo.remove(k); c.fondoSucias += k }
+                if (b == null) c.teselas.remove(k) else c.teselas[k] = b
+                c.sucias += k
             }
-            by += bloque
+            if (trazo != null) c.trazos = c.trazos + trazo
+            c.trazosSucios = true
         }
-        if (antes.isEmpty()) return null
-        var tr: TrazoV? = null
-        if (vector) {
-            val d = Pinceles.def(tipo.clave)
-            val ins = st.inputs; val pts = org.json.JSONArray()
-            for (i in 0 until ins.size) { val s = ins.get(i); pts.put(Math.round(s.x * 100) / 100.0).put(Math.round(s.y * 100) / 100.0).put(s.elapsedTimeMillis).put(if (ins.hasPressure()) Math.round(s.pressure * 1000) / 1000.0 else -1.0).put(if (ins.hasTilt()) Math.round(s.tiltRadians * 1000) / 1000.0 else -1.0) }
-            val datos = org.json.JSONObject().put("def", d.json()).put("c", st.brush.colorIntArgb).put("s", st.brush.size.toDouble()).put("o", opacidad.toDouble()).put("g", tipo.goma)
-                .put("pt", pts).put("seed", ins.getNoiseSeed()).put("tool", ins.getToolType().value).put("u", if (ins.hasStrokeUnitLength()) ins.getStrokeUnitLengthCm().toDouble() else -1.0)
-            tr = TrazoV(st, opacidad, tipo.goma, RectF(box.xMin - 2, box.yMin - 2, box.xMax + 2, box.yMax + 2), datos)
-            c.trazos = c.trazos + tr; c.trazosSucios = true
-        }
-        avisaTeselas(antes.keys)
-        return Edicion.Teselas(tipo.nombre, c.info.id, antes, despues, tr, sinAntes)
+        avisaTeselas(nuevas.keys, c)
+        return Edicion.Teselas(nombre, c.info.id, antes, HashMap(nuevas), trazo, fAntes, fDespues)
     }
 
-    /** Borra de [b] (la tesela tx, ty) lo que cae fuera de [r] (píxeles del lienzo). */
-    private fun recorta(b: Bitmap, r: RectF, tx: Int, ty: Int) {
-        val c = Canvas(b)
-        c.translate(-tx * L.toFloat(), -ty * L.toFloat())
-        c.clipOutRect(r)
-        c.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+    /** [nuevo] solo dentro de la selección (fuera, lo que había en [viejo]); sin selección, [nuevo] tal cual. */
+    fun enSeleccion(k: Long, viejo: Bitmap?, nuevo: Bitmap): Bitmap {
+        val sel = seleccion?.takeIf { !it.vacia } ?: return nuevo
+        val dentro = nuevo.copy(Bitmap.Config.ARGB_8888, true)
+        val cd = Canvas(dentro); cd.translate(-tx(k) * L.toFloat(), -ty(k) * L.toFloat())
+        cd.drawPath(sel.path, Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) })
+        val r = viejo?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
+        val cr = Canvas(r); cr.save(); cr.translate(-tx(k) * L.toFloat(), -ty(k) * L.toFloat())
+        cr.drawPath(sel.path, Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
+        cr.restore(); cr.drawBitmap(dentro, 0f, 0f, null)
+        return r
     }
 
-    private fun vacio(b: Bitmap): Boolean {
-        val px = IntArray(b.width); for (y in 0 until b.height step 2) { b.getPixels(px, 0, b.width, 0, y, b.width, 1); if (px.any { (it ushr 24) != 0 }) return false }
-        return true
+    /** Aplica [f] a cada tesela de la capa (solo dentro de la selección, si la hay): los ajustes de imagen. */
+    fun cadaTesela(c: CapaPx, nombre: String, f: (Bitmap) -> Bitmap): Edicion? {
+        val nuevas = HashMap<Long, Bitmap?>()
+        for ((k, v) in c.teselas.toMap()) nuevas[k] = enSeleccion(k, v, f(v))
+        return cambia(c, nombre, nuevas)
+    }
+
+    // ---------------------------------------------------------------- trazos
+
+    /** Empieza un trazo en la capa activa (o null si no se puede pintar en ella). [nivel]: ver [Motor.nivel]. */
+    fun empiezaTrazo(def: DefPincel, color: Int, tam: Float, opacidad: Float, modo: Int, u: Float, lapiz: Boolean, nivel: Int, espejos: List<Matrix> = listOf(Matrix())): TrazoVivo? {
+        val c = capaActiva() ?: return null
+        val v = TrazoVivo(this, c, def, color, tam, opacidad, modo, (System.nanoTime() and 0x7fffffff).toInt(), u, lapiz, nivel, mapa.seccionActivaRect(), seleccion?.takeIf { !it.vacia }, espejos)
+        vivos += v
+        return v
+    }
+
+    /**
+     * Pasa a la capa un trazo recién dibujado: sus teselas a tamaño real (rehechas ahí si se dibujó a otra escala) y, si se
+     * dibujó de cerca, las teselas nítidas con él ya encima; todo de una vez, para que en la pantalla no cambie nada.
+     */
+    fun asienta(v: TrazoVivo): Edicion? {
+        val c = v.capa; val d = v.datos(); val def = d.def
+        val borra = d.modo == TrazoDatos.BORRAR
+        val h1 = if (v.humedo.escala == 1f) v.humedo else Humedo(1f, def.colorVariable).also { it.sellaTodo(Raster(def, 1f), d.sellos(v.muestra)) }
+        val nuevas = HashMap<Long, Bitmap?>()
+        for ((k, l) in h1.lonas) {
+            if (!l.tocada || !dentro(tx(k), ty(k))) continue
+            val viejo = c.teselas[k]
+            if (viejo == null && (borra || d.atope)) continue
+            val nuevo = viejo?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
+            val cv = Canvas(nuevo); cv.translate(-tx(k) * L.toFloat(), -ty(k) * L.toFloat())
+            d.funde(cv, l, 1f)
+            if (estaVacia(nuevo)) { if (viejo != null) nuevas[k] = null } else nuevas[k] = nuevo
+        }
+        val guardado = def.repetible && nuevas.isNotEmpty()
+        val cerca = if (guardado) nitidez.conTrazo(c, v.humedo, d) else emptyMap()
+        var e: Edicion? = null
+        synchronized(cierre) {
+            e = cambia(c, def.nombre, nuevas, if (guardado) TrazoV(d, ++c.seq) else null)
+            nitidez.pon(cerca)
+            v.estado = TrazoVivo.ASENTADO
+            if (v.nivel <= 0) vivos.remove(v)
+        }
+        avisaVivo()
+        return e
+    }
+
+    /** El color de una capa en un punto (sin premultiplicar; 0 si no hay nada). */
+    fun colorCapa(c: CapaPx, x: Float, y: Float): Int {
+        val ix = floor(x).toInt(); val iy = floor(y).toInt()
+        return c.teselas[clave(Math.floorDiv(ix, L), Math.floorDiv(iy, L))]?.getPixel(Math.floorMod(ix, L), Math.floorMod(iy, L)) ?: 0
     }
 
     private fun estaVacia(b: Bitmap): Boolean {
@@ -490,12 +551,12 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     /** El bote de pintura: rellena de [color] la zona cerrada en la capa activa. */
     fun rellena(x: Int, y: Int, color: Int, opacidad: Float): Edicion? {
         val c = capaActiva() ?: return null
-        c.aplana()
         val m = zona(x, y, 110, limitesRelleno(x, y), 2) ?: return null
-        val antes = HashMap<Long, Bitmap?>(); val despues = HashMap<Long, Bitmap?>()
+        val nuevas = HashMap<Long, Bitmap?>()
         val a = ((color ushr 24) * opacidad.coerceIn(0f, 1f)).toInt()
         val col = (a shl 24) or (color and 0xFFFFFF)
-        val p = Paint().apply { this.color = col; xfermode = if (c.info.bloqueoAlfa) PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP) else null }
+        val p = Paint().apply { xfermode = if (c.info.bloqueoAlfa) PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP) else null }
+        val sel = seleccion?.takeIf { !it.vacia }
         for ((k, mask) in m) {
             if (!dentro(tx(k), ty(k))) continue
             val viejo = c.teselas[k]
@@ -503,14 +564,14 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
             // La máscara pintada del color y fundida encima (o solo sobre lo que ya había, con la transparencia bloqueada)
             val px = IntArray(L * L) { if (mask[it]) -1 else 0 }
             val relleno = Bitmap.createBitmap(px, L, L, Bitmap.Config.ARGB_8888).copy(Bitmap.Config.ARGB_8888, true)
-            Canvas(relleno).drawRect(0f, 0f, L.toFloat(), L.toFloat(), Paint().apply { this.color = col; xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN) })
+            val cr = Canvas(relleno)
+            cr.drawRect(0f, 0f, L.toFloat(), L.toFloat(), Paint().apply { this.color = col; xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN) })
+            if (sel != null) { cr.translate(-tx(k) * L.toFloat(), -ty(k) * L.toFloat()); cr.drawPath(sel.path, Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }) }
             val nuevo = viejo?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
             Canvas(nuevo).drawBitmap(relleno, 0f, 0f, p)
-            antes[k] = viejo; despues[k] = nuevo; c.teselas[k] = nuevo; c.sucias += k
+            nuevas[k] = nuevo
         }
-        if (antes.isEmpty()) return null
-        avisaTeselas(antes.keys)
-        return Edicion.Teselas("Relleno", c.info.id, antes, despues)
+        return cambia(c, "Relleno", nuevas)
     }
 
     private fun limitesRelleno(x: Int, y: Int): Rect {
@@ -645,6 +706,8 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     }
 
     companion object {
+        const val FORMATO = 0x41544C32
+        const val TOPE_TRAZOS = 4000
         const val L = 256
         const val N = L * L
         fun clave(tx: Int, ty: Int): Long = (tx.toLong() shl 32) or (ty.toLong() and 0xffffffffL)
@@ -660,104 +723,5 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         }
         val FUSIONES = listOf("normal" to "Normal", "multiplicar" to "Multiplicar", "pantalla" to "Pantalla", "superponer" to "Superponer",
             "luz_suave" to "Luz suave", "aclarar" to "Aclarar", "oscurecer" to "Oscurecer", "anadir" to "Añadir", "color" to "Color")
-    }
-}
-
-/**
- * Pinta un trazo de Ink en un mapa de bits usando la GPU (un lienzo de hardware: así salen sus texturas y partículas, que
- * el lienzo de la CPU no sabe pintar). Devuelve null si no se puede (y entonces se pinta en la CPU).
- */
-object Rasterizador {
-    @Volatile private var falla = false
-
-    fun pinta(r: CanvasStrokeRenderer, st: Stroke, x: Int, y: Int, w: Int, h: Int): Bitmap? {
-        if (falla) return null
-        return try {
-            val nodo = android.graphics.RenderNode("atlas-trazo")
-            nodo.setPosition(0, 0, w, h)
-            val rc = nodo.beginRecording(w, h)
-            val m = Matrix(); m.setTranslate(-x.toFloat(), -y.toFloat())
-            r.draw(rc, st, m, 0f)
-            nodo.endRecording()
-            val lector = android.media.ImageReader.newInstance(w, h, android.graphics.PixelFormat.RGBA_8888, 1,
-                android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT)
-            val hr = android.graphics.HardwareRenderer()
-            try {
-                hr.setSurface(lector.surface)
-                hr.setContentRoot(nodo)
-                hr.isOpaque = false
-                hr.createRenderRequest().setWaitForPresent(true).syncAndDraw()
-                val im = lector.acquireNextImage() ?: return null
-                im.use {
-                    val hb = it.hardwareBuffer ?: return null
-                    hb.use { b -> Bitmap.wrapHardwareBuffer(b, null)?.copy(Bitmap.Config.ARGB_8888, false) }
-                }
-            } finally { hr.destroy(); lector.close(); nodo.discardDisplayList() }
-        } catch (e: Throwable) {
-            falla = true
-            null
-        }
-    }
-}
-
-/**
- * Nuestro propio pintor de trazos, para cuando la GPU no lo puede pasar a la capa: el contorno del trazo relleno (con el
- * grano del pincel encima) o, en los pinceles de sellos, los sellos uno a uno a lo largo del trazo con su presión.
- */
-object RasterPropio {
-    fun pinta(st: Stroke, tipo: TipoPincel, res: Resources, x: Int, y: Int, w: Int, h: Int): Bitmap {
-        val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val c = Canvas(b)
-        c.translate(-x.toFloat(), -y.toFloat())
-        val d = Pinceles.def(tipo.clave)
-        val color = st.brush.colorIntArgb or (0xFF shl 24)
-        val tam = st.brush.size
-        val sello = d.stock.isBlank() && d.forma != "redonda" && d.forma != "plana"
-        val textura = if (sello) runCatching { Pinceles.almacen(res).get(d.forma) }.getOrNull() else null
-        if (textura != null) sellos(c, st, d, textura, color, tam)
-        else {
-            val path = android.graphics.Path().apply { fillType = android.graphics.Path.FillType.WINDING }
-            val m = st.shape; val v = androidx.ink.geometry.MutableVec(0f, 0f)
-            for (g in 0 until m.getRenderGroupCount()) for (o in 0 until m.getOutlineCount(g)) {
-                val n = m.getOutlineVertexCount(g, o); if (n < 3) continue
-                for (i in 0 until n) { m.populateOutlinePosition(g, o, i, v); if (i == 0) path.moveTo(v.x, v.y) else path.lineTo(v.x, v.y) }
-                path.close()
-            }
-            c.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color })
-            // El grano del pincel: deja ver el trazo solo donde la textura pinta
-            if (d.grano.isNotBlank()) runCatching { Pinceles.almacen(res).get(d.grano) }.getOrNull()?.let { g ->
-                val sh = android.graphics.BitmapShader(g, android.graphics.Shader.TileMode.REPEAT, android.graphics.Shader.TileMode.REPEAT)
-                sh.setLocalMatrix(Matrix().apply { setScale(d.escalaGrano / g.width, d.escalaGrano / g.height) })
-                c.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), Paint().apply { shader = sh; xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) })
-            }
-        }
-        return b
-    }
-
-    private fun sellos(c: Canvas, st: Stroke, d: DefPincel, tex: Bitmap, color: Int, tam: Float) {
-        val ins = st.inputs; val n = ins.size; if (n == 0) return
-        val p = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply { colorFilter = android.graphics.PorterDuffColorFilter(color, PorterDuff.Mode.SRC_IN) }
-        val rnd = java.util.Random(ins.getNoiseSeed().toLong())
-        val paso = kotlin.math.max(1f, kotlin.math.max(0.02f, d.espaciado) * tam)
-        var resto = 0f
-        var ax = ins.get(0).x; var ay = ins.get(0).y; var ap = if (ins.hasPressure()) ins.get(0).pressure else 1f
-        fun sello(px: Float, py: Float, pr: Float) {
-            val s = tam * (if (d.presionTamano > 0.01f) (1f - d.presionTamano) + d.presionTamano * pr else 1f)
-            p.alpha = ((if (d.presionOpacidad > 0.01f) (1f - d.presionOpacidad) + d.presionOpacidad * pr else 1f) * 255).toInt().coerceIn(1, 255)
-            val lat = (rnd.nextFloat() * 2 - 1) * d.dispersion * s
-            val giro = (rnd.nextFloat() * 2 - 1) * d.giroAzar * 180f
-            c.save(); c.translate(px + lat * 0.7f, py + lat * 0.7f); c.rotate(giro)
-            c.drawBitmap(tex, null, RectF(-s / 2, -s / 2, s / 2, s / 2), p)
-            c.restore()
-        }
-        sello(ax, ay, ap)
-        for (i in 1 until n) {
-            val e = ins.get(i); val bp = if (ins.hasPressure()) e.pressure else 1f
-            val dd = kotlin.math.hypot(e.x - ax, e.y - ay)
-            var t = paso - resto
-            while (t <= dd) { val f = t / dd; sello(ax + (e.x - ax) * f, ay + (e.y - ay) * f, ap + (bp - ap) * f); t += paso }
-            resto = dd - (t - paso)
-            ax = e.x; ay = e.y; ap = bp
-        }
     }
 }

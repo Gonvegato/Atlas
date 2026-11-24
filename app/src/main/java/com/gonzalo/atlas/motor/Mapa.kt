@@ -66,6 +66,25 @@ class Seccion(val id: String, var nombre: String, var x: Float, var y: Float, va
     companion object { fun de(o: JSONObject) = Seccion(o.optString("id"), o.optString("n"), o.optDouble("x").toFloat(), o.optDouble("y").toFloat(), o.optDouble("w").toFloat(), o.optDouble("h").toFloat()) }
 }
 
+/**
+ * Guía de simetría: lo que dibujas se repite reflejado. [tipo]: "vertical" (un eje vertical: izquierda y derecha),
+ * "horizontal", "cuadrante" (los dos ejes) o "radial" ([n] gajos girados alrededor del centro).
+ */
+class Simetria(var tipo: String = "vertical", var x: Float = 0f, var y: Float = 0f, var n: Int = 6) {
+    fun json() = JSONObject().put("t", tipo).put("x", x.toDouble()).put("y", y.toDouble()).put("n", n)
+    /** Las transformaciones de cada copia (la primera, el trazo tal cual). */
+    fun espejos(): List<android.graphics.Matrix> {
+        fun m(f: android.graphics.Matrix.() -> Unit) = android.graphics.Matrix().apply(f)
+        return when (tipo) {
+            "horizontal" -> listOf(m {}, m { setScale(1f, -1f, x, y) })
+            "cuadrante" -> listOf(m {}, m { setScale(-1f, 1f, x, y) }, m { setScale(1f, -1f, x, y) }, m { setScale(-1f, -1f, x, y) })
+            "radial" -> List(n.coerceIn(2, 24)) { k -> m { setRotate(k * 360f / n.coerceIn(2, 24), x, y) } }
+            else -> listOf(m {}, m { setScale(-1f, 1f, x, y) })
+        }
+    }
+    companion object { fun de(o: JSONObject?) = o?.let { Simetria(it.optString("t", "vertical"), it.optDouble("x").toFloat(), it.optDouble("y").toFloat(), it.optInt("n", 6)) } }
+}
+
 /** La leyenda del mapa: un cuadro que se mueve y escala como un objeto más. */
 class Leyenda(
     var visible: Boolean = false, var x: Float = Float.NaN, var y: Float = Float.NaN, var escala: Float = 1f,
@@ -176,6 +195,8 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
     fun seccionActivaRect(): android.graphics.RectF? = secciones.firstOrNull { it.id == seccionActiva }?.let { android.graphics.RectF(it.x, it.y, it.x + it.w, it.y + it.h) }
     /** La imagen para calcar (su archivo, calco.png en la carpeta del mapa); null si no hay. */
     var calco: Calco? = null
+    /** La guía de simetría con la que se dibuja (null: sin ella). */
+    var simetria: Simetria? = null
 
     @Volatile var vectorVersion = 0
     val alCambiarVector = CopyOnWriteArrayList<() -> Unit>()
@@ -208,7 +229,7 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         .put("rotulos", JSONArray().also { a -> rotulos.forEach { a.put(it.json()) } })
         .put("sellos", JSONArray().also { a -> sellos.forEach { a.put(it.json()) } })
         .put("leyenda", leyenda.json())
-        .put("calco", calco?.json() ?: JSONObject.NULL)
+        .put("calco", calco?.json() ?: JSONObject.NULL).put("simetria", simetria?.json() ?: JSONObject.NULL)
         .put("secciones", JSONArray().also { a -> secciones.forEach { a.put(it.json()) } }).put("seccionActiva", seccionActiva)
         .put("capas", JSONArray().also { a -> capas.forEach { a.put(it.json()) } })
 
@@ -222,6 +243,7 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         lista("rotulos", rotulos, Rotulo::de); lista("sellos", sellos, Sello::de)
         leyenda = Leyenda.de(o.optJSONObject("leyenda"))
         calco = Calco.de(o.optJSONObject("calco"))
+        simetria = Simetria.de(o.optJSONObject("simetria"))
         lista("secciones", secciones, Seccion::de)
         seccionActiva = o.optString("seccionActiva")
         if (o.has("capas")) lista("capas", capas, CapaInfo::de)

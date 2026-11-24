@@ -1,16 +1,8 @@
-@file:OptIn(androidx.ink.brush.ExperimentalInkCustomBrushApi::class)
-
 package com.gonzalo.atlas.lienzo
 
-import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
-import androidx.ink.brush.BrushBehavior
-import androidx.ink.brush.BrushFamily
-import androidx.ink.brush.BrushPaint
-import androidx.ink.brush.BrushTip
-import androidx.ink.brush.SelfOverlap
 import org.json.JSONObject
 import java.io.File
 import java.nio.ByteBuffer
@@ -83,7 +75,7 @@ object Procreate {
     fun dir(recursos: File) = File(recursos, "pinceles")
 
     /** Importa los pinceles del archivo. Devuelve cuántos. */
-    fun importa(datos: ByteArray, recursos: File, res: Resources): Int {
+    fun importa(datos: ByteArray, recursos: File): Int {
         val archivos = HashMap<String, ByteArray>()
         ZipInputStream(datos.inputStream()).use { z ->
             while (true) {
@@ -108,12 +100,12 @@ object Procreate {
                 .put("grano", grano != null).put("inv", false).let { File(d, "pincel.json").writeText(it.toString()) }
             n++
         }
-        if (n > 0) Pinceles.cargaImportados(recursos, res)
+        if (n > 0) Pinceles.cargaImportados(recursos)
         return n
     }
 
     /**
-     * La imagen como transparencia sobre blanco (Ink tiñe el blanco del color del pincel). [forma]: el fondo es el color de
+     * La imagen como transparencia sobre blanco (el motor tiñe del color del pincel lo que no es transparente). [forma]: el fondo es el color de
      * los bordes y la punta, lo que se separa de él (así da igual si es blanco sobre negro o al revés). El grano: lo claro pinta.
      */
     fun aAlfa(b: Bitmap, forma: Boolean, invertir: Boolean = false): Bitmap {
@@ -134,18 +126,16 @@ object Procreate {
         return Bitmap.createBitmap(px, l, l, Bitmap.Config.ARGB_8888)
     }
 
-    /** El pincel de Ink para un pincel importado (su punta como sello y, si tiene, su grano como textura). */
-    fun familia(id: String, j: JSONObject, conGrano: Boolean): BrushFamily {
-        val gap = j.optDouble("esp", 0.1).toFloat().coerceIn(0.02f, 3f)
-        val capas = ArrayList<BrushPaint.TextureLayer>()
-        capas += BrushPaint.TextureLayer(clientTextureId = "$id:forma", sizeX = 1f, sizeY = 1f, sizeUnit = BrushPaint.TextureSizeUnit.BRUSH_SIZE, mapping = BrushPaint.TextureMapping.STAMPING)
-        if (conGrano && j.optBoolean("grano")) {
-            val t = (64f + j.optDouble("tex", 0.5).toFloat() * 448f)
-            capas += BrushPaint.TextureLayer(clientTextureId = "$id:grano", sizeX = t, sizeY = t, sizeUnit = BrushPaint.TextureSizeUnit.STROKE_COORDINATES,
-                mapping = BrushPaint.TextureMapping.TILING, blendMode = BrushPaint.BlendMode.MODULATE)
-        }
-        val presion = BrushBehavior(source = BrushBehavior.Source.NORMALIZED_PRESSURE, target = BrushBehavior.Target.SIZE_MULTIPLIER,
-            sourceValueRangeStart = 0f, sourceValueRangeEnd = 1f, targetModifierRangeStart = 0.3f, targetModifierRangeEnd = 1f)
-        return BrushFamily(BrushTip(particleGapDistanceScale = gap, behaviors = listOf(presion)), BrushPaint(capas, emptyList(), SelfOverlap.ACCUMULATE), "atlas:$id")
+    /** El pincel para uno importado: su punta como sello y, si tiene, su grano; con los ajustes que se han podido leer. */
+    fun def(id: String, j: JSONObject, conGrano: Boolean): DefPincel {
+        fun n(k: String, d: Double) = j.optDouble(k, d).toFloat()
+        return DefPincel(id, j.optString("n", "Pincel"), "Importados", forma = "$id:forma", tamano = (4.0 + j.optDouble("tam", 0.3) * 120.0).toFloat(),
+            opacidad = n("op", 1.0).coerceIn(0.05f, 1f), flujo = n("fl", 1.0).coerceIn(0.02f, 1f),
+            presionTamano = n("pt", 0.6).coerceIn(0f, 1f), presionOpacidad = n("po", 0.0).coerceIn(0f, 1f),
+            espaciado = n("esp", 0.1).coerceIn(0.02f, 3f), dispersion = n("disp", 0.0).coerceIn(0f, 4f), giroAzar = n("giro", 0.0).coerceIn(0f, 1f),
+            sigueDireccion = j.optBoolean("sigue"), acimut = j.optBoolean("acimut"), numero = j.optInt("num", 1).coerceIn(1, 16),
+            afiladoInicio = n("ai", 0.0), afiladoFin = n("af", 0.0), azarTamano = n("zt", 0.0).coerceIn(0f, 1f), azarOpacidad = n("zo", 0.0).coerceIn(0f, 1f),
+            acumula = j.optBoolean("acu", true), grano = if (conGrano) "$id:grano" else "", escalaGrano = (64.0 + j.optDouble("tex", 0.5) * 448.0).toFloat(),
+            profGrano = n("pg", 1.0).coerceIn(0f, 1f), granoMovil = j.optBoolean("gm"), estabilizacion = n("est", 0.1).coerceIn(0f, 1f))
     }
 }

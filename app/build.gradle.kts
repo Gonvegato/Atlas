@@ -70,13 +70,6 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("androidx.lifecycle:lifecycle-process:2.8.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    // El taller de dibujo: trazos de baja latencia (dibuja en el búfer delantero) y pinceles con presión
-    implementation("androidx.ink:ink-authoring:1.0.0")
-    implementation("androidx.ink:ink-brush:1.0.0")
-    implementation("androidx.ink:ink-geometry:1.0.0")
-    implementation("androidx.ink:ink-rendering:1.0.0")
-    implementation("androidx.ink:ink-strokes:1.0.0")
-    implementation("androidx.input:input-motionprediction:1.0.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     testImplementation("org.robolectric:robolectric:4.13")

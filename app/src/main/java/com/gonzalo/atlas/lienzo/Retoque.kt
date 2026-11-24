@@ -1,8 +1,5 @@
-@file:OptIn(androidx.ink.brush.ExperimentalInkCustomBrushApi::class)
-
 package com.gonzalo.atlas.lienzo
 
-import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.ColorMatrix
@@ -10,11 +7,6 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
-import androidx.ink.brush.InputToolType
-import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
-import androidx.ink.strokes.MutableStrokeInputBatch
-import androidx.ink.strokes.Stroke
-import androidx.ink.strokes.StrokeInput
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.PI
 import kotlin.math.ceil
@@ -27,23 +19,24 @@ import kotlin.math.sin
 /** Las muestras de los pinceles (un trazo en S con la presión subiendo y bajando), para la biblioteca. */
 object MuestrasPincel {
     private val cache = ConcurrentHashMap<String, Bitmap>()
-    @Volatile private var renderer: CanvasStrokeRenderer? = null
 
-    fun de(d: DefPincel, res: Resources, w: Int = 300, h: Int = 76, color: Int = 0xFFF2F2F2.toInt()): Bitmap? {
+    fun de(d: DefPincel, w: Int = 300, h: Int = 76, color: Int = 0xFFF2F2F2.toInt()): Bitmap? {
         val clave = d.json().toString() + w + "x" + h + color
         cache[clave]?.let { return it }
         return runCatching {
-            val r = renderer ?: CanvasStrokeRenderer.create(Pinceles.almacen(res)).also { renderer = it }
-            val lote = MutableStrokeInputBatch()
-            for (i in 0..80) {
-                val t = i / 80f
-                lote.add(InputToolType.STYLUS, 18 + t * (w - 36), h / 2f + sin(t * 2 * PI).toFloat() * h * 0.22f, (t * 700).toLong(),
-                    StrokeInput.NO_STROKE_UNIT_LENGTH, (0.12f + 0.88f * sin(t * PI).toFloat()).coerceIn(0f, 1f), 0.4f, StrokeInput.NO_ORIENTATION)
+            val n = 64; val pts = FloatArray(n * Caminante.P)
+            for (i in 0 until n) {
+                val t = i / (n - 1f); val o = i * Caminante.P
+                pts[o] = 18 + t * (w - 36); pts[o + 1] = h / 2f + sin(t * 2 * PI).toFloat() * h * 0.22f
+                pts[o + 2] = (0.1f + 0.9f * sin(t * PI).toFloat()).coerceIn(0f, 1f); pts[o + 3] = 0.35f; pts[o + 4] = 0f; pts[o + 5] = t * 700f
             }
-            val tam = min(d.tamano, h * 0.32f).coerceAtLeast(2f)
-            val st = Stroke(d.tipo().brush(color, tam), lote)
-            Rasterizador.pinta(r, st, 0, 0, w, h) ?: Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { b -> r.draw(Canvas(b), st, Matrix(), 0f) }
-        }.getOrNull()?.also { cache[clave] = it }
+            val tam = min(d.tamano, h * 0.36f).coerceAtLeast(2f)
+            val datos = TrazoDatos(d, color, tam, d.opacidad.coerceAtLeast(0.35f), TrazoDatos.PINTAR, false, listOf(pts), 7, 1f, true, null, null)
+            val hm = Humedo(1f, d.colorVariable); hm.sella(Raster(d, 1f), datos.sellos())
+            val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); val c = Canvas(b)
+            for (l in hm.lonas.values) if (l.tocada) datos.funde(c, l, 1f)
+            b
+        }.getOrNull()?.also { if (cache.size > 300) cache.clear(); cache[clave] = it }
     }
 }
 
@@ -52,8 +45,8 @@ object MuestrasPincel {
  * se mezcla con lo que encuentra a cada paso. Se hace en la CPU, sobre copias de las teselas (para deshacer).
  */
 class Difumino(private val lz: Lienzo, private val capa: CapaPx, private val radio: Float, private val fuerza: Float) {
-    init { capa.aplana() }
     private val antes = HashMap<Long, Bitmap?>()
+    private val fondos = HashMap<Long, Fondo>()
     private val trabajo = HashMap<Long, Bitmap>()
     private var parche: FloatArray? = null
     private var px = Float.NaN; private var py = Float.NaN
@@ -65,6 +58,8 @@ class Difumino(private val lz: Lienzo, private val capa: CapaPx, private val rad
         if (v == null && !crear) return null
         if (!lz.dentro(Lienzo.tx(k), Lienzo.ty(k))) return null
         antes[k] = v
+        // Mientras se difumina, esta tesela se ve tal cual (sin sus trazos rehechos de cerca)
+        capa.fondo.remove(k)?.let { fondos[k] = it }
         val b = v?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
         trabajo[k] = b
         return b
@@ -147,11 +142,14 @@ class Difumino(private val lz: Lienzo, private val capa: CapaPx, private val rad
 
     fun termina(): Edicion? {
         if (antes.isEmpty()) return null
-        // Las teselas definitivas: copias inmutables (las de trabajo se han ido cambiando)
+        // Las teselas definitivas: copias (las de trabajo se han ido cambiando). Se deja todo como estaba y se cambia de una vez
         val despues = HashMap<Long, Bitmap?>()
-        for ((k, b) in trabajo) { val f = b.copy(Bitmap.Config.ARGB_8888, false); capa.teselas[k] = f; capa.sucias += k; despues[k] = f }
-        lz.avisaTeselas(despues.keys)
-        return Edicion.Teselas("Difuminar", capa.info.id, antes, despues)
+        for ((k, b) in trabajo) despues[k] = b.copy(Bitmap.Config.ARGB_8888, false)
+        synchronized(lz.cierre) {
+            for ((k, v) in antes) if (v == null) capa.teselas.remove(k) else capa.teselas[k] = v
+            for ((k, f) in fondos) capa.fondo[k] = f
+        }
+        return lz.cambia(capa, "Difuminar", despues)
     }
 }
 
@@ -167,7 +165,7 @@ object Ajustes {
         val b = ColorMatrix(); b.setScale(brillo, brillo, brillo, 1f)
         cm.postConcat(rot); cm.postConcat(b)
         val p = Paint().apply { colorFilter = ColorMatrixColorFilter(cm) }
-        return cadaTesela(lz, capa, "Ajuste de color") { v -> Bitmap.createBitmap(Lienzo.L, Lienzo.L, Bitmap.Config.ARGB_8888).also { Canvas(it).drawBitmap(v, 0f, 0f, p) } }
+        return lz.cadaTesela(capa, "Ajuste de color") { v -> Bitmap.createBitmap(Lienzo.L, Lienzo.L, Bitmap.Config.ARGB_8888).also { Canvas(it).drawBitmap(v, 0f, 0f, p) } }
     }
 
     private fun tonoMatriz(grados: Float): ColorMatrix {
@@ -180,26 +178,16 @@ object Ajustes {
             0f, 0f, 0f, 1f, 0f))
     }
 
-    private fun cadaTesela(lz: Lienzo, capa: CapaPx, nombre: String, f: (Bitmap) -> Bitmap): Edicion? {
-        capa.aplana()
-        val antes = HashMap<Long, Bitmap?>(); val despues = HashMap<Long, Bitmap?>()
-        for ((k, v) in capa.teselas.toMap()) { val n = f(v); antes[k] = v; despues[k] = n; capa.teselas[k] = n; capa.sucias += k }
-        if (antes.isEmpty()) return null
-        lz.avisaTeselas(antes.keys)
-        return Edicion.Teselas(nombre, capa.info.id, antes, despues)
-    }
-
     /** Desenfoque gaussiano (tres cajas) de [radio] px, sin cortes entre teselas. */
     fun desenfoca(lz: Lienzo, capa: CapaPx, radio: Int): Edicion? {
         if (capa.teselas.isEmpty() || radio < 1) return null
-        capa.aplana()
         val L = Lienzo.L
         val origen = capa.teselas.toMap()
         // Las teselas que hay y sus vecinas (el desenfoque se sale un poco)
         val claves = HashSet<Long>()
         val m = (radio * 3 + L - 1) / L
         for (k in origen.keys) for (dy in -m..m) for (dx in -m..m) { val t = Lienzo.clave(Lienzo.tx(k) + dx, Lienzo.ty(k) + dy); if (lz.dentro(Lienzo.tx(t), Lienzo.ty(t))) claves += t }
-        val antes = HashMap<Long, Bitmap?>(); val despues = HashMap<Long, Bitmap?>()
+        val despues = HashMap<Long, Bitmap?>()
         val pad = radio * 3
         val w = L + pad * 2
         for (k in claves) {
@@ -220,13 +208,9 @@ object Ajustes {
                 out[y * L + x] = if (a <= 0.002f) 0 else ((a * 255).toInt().coerceIn(0, 255) shl 24) or (((ch[1][i] / a) * 255).toInt().coerceIn(0, 255) shl 16) or
                     (((ch[2][i] / a) * 255).toInt().coerceIn(0, 255) shl 8) or ((ch[3][i] / a) * 255).toInt().coerceIn(0, 255)
             }
-            val n = Bitmap.createBitmap(out, L, L, Bitmap.Config.ARGB_8888)
-            antes[k] = origen[k]; despues[k] = n
+            despues[k] = lz.enSeleccion(k, origen[k], Bitmap.createBitmap(out, L, L, Bitmap.Config.ARGB_8888))
         }
-        for ((k, b) in despues) { if (b != null) capa.teselas[k] = b; capa.sucias += k }
-        if (antes.isEmpty()) return null
-        lz.avisaTeselas(antes.keys)
-        return Edicion.Teselas("Desenfoque", capa.info.id, antes, despues)
+        return lz.cambia(capa, "Desenfoque", despues)
     }
 
     private fun caja(a: FloatArray, w: Int, h: Int, r: Int) {
@@ -241,7 +225,6 @@ object Ajustes {
         val L = Lienzo.L
         val origen = capa.teselas.toMap()
         if (origen.isEmpty()) return null
-        capa.aplana()
         val caja = RectF(Float.MAX_VALUE, Float.MAX_VALUE, -Float.MAX_VALUE, -Float.MAX_VALUE)
         for (k in origen.keys) caja.union(Lienzo.tx(k) * L.toFloat(), Lienzo.ty(k) * L.toFloat(), (Lienzo.tx(k) + 1) * L.toFloat(), (Lienzo.ty(k) + 1) * L.toFloat())
         val dest = RectF(); m.mapRect(dest, caja)
@@ -261,12 +244,10 @@ object Ajustes {
             }
             if (algo) nuevas[Lienzo.clave(tx, ty)] = b
         }
-        val antes = HashMap<Long, Bitmap?>(); val despues = HashMap<Long, Bitmap?>()
-        for (k in origen.keys) { antes[k] = origen[k]; despues[k] = null }
-        for ((k, b) in nuevas) { if (k !in antes) antes[k] = null; despues[k] = b }
-        capa.teselas.clear(); capa.teselas.putAll(nuevas); capa.sucias.addAll(antes.keys)
-        lz.avisaTeselas(antes.keys)
-        return Edicion.Teselas("Transformar", capa.info.id, antes, despues)
+        val despues = HashMap<Long, Bitmap?>()
+        for (k in origen.keys) despues[k] = null
+        for ((k, b) in nuevas) despues[k] = b
+        return lz.cambia(capa, "Transformar", despues)
     }
 
     /** Lo dibujado en la capa como un solo mapa de bits (para ver la transformación mientras se hace) y dónde va. */

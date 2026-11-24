@@ -108,6 +108,9 @@ class Piramide(private val lz: Lienzo, private val velo: VeloTerritorios, privat
         return e.bmp
     }
 
+    /** Si la tesela está hecha y al día. */
+    fun limpia(n: Int, tx: Int, ty: Int): Boolean { val e = cache[clave(n, tx, ty)] ?: return false; return e.bmp != null && !e.sucia && !e.encolada }
+
     private fun recorta() { val it = cache.entries.iterator(); var q = cache.size - 700; while (it.hasNext() && q-- > 0) { it.next(); it.remove() } }
 
     private val pFiltro = Paint(Paint.FILTER_BITMAP_FLAG)

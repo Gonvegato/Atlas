@@ -1,5 +1,3 @@
-@file:OptIn(androidx.ink.brush.ExperimentalInkCustomBrushApi::class)
-
 package com.gonzalo.atlas.vista
 
 import android.annotation.SuppressLint
@@ -12,34 +10,30 @@ import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
-import androidx.ink.authoring.InProgressStrokeId
-import androidx.ink.authoring.InProgressStrokesFinishedListener
-import androidx.ink.authoring.InProgressStrokesView
-import androidx.ink.strokes.Stroke
-import androidx.ink.strokes.StrokeInput
-import androidx.ink.strokes.MutableStrokeInputBatch
-import androidx.ink.brush.InputToolType
-import androidx.input.motionprediction.MotionEventPredictor
 import com.gonzalo.atlas.editor.Editor
 import com.gonzalo.atlas.editor.Herramienta
+import com.gonzalo.atlas.lienzo.FloatLista
+import com.gonzalo.atlas.lienzo.Formas
 import com.gonzalo.atlas.lienzo.Lienzo
+import com.gonzalo.atlas.lienzo.Lona
+import com.gonzalo.atlas.lienzo.Motor
 import com.gonzalo.atlas.lienzo.Papel
 import com.gonzalo.atlas.lienzo.Pinceles
 import com.gonzalo.atlas.lienzo.Piramide
-import com.gonzalo.atlas.lienzo.TipoPincel
+import com.gonzalo.atlas.lienzo.TrazoDatos
+import com.gonzalo.atlas.lienzo.TrazoVivo
 import com.gonzalo.atlas.lienzo.VeloTerritorios
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.floor
 import kotlin.math.hypot
-import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 
 /**
- * La mesa de dibujo: el lienzo (papel, capas, territorios y lo que va encima) y, delante, la capa de tinta de Ink, que pinta
- * el trazo en curso en el búfer delantero de la pantalla (lo más inmediato que deja Android). Al levantar el lápiz el trazo
- * pasa a la capa activa.
+ * La mesa de dibujo: el lienzo (papel, capas, territorios y lo que va encima). El trazo que se está dibujando se estampa con
+ * el motor de pinceles en su pintura húmeda y se ve ya fundido con su capa, a la resolución de la pantalla: lo que ves al
+ * dibujar es lo que queda al soltar.
  *
  * Con el lápiz: el lápiz dibuja y los dedos mueven, acercan y giran (la palma no pinta). Sin lápiz: un dedo dibuja y dos mueven.
  */
@@ -53,59 +47,20 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     val velo = VeloTerritorios(lz)
     private val dibujo = object : View(ctx) { override fun onDraw(c: Canvas) = pinta(c) }
     val piramide = Piramide(lz, velo) { dibujo.postInvalidateOnAnimation() }
-    private val tinta = InProgressStrokesView(ctx)
     private val dens = resources.displayMetrics.density
-    /** Predice por dónde va a ir el lápiz (para restar latencia). Si el sistema no puede, sin predicción. */
-    private val predictor: MotionEventPredictor? = runCatching { MotionEventPredictor.newInstance(this) }.getOrNull()
     var lapizVisto = false
     var dedoDibuja = false
     var girar = true
     var alMoverse: () -> Unit = {}
-
-    /** Lo que hace falta para pasar el trazo a la capa: el pincel, y la vista que había (de pantalla a lienzo) y su acercamiento. */
-    private class Meta(val tipo: TipoPincel, val opacidad: Float, val capa: String, val color: Int, val tam: Float, val aLienzo: Matrix, val zoom: Float)
-    private val metas = HashMap<InProgressStrokeId, Meta>()
+    private val alListo: () -> Unit = { dibujo.postInvalidateOnAnimation() }
 
     init {
         addView(dibujo, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        addView(tinta, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        tinta.textureBitmapStore = Pinceles.almacen(resources)
-        tinta.addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
-            override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
-                for ((id, st) in strokes) {
-                    val m = metas.remove(id)
-                    if (m == null) { tinta.removeFinishedStrokes(setOf(id)); continue }
-                    // El trazo de verdad: sus puntos pasados de la pantalla al lienzo (con la vista que había al dibujarlo), el
-                    // tamaño del pincel en píxeles del lienzo y el color opaco (la opacidad se aplica al fundirlo con la capa)
-                    val opaco = runCatching { aLienzo(st, m) }.getOrElse { st.copy(st.brush.copyWithColorIntArgb(m.color or (0xFF shl 24))) }
-                    editor.trazoTerminado(opaco, m.tipo, m.opacidad, m.capa) {
-                        dibujo.invalidate()
-                        dibujo.postOnAnimation { tinta.removeFinishedStrokes(setOf(id)) }
-                    }
-                }
-            }
-        })
-        runCatching { tinta.eagerInit() }
-        lz.alCambiar += { _ -> post { dibujo.postInvalidateOnAnimation() } }
+        lz.alCambiar += { _ -> dibujo.postInvalidateOnAnimation() }
+        lz.alCambiarVivo = { dibujo.postInvalidateOnAnimation() }
+        lz.nitidez.alListo += alListo
         editor.alCambiarVista = { dibujo.postInvalidateOnAnimation() }
         mapa.alCambiarVector += { post { velo.olvida(); piramide.todoSucio(); dibujo.postInvalidateOnAnimation() } }
-    }
-
-    /** Rehace el trazo (dibujado en coordenadas de pantalla) en coordenadas del lienzo. */
-    private fun aLienzo(st: Stroke, m: Meta): Stroke {
-        val src = st.inputs
-        val lote = MutableStrokeInputBatch()
-        val p = FloatArray(2)
-        val unidad = if (src.hasStrokeUnitLength()) src.getStrokeUnitLengthCm() * m.zoom else StrokeInput.NO_STROKE_UNIT_LENGTH
-        for (i in 0 until src.size) {
-            val s = src.get(i)
-            p[0] = s.x; p[1] = s.y; m.aLienzo.mapPoints(p)
-            lote.add(s.toolType, p[0], p[1], s.elapsedTimeMillis, unidad,
-                if (src.hasPressure()) s.pressure else StrokeInput.NO_PRESSURE,
-                if (src.hasTilt()) s.tiltRadians else StrokeInput.NO_TILT, StrokeInput.NO_ORIENTATION)
-        }
-        val b = st.brush.copy(size = m.tam.coerceAtLeast(0.5f), epsilon = minOf(0.1f, m.tam / 4f)).copyWithColorIntArgb(m.color or (0xFF shl 24))
-        return Stroke(b, lote)
     }
 
     private var colocada = false
@@ -132,7 +87,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     private fun limita() {
         val l = lz.limites()
         val zmin = if (mapa.infinito) 0.03f else min(width / l.width().toFloat(), height / l.height().toFloat()) * 0.4f
-        vista.zoom = vista.zoom.coerceIn(max(0.01f, zmin), 16f)
+        vista.zoom = vista.zoom.coerceIn(max(0.01f, zmin), 32f)
         if (!mapa.infinito) { vista.cx = vista.cx.coerceIn(0f, mapa.ancho.toFloat()); vista.cy = vista.cy.coerceIn(0f, mapa.alto.toFloat()) }
     }
 
@@ -181,8 +136,8 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         if (!papel.isEmpty) {
             Papel.pinta(c, mapa, papel)
             if (mapa.calco?.encima != true) pintaCalco(c)
-            val nivel = if (vista.zoom >= 0.7f || editor.transformacion != null) 0 else floor(ln(1f / vista.zoom) / ln(2f)).toInt().coerceIn(1, 7)
-            if (nivel == 0) capasDirectas(c, papel) else desdePiramide(c, papel, nivel)
+            val nivel = Motor.nivel(vista.zoom).let { if (editor.transformacion != null) min(0, it) else it }
+            if (nivel <= 0) capasDirectas(c, papel, nivel) else desdePiramide(c, papel, nivel)
             if (mapa.calco?.encima == true) pintaCalco(c)
             // Borde del lienzo
             if (!mapa.infinito) { pCapa.alpha = 255; pCapa.blendMode = null; val p = Paint().apply { style = Paint.Style.STROKE; color = 0x55000000; strokeWidth = 1f / vista.zoom }; c.drawRect(0f, 0f, mapa.ancho.toFloat(), mapa.alto.toFloat(), p) }
@@ -198,56 +153,78 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
 
     private fun rango(r: RectF, lado: Float): IntArray = intArrayOf(floor(r.left / lado).toInt(), floor(r.top / lado).toInt(), floor((r.right - 0.001f) / lado).toInt(), floor((r.bottom - 0.001f) / lado).toInt())
 
-    private fun capasDirectas(c: Canvas, r: RectF) {
+    private val rSrc = android.graphics.Rect()
+    private val rDst = RectF()
+    private val imagenes = java.util.WeakHashMap<Lona, Bitmap>()
+    private val pDentro = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN) }
+    private val pLejos = Paint(Paint.FILTER_BITMAP_FLAG)
+
+    /** Las capas tal cual (a tamaño real) o, de cerca ([nivel] < 0), con sus teselas nítidas donde hay trazos guardados. */
+    private fun capasDirectas(c: Canvas, r: RectF, nivel: Int) {
         val L = Lienzo.L.toFloat()
         val t = rango(r, L)
         val tm = editor.transformacion
-        for (capa in lz.capas) {
-            if (!capa.info.visible || capa.teselas.isEmpty()) continue
-            pCapa.alpha = (capa.info.opacidad * 255).toInt()
-            pCapa.blendMode = Lienzo.fusion(capa.info.fusion)
-            if (tm != null && capa.info.id == lz.activa) {
-                // La capa que se transforma: una imagen suya movida con la matriz
-                if (vistaTransfCapa != capa.info.id || vistaTransf == null) { vistaTransf = com.gonzalo.atlas.lienzo.Ajustes.vistaCapa(capa); vistaTransfCapa = capa.info.id }
-                vistaTransf?.let { (b, caja) ->
-                    val g = c.saveLayer(null, pCapa); c.save(); c.concat(tm); c.drawBitmap(b, null, caja, pFiltro)
-                    val borde = Paint().apply { style = Paint.Style.STROKE; color = 0xFF3D8BFF.toInt(); strokeWidth = 2f / vista.zoom }
-                    c.drawRect(caja, borde); c.restore(); c.restoreToCount(g)
+        val e = -nivel; val s = 1 shl e; val lado = L / s
+        val th = if (e > 0) rango(r, lado) else t
+        lz.vivos.removeAll { it.estado >= TrazoVivo.ASENTADO }
+        synchronized(lz.cierre) {
+            for (capa in lz.capas) {
+                val vivos = lz.vivos.filter { it.capa === capa && it.estado < TrazoVivo.ASENTADO }
+                if (!capa.info.visible || (capa.teselas.isEmpty() && vivos.isEmpty())) continue
+                pCapa.alpha = (capa.info.opacidad * 255).toInt()
+                pCapa.blendMode = Lienzo.fusion(capa.info.fusion)
+                if (tm != null && capa.info.id == lz.activa) {
+                    // La capa que se transforma: una imagen suya movida con la matriz
+                    if (vistaTransfCapa != capa.info.id || vistaTransf == null) { vistaTransf = com.gonzalo.atlas.lienzo.Ajustes.vistaCapa(capa); vistaTransfCapa = capa.info.id }
+                    vistaTransf?.let { (b, caja) ->
+                        val g = c.saveLayer(null, pCapa); c.save(); c.concat(tm); c.drawBitmap(b, null, caja, pFiltro)
+                        val borde = Paint().apply { style = Paint.Style.STROKE; color = 0xFF3D8BFF.toInt(); strokeWidth = 2f / vista.zoom }
+                        c.drawRect(caja, borde); c.restore(); c.restoreToCount(g)
+                    }
+                    continue
                 }
-                continue
+                val g = c.saveLayer(r, pCapa)
+                val cerca = e > 0 && capa.fondo.isNotEmpty()
+                for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) {
+                    val k = Lienzo.clave(tx, ty)
+                    val b = capa.teselas[k]
+                    if (cerca && capa.fondo.containsKey(k)) {
+                        // De cerca: sus teselas nítidas (y, mientras se hacen, la normal ampliada)
+                        for (hy in max(th[1], ty * s)..min(th[3], ty * s + s - 1)) for (hx in max(th[0], tx * s)..min(th[2], tx * s + s - 1)) {
+                            rDst.set(hx * lado, hy * lado, (hx + 1) * lado, (hy + 1) * lado)
+                            val hb = lz.nitidez.tesela(capa, e, hx, hy)
+                            if (hb != null) c.drawBitmap(hb, null, rDst, pFiltro)
+                            else if (b != null) { val px = ((hx - tx * s) * lado).toInt(); val py = ((hy - ty * s) * lado).toInt(); rSrc.set(px, py, px + lado.toInt(), py + lado.toInt()); c.drawBitmap(b, rSrc, rDst, pFiltro) }
+                        }
+                    } else if (b != null) c.drawBitmap(b, tx * L, ty * L, pFiltro)
+                }
+                for (v in vivos) pintaVivo(c, v, r)
+                c.restoreToCount(g)
             }
-            val g = c.saveLayer(r, pCapa)
-            // De cerca, los trazos se pintan como vectores (nítidos) sobre lo que había debajo de ellos
-            val hd = vista.zoom > 1.1f && capa.trazos.isNotEmpty() && (android.os.Build.VERSION.SDK_INT >= 34 || capa.trazos.none { it.texturado })
-            for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) {
-                val k = Lienzo.clave(tx, ty)
-                val b = (if (hd) capa.sinTrazos[k] ?: capa.teselas[k] else capa.teselas[k]) ?: continue
-                if (b !== com.gonzalo.atlas.lienzo.TESELA_VACIA) c.drawBitmap(b, tx * L, ty * L, pFiltro)
-            }
-            if (hd) dibujaTrazos(c, capa, r)
-            c.restoreToCount(g)
         }
         if (tm == null) vistaTransf = null
         if (mapa.verTerritorios) for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) velo.tesela(Lienzo.clave(tx, ty))?.let { c.drawBitmap(it, tx * L, ty * L, pFiltro) }
     }
 
-    private val rendererVista by lazy { androidx.ink.rendering.android.canvas.CanvasStrokeRenderer.create(Pinceles.almacen(resources)) }
-    private val identidad = Matrix()
-    private val pTrazo = Paint()
+    /** La imagen de una tesela de la pintura húmeda, al día. */
+    private fun imagenDe(l: Lona, color: Int, bordes: Float): Bitmap {
+        val b = imagenes.getOrPut(l) { Bitmap.createBitmap(l.w, l.h, Bitmap.Config.ARGB_8888) }
+        l.vuelca(b, color, bordes)
+        return b
+    }
 
-    private fun dibujaTrazos(c: Canvas, capa: com.gonzalo.atlas.lienzo.CapaPx, r: RectF) {
-        for (tr in capa.trazos) {
-            if (!RectF.intersects(tr.caja, r)) continue
-            val capaPropia = tr.goma || tr.opacidad < 0.999f
-            var g = -1
-            if (capaPropia) {
-                pTrazo.alpha = (tr.opacidad * 255).toInt().coerceIn(0, 255)
-                pTrazo.xfermode = if (tr.goma) android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT) else null
-                g = c.saveLayer(tr.caja, pTrazo)
-            }
-            runCatching { rendererVista.draw(c, tr.stroke, identidad, 0f) }
-            if (g >= 0) c.restoreToCount(g)
-        }
+    /** El trazo que se está dibujando, fundido con su capa (con su opacidad; borrando; solo dentro de la selección o la sección). */
+    private fun pintaVivo(c: Canvas, v: TrazoVivo, r: RectF) {
+        val h = v.humedo; val s = h.escala
+        val g = c.save()
+        v.recorte?.let { c.clipRect(it) }
+        val sel = v.seleccion
+        if (sel != null) c.saveLayer(r, v.pintura)
+        c.save(); c.scale(1f / s, 1f / s)
+        for (l in h.lonas.values) if (l.tocada) c.drawBitmap(imagenDe(l, v.color, v.def.bordes), l.ox.toFloat(), l.oy.toFloat(), if (sel != null) pFiltro else v.pintura)
+        c.restore()
+        if (sel != null) c.drawPath(sel.path, pDentro)
+        c.restoreToCount(g)
     }
 
     private val rr = RectF()
@@ -269,13 +246,36 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
             }
             c.drawBitmap(b, null, rr, pFiltro)
         }
+        // Los trazos en curso (y los recién asentados, hasta que la vista de lejos se rehace con ellos)
+        val esc = Motor.escala(nivel)
+        for (v in lz.vivos) {
+            if (v.estado == TrazoVivo.HECHO) { lz.vivos.remove(v); continue }
+            val h = v.humedo
+            val asentado = v.estado == TrazoVivo.ASENTADO
+            if (asentado && h.escala != esc) { lz.vivos.remove(v); continue }
+            if (!v.capa.info.visible) continue
+            val borra = v.modo == TrazoDatos.BORRAR
+            if (borra && asentado) { lz.vivos.remove(v); continue }
+            pLejos.alpha = ((if (borra) 0.75f else 1f) * v.opacidad * 255).toInt()
+            var queda = false
+            c.save(); v.recorte?.let { c.clipRect(it) }; v.seleccion?.let { c.clipPath(it.path) }
+            c.scale(1f / h.escala, 1f / h.escala)
+            for (l in h.lonas.values) {
+                if (!l.tocada) continue
+                if (asentado && piramide.limpia(nivel, l.ox / Lienzo.L, l.oy / Lienzo.L)) continue
+                queda = true
+                c.drawBitmap(imagenDe(l, if (borra) mapa.papel else v.color, v.def.bordes), l.ox.toFloat(), l.oy.toFloat(), pLejos)
+            }
+            c.restore()
+            if (asentado && !queda) lz.vivos.remove(v)
+        }
     }
 
     // ---------------------------------------------------------------- tocar
 
     private enum class Gesto { NADA, TINTA, ARRASTRE, MOVER, CALCO, DIFUMINAR, TRANSFORMAR }
     private var gesto = Gesto.NADA
-    private var trazo: InProgressStrokeId? = null
+    private var trazo: TrazoVivo? = null
     private var punteroTrazo = -1
     private var bajoX = 0f; private var bajoY = 0f; private var bajoT = 0L
     private var previo: FloatArray? = null
@@ -288,7 +288,6 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
-        predictor?.record(e)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 parent?.requestDisallowInterceptTouchEvent(true)
@@ -316,21 +315,14 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 if (gesto == Gesto.DIFUMINAR && !esLapiz(e, i)) { editor.terminaDifuminar(); editor.deshacer(); gesto = Gesto.MOVER }
                 if (gesto == Gesto.TINTA && !esLapiz(e, i) && !esLapizActivo(e)) {
                     // Un segundo dedo mientras se dibuja con el dedo: era para mover; el trazo se cancela
-                    trazo?.let { tinta.cancelStroke(it, e); metas.remove(it) }; trazo = null; gesto = Gesto.MOVER
+                    cancelaTinta(); gesto = Gesto.MOVER
                 } else if (gesto == Gesto.ARRASTRE && !esLapiz(e, i) && !esLapiz(e, 0)) { gesto = Gesto.MOVER }
                 previo = null
             }
             MotionEvent.ACTION_MOVE -> { if (hypot(e.x - bajoX, e.y - bajoY) > 10 * dens) { cancelaCuentagotas(); if (e.pointerCount > 1) multiMovido = true }
                 for (i in 0 until e.pointerCount) if (e.historySize > 0 && hypot(e.getX(i) - e.getHistoricalX(i, 0), e.getY(i) - e.getHistoricalY(i, 0)) > 3 * dens && e.pointerCount > 1) multiMovido = true
                 when (gesto) {
-                Gesto.TINTA -> trazo?.let { id ->
-                    val i = e.findPointerIndex(punteroTrazo); if (i < 0) return true
-                    if (cuerda != null) { estabiliza(e, i, id); cursor(e.getX(i), e.getY(i)); return true }
-                    val pred = predictor?.predict()
-                    runCatching { tinta.addToStroke(e, punteroTrazo, id, pred) }
-                    pred?.recycle()
-                    cursor(e.getX(i), e.getY(i))
-                }
+                Gesto.TINTA -> mueveTinta(e)
                 Gesto.ARRASTRE -> {
                     val i = e.findPointerIndex(punteroTrazo).takeIf { it >= 0 } ?: 0
                     for (hh in 0 until e.historySize) { val m = vista.aMapa(e.getHistoricalX(i, hh), e.getHistoricalY(i, hh)); editor.mueve(m[0], m[1]) }
@@ -363,7 +355,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 recuerdaVista(); dibujo.invalidate()
             }
             MotionEvent.ACTION_CANCEL -> {
-                trazo?.let { tinta.cancelStroke(it, e); metas.remove(it) }; trazo = null
+                cancelaTinta()
                 if (gesto == Gesto.ARRASTRE) editor.termina()
                 gesto = Gesto.NADA; previo = null; opciones.cursor = null
             }
@@ -373,76 +365,127 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
 
     private fun esLapizActivo(e: MotionEvent): Boolean { val i = e.findPointerIndex(punteroTrazo); return i >= 0 && esLapiz(e, i) }
 
+    // ---------------------------------------------------------------- el trazo
+
     private val inv = Matrix()
+    private var cuerda: FloatArray? = null
+    private var bajoTrazo = 0L
+    private var lapizTrazo = false
+    private val lote = FloatLista()
+    /** Por dónde va el trazo (x, y en el lienzo), para reconocer su forma si se deja el lápiz quieto. */
+    private val camino = FloatLista()
+    private var forma: Formas.Forma? = null
+    private var formaBase: Formas.Forma? = null
+    private var anclaX = 0f; private var anclaY = 0f
+    private var quietoX = 0f; private var quietoY = 0f
+    private var formaPendiente = false
+    private val pt = FloatArray(2)
+
     private fun empiezaTinta(e: MotionEvent, gomaLapiz: Boolean) {
         val goma = gomaLapiz || editor.herramienta == Herramienta.GOMA
-        val tipo = if (goma) Pinceles.de(editor.goma).comoGoma() else Pinceles.de(editor.pincel)
+        val def = Pinceles.def(if (goma) editor.goma else editor.pincel)
         val capa = lz.capaActiva() ?: return
         if (!capa.info.visible) { editor.aviso = "La capa «${capa.info.nombre}» está oculta"; return }
-        val tam = if (goma) editor.tamanoGoma else editor.tamano
-        val op = if (goma) editor.opacidadGoma else editor.opacidad
-        // Lo que se ve mientras se dibuja: el color con su opacidad (la goma, un velo del papel)
-        val verColor = if (goma) (0xB0 shl 24) or (mapa.papel and 0xFFFFFF) else ((op * 255).toInt().coerceIn(10, 255) shl 24) or (editor.color and 0xFFFFFF)
-        vista.m.invert(inv)
-        punteroTrazo = e.getPointerId(e.actionIndex)
-        // Ink pinta en coordenadas de pantalla (sin transformaciones): el pincel, a su tamaño en pantalla
-        val tamPantalla = (tam * vista.zoom).coerceAtLeast(0.5f)
-        val est = editor.estabilizacion
-        val id = if (est > 0.01f) {
-            // Estabilizado: los puntos se suavizan aquí (cuerda) antes de dárselos a Ink
-            val i = e.actionIndex
-            cuerda = floatArrayOf(e.getX(i), e.getY(i)); bajoTrazo = e.eventTime; herramientaLapiz = esLapiz(e, i)
-            runCatching { tinta.startStroke(entrada(e.getX(i), e.getY(i), e, i, e.eventTime), tipo.brush(verColor, tamPantalla)) }.getOrNull()
-        } else { cuerda = null; runCatching { tinta.startStroke(e, punteroTrazo, tipo.brush(verColor, tamPantalla)) }.getOrNull() } ?: return
-        trazo = id
-        metas[id] = Meta(tipo, op, capa.info.id, editor.color, tam, Matrix(inv), vista.zoom)
+        val i = e.actionIndex
+        punteroTrazo = e.getPointerId(i)
+        lapizTrazo = esLapiz(e, i)
+        vista.actualiza(); vista.m.invert(inv)
+        val v = lz.empiezaTrazo(def, editor.color, if (goma) editor.tamanoGoma else editor.tamano, if (goma) editor.opacidadGoma else editor.opacidad,
+            if (goma) TrazoDatos.BORRAR else TrazoDatos.PINTAR, vista.zoom / dens, lapizTrazo, Motor.nivel(vista.zoom), editor.espejos()) ?: return
+        trazo = v; bajoTrazo = e.eventTime; camino.limpia(); forma = null; formaBase = null
+        // Estabilizado: el pincel va detrás del lápiz, atado con una cuerda
+        cuerda = if (editor.estabilizacion > 0.01f) floatArrayOf(e.getX(i), e.getY(i)) else null
+        lote.limpia()
+        punto(e.getX(i), e.getY(i), e.getPressure(i), e.getAxisValue(MotionEvent.AXIS_TILT, i), e.getOrientation(i), e.eventTime, true)
+        manda()
+        quietoX = e.getX(i); quietoY = e.getY(i)
+        runCatching { requestUnbufferedDispatch(e) }
         cursor(e.x, e.y)
     }
 
-    private fun terminaTinta(e: MotionEvent) {
-        val id = trazo ?: return
+    /**
+     * Un punto del lápiz (en la pantalla) pasa al trazo (en el lienzo). Con estabilización, el pincel va detrás del lápiz a una
+     * distancia fija (más larga cuanto más estabilización) y solo se mueve cuando el lápiz tira de él: las líneas salen
+     * limpias aunque la mano tiemble (como la StreamLine de Procreate).
+     */
+    private fun punto(sx: Float, sy: Float, p: Float, inc: Float, ori: Float, t: Long, forzar: Boolean = false) {
+        var x = sx; var y = sy
         val cu = cuerda
         if (cu != null) {
-            // El final: la cuerda llega hasta donde levantaste el lápiz
-            val i = e.findPointerIndex(punteroTrazo).takeIf { it >= 0 } ?: e.actionIndex
-            runCatching { tinta.finishStroke(entrada(e.getX(i), e.getY(i), e, i, e.eventTime), id) }
-        } else runCatching { tinta.finishStroke(e, punteroTrazo, id) }
-        trazo = null; cuerda = null
-    }
-
-    // ---------------------------------------------------------------- estabilización (como la StreamLine de Procreate)
-
-    private var cuerda: FloatArray? = null
-    private var bajoTrazo = 0L
-    private var herramientaLapiz = false
-    private val lote by lazy { MutableStrokeInputBatch() }
-
-    private fun entrada(x: Float, y: Float, e: MotionEvent, i: Int, t: Long, p: Float = e.getPressure(i)): StrokeInput {
-        val lapiz = esLapiz(e, i)
-        return StrokeInput.create(x, y, (t - bajoTrazo).coerceAtLeast(0L), if (lapiz) InputToolType.STYLUS else InputToolType.TOUCH,
-            StrokeInput.NO_STROKE_UNIT_LENGTH, if (lapiz) p.coerceIn(0f, 1f) else StrokeInput.NO_PRESSURE,
-            if (lapiz) e.getAxisValue(MotionEvent.AXIS_TILT, i).coerceIn(0f, 1.5707f) else StrokeInput.NO_TILT, StrokeInput.NO_ORIENTATION)
-    }
-
-    /**
-     * La «cuerda»: el pincel va detrás del lápiz a una distancia fija (más larga cuanto más estabilización) y solo se mueve
-     * cuando el lápiz tira de él. Las líneas salen limpias aunque la mano tiemble.
-     */
-    private fun estabiliza(e: MotionEvent, i: Int, id: InProgressStrokeId) {
-        val cu = cuerda ?: return
-        val largo = editor.estabilizacion * editor.estabilizacion * 70f * dens
-        lote.clear()
-        fun punto(sx: Float, sy: Float, t: Long, p: Float) {
-            val dx = sx - cu[0]; val dy = sy - cu[1]; val d = hypot(dx, dy)
-            if (d <= largo || d < 0.01f) return
-            val k = (d - largo) / d
-            cu[0] += dx * k; cu[1] += dy * k
-            lote.add(entrada(cu[0], cu[1], e, i, t, p))
+            if (forzar) { cu[0] = sx; cu[1] = sy }
+            else {
+                val largo = editor.estabilizacion * editor.estabilizacion * 70f * dens
+                val dx = sx - cu[0]; val dy = sy - cu[1]; val d = hypot(dx, dy)
+                if (d <= largo || d < 0.01f) return
+                val k = (d - largo) / d
+                cu[0] += dx * k; cu[1] += dy * k; x = cu[0]; y = cu[1]
+            }
         }
-        for (hh in 0 until e.historySize) punto(e.getHistoricalX(i, hh), e.getHistoricalY(i, hh), e.getHistoricalEventTime(hh), e.getHistoricalPressure(i, hh))
-        punto(e.getX(i), e.getY(i), e.eventTime, e.getPressure(i))
-        if (lote.size > 0) runCatching { tinta.addToStroke(lote, id) }
+        pt[0] = x; pt[1] = y; inv.mapPoints(pt)
+        lote.pon(pt[0]); lote.pon(pt[1])
+        lote.pon(if (lapizTrazo) p.coerceIn(0f, 1f) else 1f)
+        lote.pon(if (lapizTrazo) inc.coerceIn(0f, 1.5707f) else 0f)
+        lote.pon(if (lapizTrazo) ori - Math.toRadians(vista.giro.toDouble()).toFloat() else 0f)
+        lote.pon((t - bajoTrazo).coerceAtLeast(0L).toFloat())
+        camino.pon(pt[0]); camino.pon(pt[1])
     }
+
+    private fun manda() { if (lote.n > 0) { trazo?.agrega(lote.copia()); lote.limpia() } }
+
+    private fun mueveTinta(e: MotionEvent) {
+        if (trazo == null) return
+        val i = e.findPointerIndex(punteroTrazo); if (i < 0) return
+        if (forma != null) { ajustaForma(e.getX(i), e.getY(i)); return }
+        for (h in 0 until e.historySize) punto(e.getHistoricalX(i, h), e.getHistoricalY(i, h), e.getHistoricalPressure(i, h), e.getHistoricalAxisValue(MotionEvent.AXIS_TILT, i, h), e.getHistoricalOrientation(i, h), e.getHistoricalEventTime(h))
+        punto(e.getX(i), e.getY(i), e.getPressure(i), e.getAxisValue(MotionEvent.AXIS_TILT, i), e.getOrientation(i), e.eventTime)
+        manda()
+        // Forma rápida: si el lápiz se queda quieto sin levantarlo, lo dibujado se convierte en la forma limpia a la que se parece
+        if (hypot(e.getX(i) - quietoX, e.getY(i) - quietoY) > 4 * dens) { quietoX = e.getX(i); quietoY = e.getY(i); removeCallbacks(formaRapida); if (editor.formasRapidas) postDelayed(formaRapida, 620) }
+        cursor(e.getX(i), e.getY(i))
+    }
+
+    private val formaRapida = Runnable {
+        val v = trazo
+        if (v != null && gesto == Gesto.TINTA && forma == null) {
+            val n = camino.n / 2
+            val xs = FloatArray(n) { camino.v[it * 2] }; val ys = FloatArray(n) { camino.v[it * 2 + 1] }
+            var largo = 0f; for (k in 1 until n) largo += hypot(xs[k] - xs[k - 1], ys[k] - ys[k - 1])
+            if (largo * vista.zoom > 36 * dens) Formas.reconoce(xs, ys, n)?.let { f ->
+                forma = f; formaBase = f; anclaX = xs[n - 1]; anclaY = ys[n - 1]
+                v.sustituye(f.trazo(1.5f / vista.zoom))
+                editor.aviso = f.nombre + " · arrastra para ajustarla"
+            }
+        }
+    }
+
+    /** Con la forma ya hecha y el lápiz aún apoyado: una recta se alarga hasta él; las demás se escalan y giran con él. */
+    private fun ajustaForma(sx: Float, sy: Float) {
+        val base = formaBase ?: return
+        pt[0] = sx; pt[1] = sy; inv.mapPoints(pt)
+        forma = if (!base.cerrada && base.pts.size == 4) Formas.recta(base.pts[0], base.pts[1], pt[0], pt[1]) else {
+            val ax = anclaX - base.cx; val ay = anclaY - base.cy; val bx = pt[0] - base.cx; val by = pt[1] - base.cy
+            val la = hypot(ax, ay)
+            if (la < 1e-3f) base else base.movida(hypot(bx, by) / la, atan2(by, bx) - atan2(ay, ax))
+        }
+        if (!formaPendiente) { formaPendiente = true; post { formaPendiente = false; val f = forma; val v = trazo; if (f != null && v != null) v.sustituye(f.trazo(1.5f / vista.zoom)) } }
+    }
+
+    private fun terminaTinta(e: MotionEvent) {
+        val v = trazo ?: return
+        removeCallbacks(formaRapida)
+        val f = forma
+        if (f != null) v.sustituye(f.trazo(1.5f / vista.zoom))
+        else {
+            // El final: hasta donde se levantó el lápiz (la cuerda llega hasta él)
+            val i = e.findPointerIndex(punteroTrazo).takeIf { it >= 0 } ?: e.actionIndex
+            punto(e.getX(i), e.getY(i), e.getPressure(i), e.getAxisValue(MotionEvent.AXIS_TILT, i), e.getOrientation(i), e.eventTime, true)
+            manda()
+        }
+        trazo = null; cuerda = null; forma = null; formaBase = null
+        v.termina { ed, error -> editor.trazoAsentado(ed, error) }
+    }
+
+    private fun cancelaTinta() { removeCallbacks(formaRapida); trazo?.cancela(); trazo = null; cuerda = null; forma = null; formaBase = null }
 
     private fun empiezaArrastre(e: MotionEvent) {
         punteroTrazo = e.getPointerId(0)
@@ -501,7 +544,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     private var bajoMulti = 0L
     private var multiMovido = false
     private val cuentagotas = Runnable {
-        if (gesto == Gesto.MOVER || gesto == Gesto.NADA || (gesto == Gesto.TINTA && trazo == null)) {
+        if (gesto == Gesto.MOVER || gesto == Gesto.NADA) {
             val m = vista.aMapa(bajoX, bajoY)
             editor.lienzo.enHilo { val c = editor.lienzo.colorEn(m[0].toInt(), m[1].toInt()); post { editor.ponColor(c or (0xFF shl 24)); editor.aviso = "Color recogido" } }
             movido = true
@@ -581,5 +624,5 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
 
     fun irA(x: Float, y: Float, zoom: Float = max(vista.zoom, 0.8f)) { vista.cx = x; vista.cy = y; vista.zoom = zoom; limita(); vista.actualiza(); recuerdaVista(); dibujo.invalidate(); alMoverse() }
 
-    fun cierra() { recuerdaVista(); piramide.cierra() }
+    fun cierra() { recuerdaVista(); piramide.cierra(); lz.nitidez.alListo -= alListo }
 }

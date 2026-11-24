@@ -255,7 +255,7 @@ private fun BibliotecaPinceles(e: EstadoApp, ed: Editor, abreEstudio: () -> Unit
         uri ?: return@rememberLauncherForActivityResult
         msg = "Importando…"
         Thread {
-            val r = runCatching { ctx.contentResolver.openInputStream(uri)!!.use { com.gonzalo.atlas.lienzo.Procreate.importa(it.readBytes(), e.bib.dirRecursos, ctx.resources) } }
+            val r = runCatching { ctx.contentResolver.openInputStream(uri)!!.use { com.gonzalo.atlas.lienzo.Procreate.importa(it.readBytes(), e.bib.dirRecursos) } }
             android.os.Handler(android.os.Looper.getMainLooper()).post { msg = r.fold({ n -> if (n == 0) "No hay pinceles en ese archivo" else "Importados: $n"; }, { "No se pudo: ${it.message}" }); if (r.getOrNull() ?: 0 > 0) cat = "Importados" }
         }.start()
     }
@@ -278,7 +278,7 @@ private fun BibliotecaPinceles(e: EstadoApp, ed: Editor, abreEstudio: () -> Unit
             for (d in lista) {
                 val sel = d.id == actual
                 val muestra by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, d.json().toString()) {
-                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.gonzalo.atlas.lienzo.MuestrasPincel.de(d, ctx.resources) }
+                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.gonzalo.atlas.lienzo.MuestrasPincel.de(d) }
                 }
                 Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (sel) O.ACENTO.copy(alpha = 0.85f) else O.CRUDO).pulsableO { if (sel) abreEstudio() else ed.eligePincel(d.id) }.padding(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -305,11 +305,10 @@ private fun EstudioPincel(ed: Editor, volver: () -> Unit) {
     fun pon(n: com.gonzalo.atlas.lienzo.DefPincel) { d = n }
     val muestra by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, d) {
         kotlinx.coroutines.delay(120)
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.gonzalo.atlas.lienzo.MuestrasPincel.de(d, ctx.resources, 460, 110) }
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.gonzalo.atlas.lienzo.MuestrasPincel.de(d, 460, 110) }
     }
     Box(Modifier.fillMaxWidth().height(110.dp).clip(RoundedCornerShape(10.dp)).background(O.MESA)) { muestra?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize()) } }
     CampoO(d.nombre, { pon(d.copy(nombre = it)) }, Modifier.fillMaxWidth(), "Nombre")
-    if (d.stock.isNotBlank()) { Text("Es un pincel de Ink tal cual: duplica uno de los demás para cambiarlo todo.", style = O.texto(12.sp, O.GRIS)) }
     @Composable fun S(t: String, v: Float, r: ClosedFloatingPointRange<Float>, f: String, set: (Float) -> com.gonzalo.atlas.lienzo.DefPincel) = DeslizadorO(t, v, r, f) { pon(set(it)) }
     EtiquetaO("Trazo", tam = 11.sp, color = O.ACENTO)
     S("Estabilización", d.estabilizacion, 0f..1f, "${(d.estabilizacion * 100).roundToInt()}%") { d.copy(estabilizacion = it) }
@@ -470,10 +469,10 @@ private fun PanelCapas(e: EstadoApp, ed: Editor, mesa: Mesa) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     BotonO("Subir") { lz.cambiaCapas("Ordenar") { val i = lz.capas.indexOf(c); if (i < lz.capas.size - 1) { lz.capas.removeAt(i); lz.capas.add(i + 1, c) } } }
                     BotonO("Bajar") { lz.cambiaCapas("Ordenar") { val i = lz.capas.indexOf(c); if (i > 0) { lz.capas.removeAt(i); lz.capas.add(i - 1, c) } } }
-                    BotonO("Duplicar") { lz.cambiaCapas("Duplicar") { val n = CapaPx(CapaInfo.de(c.info.json().put("id", "c" + System.nanoTime().toString(36)).put("n", c.info.nombre + " (copia)"))); n.teselas.putAll(c.teselas); n.trazos = c.trazos; n.sinTrazos.putAll(c.sinTrazos); n.trazosSucios = true; lz.capas.add(lz.capas.indexOf(c) + 1, n) } }
+                    BotonO("Duplicar") { lz.cambiaCapas("Duplicar") { val n = CapaPx(CapaInfo.de(c.info.json().put("id", "c" + System.nanoTime().toString(36)).put("n", c.info.nombre + " (copia)"))); n.teselas.putAll(c.teselas); n.trazos = c.trazos; n.fondo.putAll(c.fondo); n.seq = c.seq; n.trazosSucios = true; lz.capas.add(lz.capas.indexOf(c) + 1, n) } }
                     BotonO("Combinar abajo") { combinaAbajo(lz, c) }
-                    BotonO("Rellenar capa") { lz.cambiaCapas("Rellenar capa") { c.aplana(); rellenaCapa(lz, c, ed.color) } }
-                    BotonO("Vaciar") { lz.cambiaCapas("Vaciar capa") { c.aplana(); c.teselas.clear() } }
+                    BotonO("Rellenar capa") { lz.cambiaCapas("Rellenar capa") { c.soloPixeles(); rellenaCapa(lz, c, ed.color) } }
+                    BotonO("Vaciar") { lz.cambiaCapas("Vaciar capa") { c.soloPixeles(); c.teselas.clear() } }
                     if (lz.capas.size > 1) BotonO("Borrar", color = O.ROJO) { lz.cambiaCapas("Borrar capa") { lz.capas.remove(c); lz.activa = lz.capas.last().info.id } }
                 }
             }
@@ -595,7 +594,7 @@ private fun combinaAbajo(lz: Lienzo, c: CapaPx) {
     lz.cambiaCapas("Combinar") {
         val i = lz.capas.indexOf(c); if (i <= 0) return@cambiaCapas
         val abajo = lz.capas[i - 1]
-        c.aplana(); abajo.aplana()
+        c.soloPixeles(); abajo.soloPixeles()
         val claves = (c.teselas.keys + abajo.teselas.keys).toSet()
         val nuevo = HashMap<Long, android.graphics.Bitmap>()
         for (k in claves) {

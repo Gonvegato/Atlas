@@ -50,7 +50,7 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     var herramienta by mutableStateOf(Herramienta.PINCEL)
     var pincel by mutableStateOf("lapiz6b")
     /** El pincel de cada herramienta (como en Procreate: pintar, difuminar y borrar eligen pincel por separado). */
-    var goma by mutableStateOf("aerosuave")
+    var goma by mutableStateOf("aeroduro")
     var pincelDifuminar by mutableStateOf("redondo")
     var tamanoDifuminar by mutableStateOf(40f)
     var fuerzaDifuminar by mutableStateOf(0.6f)
@@ -95,7 +95,7 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
         programaCentros(0)
     }
 
-    fun tipoPincel() = Pinceles.de(when (herramienta) { Herramienta.GOMA -> goma; Herramienta.DIFUMINAR -> pincelDifuminar; else -> pincel })
+    fun defPincel() = Pinceles.def(when (herramienta) { Herramienta.GOMA -> goma; Herramienta.DIFUMINAR -> pincelDifuminar; else -> pincel })
     fun tamanoActual() = when (herramienta) { Herramienta.GOMA -> tamanoGoma; Herramienta.DIFUMINAR -> tamanoDifuminar; else -> tamano }
     fun opacidadActual() = when (herramienta) { Herramienta.GOMA -> opacidadGoma; Herramienta.DIFUMINAR -> fuerzaDifuminar; else -> opacidad }
     fun ponTamano(v: Float) { when (herramienta) { Herramienta.GOMA -> tamanoGoma = v; Herramienta.DIFUMINAR -> tamanoDifuminar = v; else -> tamano = v } }
@@ -140,19 +140,18 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
 
     fun ponCapa(id: String) { lienzo.activa = id; capaActiva = id }
 
-    // ---------------------------------------------------------------- trazos de tinta (Ink): llegan ya terminados
+    // ---------------------------------------------------------------- trazos
 
-    fun trazoTerminado(st: androidx.ink.strokes.Stroke, tipo: com.gonzalo.atlas.lienzo.TipoPincel, op: Float, capa: String, despues: () -> Unit) {
-        lienzo.enHilo {
-            val e = runCatching { lienzo.pintaTrazo(st, tipo, op, capa) }
-            e.getOrNull()?.let { lienzo.apunta(it) }
-            principal.post {
-                // Que no desaparezca sin decir nada: si el trazo no ha llegado a la capa, se avisa (y por qué)
-                if (e.isFailure) aviso = "El trazo no se ha podido pasar a la capa: ${e.exceptionOrNull()?.message ?: e.exceptionOrNull()?.javaClass?.simpleName}"
-                else if (e.getOrNull() == null && !tipo.goma && mapa.seccionActiva.isBlank()) aviso = "El trazo no ha llegado a la capa «${lienzo.capa(capa)?.info?.nombre}» (¿está oculta o bloqueada?)"
-                despues()
-            }
-        }
+    /** Formas rápidas: dejar el lápiz quieto al final de un trazo lo convierte en una recta, un arco, una elipse… */
+    var formasRapidas by mutableStateOf(true)
+
+    /** Los reflejos con los que se dibuja (solo el propio trazo si no hay simetría). */
+    fun espejos(): List<android.graphics.Matrix> = mapa.simetria?.espejos() ?: listOf(android.graphics.Matrix())
+
+    /** Un trazo ha pasado a su capa (o no ha podido): se apunta para deshacer. */
+    fun trazoAsentado(e: Edicion?, error: Throwable?) {
+        e?.let { lienzo.apunta(it) }
+        if (error != null) principal.post { aviso = "El trazo no se ha podido pasar a la capa: ${error.message ?: error.javaClass.simpleName}" }
     }
 
     // ---------------------------------------------------------------- toques (coordenadas del lienzo)

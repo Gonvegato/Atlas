@@ -26,9 +26,12 @@ class ProcreateTest {
         val ctx = ApplicationProvider.getApplicationContext<android.app.Application>()
         val datos = javaClass.classLoader!!.getResourceAsStream("prueba.brushset").readBytes()
         val dir = Files.createTempDirectory("rec").toFile()
-        // Sin crear el pincel de Ink (código nativo): solo la lectura del archivo
-        val n = runCatching { Procreate.importa(datos, dir, ctx.resources) }.getOrElse { e -> if (e is UnsatisfiedLinkError || e.cause is UnsatisfiedLinkError) 1 else throw e }
+        val n = Procreate.importa(datos, dir)
         assertEquals(1, n)
+        // El pincel importado pinta con su punta y su grano
+        val def = com.gonzalo.atlas.lienzo.Pinceles.defs().last { it.categoria == "Importados" }
+        assertEquals("Tinta seca", def.nombre)
+        assertTrue(com.gonzalo.atlas.lienzo.MuestrasPincel.de(def) != null)
         val d = Procreate.dir(dir).listFiles()!!.single()
         val j = JSONObject(File(d, "pincel.json").readText())
         assertEquals("Tinta seca", j.getString("n"))

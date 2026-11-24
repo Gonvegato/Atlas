@@ -1,3 +1,1 @@
-# Ink carga código nativo por JNI
--keep class androidx.ink.** { *; }
--dontwarn androidx.ink.**
+# (sin reglas propias: el motor de dibujo es Kotlin puro)

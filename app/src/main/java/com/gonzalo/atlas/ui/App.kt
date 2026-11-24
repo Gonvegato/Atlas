@@ -110,7 +110,7 @@ class EstadoApp(val ctx: Context) {
 
     init {
         com.gonzalo.atlas.lienzo.Pinceles.raiz = bib.raiz
-        Thread { runCatching { com.gonzalo.atlas.lienzo.Pinceles.carga(bib.raiz, ctx.resources) } }.start()
+        Thread { runCatching { com.gonzalo.atlas.lienzo.Pinceles.carga(bib.raiz) } }.start()
         val ultimo = prefs.getString("ultimo", null)
         val m = ultimo?.let { bib.abre(it) } ?: bib.mapas().firstOrNull()?.let { bib.abre(it.id) }
         if (m != null) abreMapa(m, irAlMapa = false)
