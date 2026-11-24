@@ -229,21 +229,35 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         val antes = HashMap<Long, Bitmap?>(); val despues = HashMap<Long, Bitmap?>()
         pComp.alpha = (opacidad.coerceIn(0f, 1f) * 255).toInt()
         pComp.xfermode = when { tipo.goma -> PorterDuffXfermode(PorterDuff.Mode.DST_OUT); c.info.bloqueoAlfa -> PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP); else -> null }
-        for (ty in y0..y1) for (tx in x0..x1) {
-            if (!dentro(tx, ty)) continue
-            val k = clave(tx, ty)
-            val viejo = c.teselas[k]
-            if (viejo == null && (tipo.goma || c.info.bloqueoAlfa)) continue
-            tmp.eraseColor(Color.TRANSPARENT)
-            mTrazo.setTranslate(-tx * L.toFloat(), -ty * L.toFloat())
-            renderer.draw(tmpC, st, mTrazo, 0f)
-            val nuevo = viejo?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
-            Canvas(nuevo).drawBitmap(tmp, 0f, 0f, pComp)
-            antes[k] = viejo
-            val vacia = tipo.goma && estaVacia(nuevo)
-            despues[k] = if (vacia) null else nuevo
-            if (vacia) c.teselas.remove(k) else c.teselas[k] = nuevo
-            c.sucias += k
+        // El trazo se pinta de una vez en la GPU por bloques de hasta 8×8 teselas (con texturas y partículas, igual que en
+        // pantalla); si la GPU no está disponible, tesela a tesela en la CPU (sin texturas)
+        val bloque = 8
+        var by = y0
+        while (by <= y1) {
+            var bx = x0
+            while (bx <= x1) {
+                val bw = min(bloque, x1 - bx + 1); val bh = min(bloque, y1 - by + 1)
+                val img = Rasterizador.pinta(renderer, st, bx * L, by * L, bw * L, bh * L)
+                for (ty in by until by + bh) for (tx in bx until bx + bw) {
+                    if (!dentro(tx, ty)) continue
+                    val k = clave(tx, ty)
+                    val viejo = c.teselas[k]
+                    if (viejo == null && (tipo.goma || c.info.bloqueoAlfa)) continue
+                    tmp.eraseColor(Color.TRANSPARENT)
+                    if (img != null) tmpC.drawBitmap(img, Rect((tx - bx) * L, (ty - by) * L, (tx - bx + 1) * L, (ty - by + 1) * L), Rect(0, 0, L, L), null)
+                    else { mTrazo.setTranslate(-tx * L.toFloat(), -ty * L.toFloat()); renderer.draw(tmpC, st, mTrazo, 0f) }
+                    if (estaVacia(tmp)) continue
+                    val nuevo = viejo?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
+                    Canvas(nuevo).drawBitmap(tmp, 0f, 0f, pComp)
+                    antes[k] = viejo
+                    val vacia = tipo.goma && estaVacia(nuevo)
+                    despues[k] = if (vacia) null else nuevo
+                    if (vacia) c.teselas.remove(k) else c.teselas[k] = nuevo
+                    c.sucias += k
+                }
+                bx += bloque
+            }
+            by += bloque
         }
         if (antes.isEmpty()) return null
         avisaTeselas(antes.keys)
@@ -542,5 +556,42 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         }
         val FUSIONES = listOf("normal" to "Normal", "multiplicar" to "Multiplicar", "pantalla" to "Pantalla", "superponer" to "Superponer",
             "luz_suave" to "Luz suave", "aclarar" to "Aclarar", "oscurecer" to "Oscurecer", "anadir" to "Añadir", "color" to "Color")
+    }
+}
+
+/**
+ * Pinta un trazo de Ink en un mapa de bits usando la GPU (un lienzo de hardware: así salen sus texturas y partículas, que
+ * el lienzo de la CPU no sabe pintar). Devuelve null si no se puede (y entonces se pinta en la CPU).
+ */
+object Rasterizador {
+    @Volatile private var falla = false
+
+    fun pinta(r: CanvasStrokeRenderer, st: Stroke, x: Int, y: Int, w: Int, h: Int): Bitmap? {
+        if (falla) return null
+        return try {
+            val nodo = android.graphics.RenderNode("atlas-trazo")
+            nodo.setPosition(0, 0, w, h)
+            val rc = nodo.beginRecording(w, h)
+            val m = Matrix(); m.setTranslate(-x.toFloat(), -y.toFloat())
+            r.draw(rc, st, m, 0f)
+            nodo.endRecording()
+            val lector = android.media.ImageReader.newInstance(w, h, android.graphics.PixelFormat.RGBA_8888, 1,
+                android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT)
+            val hr = android.graphics.HardwareRenderer()
+            try {
+                hr.setSurface(lector.surface)
+                hr.setContentRoot(nodo)
+                hr.isOpaque = false
+                hr.createRenderRequest().setWaitForPresent(true).syncAndDraw()
+                val im = lector.acquireNextImage() ?: return null
+                im.use {
+                    val hb = it.hardwareBuffer ?: return null
+                    hb.use { b -> Bitmap.wrapHardwareBuffer(b, null)?.copy(Bitmap.Config.ARGB_8888, false) }
+                }
+            } finally { hr.destroy(); lector.close(); nodo.discardDisplayList() }
+        } catch (e: Throwable) {
+            falla = true
+            null
+        }
     }
 }
