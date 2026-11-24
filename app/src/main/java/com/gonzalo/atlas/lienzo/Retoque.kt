@@ -155,17 +155,66 @@ class Difumino(private val lz: Lienzo, private val capa: CapaPx, private val rad
 
 /** Ajustes de imagen de una capa (como los de Procreate): tono, saturación y brillo; desenfoque; transformar. */
 object Ajustes {
-    /** [tono] en grados (−180..180), [saturacion] y [brillo] multiplican (1 = igual). */
-    fun color(lz: Lienzo, capa: CapaPx, tono: Float, saturacion: Float, brillo: Float): Edicion? {
-        if (capa.teselas.isEmpty()) return null
+    /** La matriz de color de tono (grados, −180..180), saturación y brillo (multiplican; 1 = igual). */
+    fun matrizColor(tono: Float, saturacion: Float, brillo: Float): ColorMatrix {
         val cm = ColorMatrix(); cm.setSaturation(saturacion)
-        val h = ColorMatrix(); h.setRotate(0, tono); h.setRotate(1, tono); h.setRotate(2, tono)
-        // Una rotación de tono aproximada: girar los tres ejes es demasiado; se usa la matriz clásica de giro de tono
-        val rot = tonoMatriz(tono)
-        val b = ColorMatrix(); b.setScale(brillo, brillo, brillo, 1f)
-        cm.postConcat(rot); cm.postConcat(b)
+        cm.postConcat(tonoMatriz(tono))
+        cm.postConcat(ColorMatrix().apply { setScale(brillo, brillo, brillo, 1f) })
+        return cm
+    }
+
+    /** Brillo (−1..1 suma) y contraste (0..2 multiplica alrededor del gris medio). */
+    fun matrizBrilloContraste(brillo: Float, contraste: Float): ColorMatrix {
+        val t = (0.5f * (1f - contraste) + brillo) * 255f
+        return ColorMatrix(floatArrayOf(contraste, 0f, 0f, 0f, t, 0f, contraste, 0f, 0f, t, 0f, 0f, contraste, 0f, t, 0f, 0f, 0f, 1f, 0f))
+    }
+
+    /** Balance de color: más o menos rojo, verde y azul (−1..1). */
+    fun matrizBalance(r: Float, g: Float, b: Float) = ColorMatrix(floatArrayOf(1f, 0f, 0f, 0f, r * 80f, 0f, 1f, 0f, 0f, g * 80f, 0f, 0f, 1f, 0f, b * 80f, 0f, 0f, 0f, 1f, 0f))
+
+    fun matrizInvertir() = ColorMatrix(floatArrayOf(-1f, 0f, 0f, 0f, 255f, 0f, -1f, 0f, 0f, 255f, 0f, 0f, -1f, 0f, 255f, 0f, 0f, 0f, 1f, 0f))
+
+    /** Aplica una matriz de color a la capa (dentro de la selección, si la hay). */
+    fun matriz(lz: Lienzo, capa: CapaPx, cm: ColorMatrix, nombre: String): Edicion? {
+        if (capa.teselas.isEmpty()) return null
         val p = Paint().apply { colorFilter = ColorMatrixColorFilter(cm) }
-        return lz.cadaTesela(capa, "Ajuste de color") { v -> Bitmap.createBitmap(Lienzo.L, Lienzo.L, Bitmap.Config.ARGB_8888).also { Canvas(it).drawBitmap(v, 0f, 0f, p) } }
+        return lz.cadaTesela(capa, nombre) { v -> Bitmap.createBitmap(Lienzo.L, Lienzo.L, Bitmap.Config.ARGB_8888).also { Canvas(it).drawBitmap(v, 0f, 0f, p) } }
+    }
+
+    fun color(lz: Lienzo, capa: CapaPx, tono: Float, saturacion: Float, brillo: Float): Edicion? = matriz(lz, capa, matrizColor(tono, saturacion, brillo), "Ajuste de color")
+
+    /** Cambia los píxeles de cada tesela con [f] (colores sin premultiplicar). */
+    fun pixeles(lz: Lienzo, capa: CapaPx, nombre: String, f: (IntArray, Long) -> Unit): Edicion? {
+        if (capa.teselas.isEmpty()) return null
+        val L = Lienzo.L
+        return lz.cadaTesela(capa, nombre) { v -> val px = IntArray(L * L); v.getPixels(px, 0, L, 0, 0, L, L); f(px, 0L); Bitmap.createBitmap(px, L, L, Bitmap.Config.ARGB_8888) }
+    }
+
+    /** Mapa de degradado: cada píxel toma el color de la rampa [colores] según lo claro que sea. */
+    fun degradado(lz: Lienzo, capa: CapaPx, colores: IntArray): Edicion? {
+        val tabla = IntArray(256) { i ->
+            val t = i / 255f * (colores.size - 1); val k = t.toInt().coerceAtMost(colores.size - 2); val f = t - k
+            val a = colores[k]; val b = colores[k + 1]
+            fun m(sh: Int) = (((a shr sh) and 255) + (((b shr sh) and 255) - ((a shr sh) and 255)) * f).toInt()
+            (m(16) shl 16) or (m(8) shl 8) or m(0)
+        }
+        return pixeles(lz, capa, "Mapa de degradado") { px, _ ->
+            for (i in px.indices) { val c = px[i]; val al = c ushr 24; if (al == 0) continue; val l = (((c shr 16) and 255) * 299 + ((c shr 8) and 255) * 587 + (c and 255) * 114) / 1000; px[i] = (al shl 24) or tabla[l] }
+        }
+    }
+
+    /** Ruido: granula los colores (cantidad 0..1). */
+    fun ruido(lz: Lienzo, capa: CapaPx, cantidad: Float): Edicion? {
+        val k = (cantidad * 90f).toInt()
+        var semilla = 12345
+        return pixeles(lz, capa, "Ruido") { px, _ ->
+            for (i in px.indices) {
+                val c = px[i]; val al = c ushr 24; if (al == 0) continue
+                semilla = semilla * 1103515245 + 12345
+                val d = ((semilla ushr 16) and 255) * k / 128 - k
+                px[i] = (al shl 24) or ((((c shr 16) and 255) + d).coerceIn(0, 255) shl 16) or ((((c shr 8) and 255) + d).coerceIn(0, 255) shl 8) or ((c and 255) + d).coerceIn(0, 255)
+            }
+        }
     }
 
     private fun tonoMatriz(grados: Float): ColorMatrix {
@@ -178,19 +227,20 @@ object Ajustes {
             0f, 0f, 0f, 1f, 0f))
     }
 
-    /** Desenfoque gaussiano (tres cajas) de [radio] px, sin cortes entre teselas. */
-    fun desenfoca(lz: Lienzo, capa: CapaPx, radio: Int): Edicion? {
-        if (capa.teselas.isEmpty() || radio < 1) return null
+    /**
+     * Para los ajustes que miran a los vecinos (desenfocar, enfocar): da a [f] cada tesela con [pad] píxeles de margen
+     * (los de las teselas de al lado), en cuatro canales premultiplicados (transparencia, rojo, verde, azul), y [f] los cambia.
+     */
+    private fun conMargen(lz: Lienzo, capa: CapaPx, pad: Int, nombre: String, f: (Array<FloatArray>, Int) -> Unit): Edicion? {
+        if (capa.teselas.isEmpty()) return null
         val L = Lienzo.L
         val origen = capa.teselas.toMap()
-        // Las teselas que hay y sus vecinas (el desenfoque se sale un poco)
         val claves = HashSet<Long>()
-        val m = (radio * 3 + L - 1) / L
+        val m = (pad + L - 1) / L
         for (k in origen.keys) for (dy in -m..m) for (dx in -m..m) { val t = Lienzo.clave(Lienzo.tx(k) + dx, Lienzo.ty(k) + dy); if (lz.dentro(Lienzo.tx(t), Lienzo.ty(t))) claves += t }
-        val despues = HashMap<Long, Bitmap?>()
-        val pad = radio * 3
+        val despues = java.util.concurrent.ConcurrentHashMap<Long, Bitmap>()
         val w = L + pad * 2
-        for (k in claves) {
+        val tareas = claves.map { k -> java.util.concurrent.Callable {
             val x0 = Lienzo.tx(k) * L - pad; val y0 = Lienzo.ty(k) * L - pad
             val px = IntArray(w * w)
             for (ty in Math.floorDiv(y0, L)..Math.floorDiv(y0 + w - 1, L)) for (tx in Math.floorDiv(x0, L)..Math.floorDiv(x0 + w - 1, L)) {
@@ -198,19 +248,54 @@ object Ajustes {
                 val ix0 = max(x0, tx * L); val iy0 = max(y0, ty * L); val ix1 = min(x0 + w, (tx + 1) * L); val iy1 = min(y0 + w, (ty + 1) * L)
                 b.getPixels(px, (iy0 - y0) * w + (ix0 - x0), w, ix0 - tx * L, iy0 - ty * L, ix1 - ix0, iy1 - iy0)
             }
-            if (px.all { (it ushr 24) == 0 }) continue
+            if (px.all { (it ushr 24) == 0 }) return@Callable
             val ch = Array(4) { FloatArray(w * w) }
             for (i in px.indices) { val a = (px[i] ushr 24) / 255f; ch[0][i] = a; ch[1][i] = ((px[i] shr 16) and 255) / 255f * a; ch[2][i] = ((px[i] shr 8) and 255) / 255f * a; ch[3][i] = (px[i] and 255) / 255f * a }
-            for (c in ch) repeat(3) { caja(c, w, w, radio) }
+            f(ch, w)
             val out = IntArray(L * L)
             for (y in 0 until L) for (x in 0 until L) {
-                val i = (y + pad) * w + x + pad; val a = ch[0][i]
+                val i = (y + pad) * w + x + pad; val a = ch[0][i].coerceIn(0f, 1f)
                 out[y * L + x] = if (a <= 0.002f) 0 else ((a * 255).toInt().coerceIn(0, 255) shl 24) or (((ch[1][i] / a) * 255).toInt().coerceIn(0, 255) shl 16) or
                     (((ch[2][i] / a) * 255).toInt().coerceIn(0, 255) shl 8) or ((ch[3][i] / a) * 255).toInt().coerceIn(0, 255)
             }
             despues[k] = lz.enSeleccion(k, origen[k], Bitmap.createBitmap(out, L, L, Bitmap.Config.ARGB_8888))
+        } }
+        Motor.reparto.invokeAll(tareas).forEach { it.get() }
+        return lz.cambia(capa, nombre, HashMap<Long, Bitmap?>(despues))
+    }
+
+    /** Desenfoque gaussiano (tres cajas) de [radio] px, sin cortes entre teselas. */
+    fun desenfoca(lz: Lienzo, capa: CapaPx, radio: Int): Edicion? {
+        if (radio < 1) return null
+        return conMargen(lz, capa, radio * 3, "Desenfoque") { ch, w -> for (c in ch) repeat(3) { caja(c, w, w, radio) } }
+    }
+
+    /** Desenfoque de movimiento: arrastra la imagen [largo] px en la dirección [grados]. */
+    fun movimiento(lz: Lienzo, capa: CapaPx, largo: Int, grados: Float): Edicion? {
+        if (largo < 1) return null
+        val dx = Math.cos(Math.toRadians(grados.toDouble())).toFloat(); val dy = Math.sin(Math.toRadians(grados.toDouble())).toFloat()
+        return conMargen(lz, capa, largo, "Desenfoque de movimiento") { ch, w ->
+            for (c in ch) {
+                val o = c.copyOf()
+                for (y in 0 until w) for (x in 0 until w) {
+                    var s = 0f; var n = 0
+                    for (t in -largo..largo) { val sx = (x + dx * t).toInt(); val sy = (y + dy * t).toInt(); if (sx in 0 until w && sy in 0 until w) { s += o[sy * w + sx]; n++ } }
+                    c[y * w + x] = s / n
+                }
+            }
         }
-        return lz.cambia(capa, "Desenfoque", despues)
+    }
+
+    /** Enfocar: realza los bordes (cantidad 0..2). */
+    fun enfoca(lz: Lienzo, capa: CapaPx, cantidad: Float): Edicion? {
+        if (cantidad <= 0.01f) return null
+        return conMargen(lz, capa, 4, "Enfocar") { ch, w ->
+            val a = ch[0]
+            for (ci in 1..3) {
+                val c = ch[ci]; val b = c.copyOf(); caja(b, w, w, 1)
+                for (i in c.indices) c[i] = (c[i] + (c[i] - b[i]) * cantidad * 1.5f).coerceIn(0f, a[i])
+            }
+        }
     }
 
     private fun caja(a: FloatArray, w: Int, h: Int, r: Int) {
@@ -262,5 +347,106 @@ object Ajustes {
         val p = Paint(Paint.FILTER_BITMAP_FLAG)
         for ((t, s) in capa.teselas) c.drawBitmap(s, Lienzo.tx(t) * L.toFloat(), Lienzo.ty(t) * L.toFloat(), p)
         return b to caja
+    }
+}
+
+/**
+ * Licuar: empuja, arremolina, pellizca o hincha la pintura de la capa bajo el dedo. Trabaja sobre copias de las teselas
+ * (para deshacer) y solo dentro de la selección, si la hay.
+ */
+class Licuar(private val lz: Lienzo, private val capa: CapaPx, private val modo: String, private val radio: Float, private val fuerza: Float) {
+    private val antes = HashMap<Long, Bitmap?>()
+    private val fondos = HashMap<Long, Fondo>()
+    private val trabajo = HashMap<Long, Bitmap>()
+    private var px = Float.NaN; private var py = Float.NaN
+    private val L = Lienzo.L
+
+    private fun tesela(k: Long): Bitmap? {
+        trabajo[k]?.let { return it }
+        if (!lz.dentro(Lienzo.tx(k), Lienzo.ty(k))) return null
+        val v = capa.teselas[k]
+        antes[k] = v
+        capa.fondo.remove(k)?.let { fondos[k] = it }
+        val b = v?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
+        trabajo[k] = b
+        return b
+    }
+
+    private fun lee(x0: Int, y0: Int, w: Int, h: Int): IntArray {
+        val out = IntArray(w * h)
+        for (ty in Math.floorDiv(y0, L)..Math.floorDiv(y0 + h - 1, L)) for (tx in Math.floorDiv(x0, L)..Math.floorDiv(x0 + w - 1, L)) {
+            val b = trabajo[Lienzo.clave(tx, ty)] ?: capa.teselas[Lienzo.clave(tx, ty)] ?: continue
+            val ix0 = max(x0, tx * L); val iy0 = max(y0, ty * L); val ix1 = min(x0 + w, (tx + 1) * L); val iy1 = min(y0 + h, (ty + 1) * L)
+            b.getPixels(out, (iy0 - y0) * w + (ix0 - x0), w, ix0 - tx * L, iy0 - ty * L, ix1 - ix0, iy1 - iy0)
+        }
+        return out
+    }
+
+    private fun escribe(x0: Int, y0: Int, w: Int, h: Int, d: IntArray) {
+        for (ty in Math.floorDiv(y0, L)..Math.floorDiv(y0 + h - 1, L)) for (tx in Math.floorDiv(x0, L)..Math.floorDiv(x0 + w - 1, L)) {
+            val b = tesela(Lienzo.clave(tx, ty)) ?: continue
+            val ix0 = max(x0, tx * L); val iy0 = max(y0, ty * L); val ix1 = min(x0 + w, (tx + 1) * L); val iy1 = min(y0 + h, (ty + 1) * L)
+            b.setPixels(d, (iy0 - y0) * w + (ix0 - x0), w, ix0 - tx * L, iy0 - ty * L, ix1 - ix0, iy1 - iy0)
+        }
+        for ((k, b) in trabajo) capa.teselas[k] = b
+    }
+
+    /** Un punto del gesto (píxeles del lienzo). Devuelve la zona cambiada. */
+    fun punto(x: Float, y: Float, presion: Float): RectF? {
+        if (px.isNaN()) { px = x; py = y; if (modo == "empujar") return null }
+        val dx = x - px; val dy = y - py
+        val d = hypot(dx, dy)
+        if (modo == "empujar" && d < 1f) return null
+        val r = radio
+        val pad = (if (modo == "empujar") d else 0f) + 2f
+        val x0 = floor(x - r - pad).toInt(); val y0 = floor(y - r - pad).toInt(); val w = ceil((r + pad) * 2).toInt() + 1
+        val src = lee(x0, y0, w, w)
+        val out = src.copyOf()
+        val f = fuerza * (0.5f + 0.5f * presion)
+        val cx = x - x0; val cy = y - y0
+        for (j in 0 until w) for (i in 0 until w) {
+            val ox = i + 0.5f - cx; val oy = j + 0.5f - cy
+            val dist = hypot(ox, oy) / r
+            if (dist >= 1f) continue
+            val peso = (1f - dist * dist).let { it * it }
+            var sx = i + 0.5f; var sy = j + 0.5f
+            when (modo) {
+                "empujar" -> { sx -= dx * peso * f; sy -= dy * peso * f }
+                "remolino", "remolino2" -> { val a = (if (modo == "remolino") 0.12f else -0.12f) * peso * f; val c = Math.cos(a.toDouble()).toFloat(); val s = Math.sin(a.toDouble()).toFloat(); sx = cx + ox * c - oy * s; sy = cy + ox * s + oy * c }
+                "pellizcar" -> { val k = 1f + 0.1f * peso * f; sx = cx + ox * k; sy = cy + oy * k }
+                else -> { val k = 1f - 0.1f * peso * f; sx = cx + ox * k; sy = cy + oy * k }
+            }
+            out[j * w + i] = muestra(src, w, sx - 0.5f, sy - 0.5f)
+        }
+        // Solo dentro de la selección
+        escribe(x0, y0, w, w, out)
+        px = x; py = y
+        return RectF(x0.toFloat(), y0.toFloat(), (x0 + w).toFloat(), (y0 + w).toFloat())
+    }
+
+    /** El color en un punto entre píxeles (mezcla de los cuatro de alrededor, contando su transparencia). */
+    private fun muestra(src: IntArray, w: Int, x: Float, y: Float): Int {
+        val xa = floor(x).toInt(); val ya = floor(y).toInt(); val tx = x - xa; val ty = y - ya
+        var a = 0f; var r = 0f; var g = 0f; var b = 0f
+        for (q in 0..3) {
+            val xx = xa + (q and 1); val yy = ya + (q shr 1)
+            if (xx < 0 || yy < 0 || xx >= w || yy >= w) continue
+            val c = src[yy * w + xx]; val al = (c ushr 24) / 255f
+            val peso = (if (q and 1 == 0) 1f - tx else tx) * (if (q shr 1 == 0) 1f - ty else ty) * al
+            a += peso; r += ((c shr 16) and 255) * peso; g += ((c shr 8) and 255) * peso; b += (c and 255) * peso
+        }
+        if (a <= 0.003f) return 0
+        return ((a * 255).toInt().coerceIn(0, 255) shl 24) or ((r / a).toInt().coerceIn(0, 255) shl 16) or ((g / a).toInt().coerceIn(0, 255) shl 8) or (b / a).toInt().coerceIn(0, 255)
+    }
+
+    fun termina(): Edicion? {
+        if (antes.isEmpty()) return null
+        val despues = HashMap<Long, Bitmap?>()
+        for ((k, b) in trabajo) despues[k] = lz.enSeleccion(k, antes[k], b.copy(Bitmap.Config.ARGB_8888, false))
+        synchronized(lz.cierre) {
+            for ((k, v) in antes) if (v == null) capa.teselas.remove(k) else capa.teselas[k] = v
+            for ((k, f) in fondos) capa.fondo[k] = f
+        }
+        return lz.cambia(capa, "Licuar", despues)
     }
 }

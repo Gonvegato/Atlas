@@ -25,6 +25,8 @@ class Seleccion(val contornos: List<FloatArray>, val invertida: Boolean = false)
             fillType = if (invertida) Path.FillType.INVERSE_EVEN_ODD else Path.FillType.EVEN_ODD
         }
     }
+    /** Todo lo que NO está seleccionado (para borrarlo de algo y quedarse solo con lo de dentro). */
+    val fuera: Path by lazy { Path(path).apply { toggleInverseFillType() } }
     /** La caja de los contornos (si está invertida, la selección es todo lo de fuera: no tiene caja). */
     val caja: RectF by lazy { RectF().also { r -> Path(path).apply { fillType = Path.FillType.EVEN_ODD }.computeBounds(r, true) } }
     val vacia get() = contornos.none { it.size >= 6 }
@@ -121,7 +123,7 @@ class TrazoDatos(
     companion object {
         const val PINTAR = 0
         const val BORRAR = 1
-        private val pDentro = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
+        private val pFuera = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
 
         fun lee(i: DataInputStream): TrazoDatos {
             val def = DefPincel.de(org.json.JSONObject(i.readUTF())); val color = i.readInt(); val tam = i.readFloat(); val op = i.readFloat(); val modo = i.readInt(); val atope = i.readBoolean()
@@ -140,7 +142,7 @@ class TrazoDatos(
                 val x = l.ox / escala; val y = l.oy / escala
                 c.saveLayer(x, y, x + l.w / escala, y + l.h / escala, p)
                 c.save(); c.scale(1f / escala, 1f / escala); c.drawBitmap(img, l.ox.toFloat(), l.oy.toFloat(), if (escala != 1f) FILTRO else null); c.restore()
-                c.drawPath(seleccion.path, pDentro)
+                c.drawPath(seleccion.fuera, pFuera)
             } else {
                 c.scale(1f / escala, 1f / escala)
                 c.drawBitmap(img, l.ox.toFloat(), l.oy.toFloat(), p)
@@ -181,7 +183,6 @@ class TrazoVivo(
     @Volatile var humedo = Humedo(escala, def.colorVariable); private set
     @Volatile var estado = VIVO
     private val ramas = List(espejos.size) { FloatLista() }
-    private var caminantes = nuevos(-1f)
     private val sellos = Sellos()
     private val raster = Raster(def, escala)
     /** Para fundir con la capa lo que se ve mientras se dibuja. */
@@ -192,6 +193,8 @@ class TrazoVivo(
     /** El color de la capa en un punto: para los pinceles que mezclan con lo que hay. */
     val muestra: ((Float, Float) -> Int)? = if (def.mezcla > 0.001f) { x, y -> lz.colorCapa(capa, x, y) } else null
     private val tmp = FloatArray(2)
+    // (Después de los sellos y de la muestra: los caminantes se quedan con ellos al crearse)
+    private var caminantes = nuevos(-1f)
 
     private fun nuevos(largo: Float) = List(espejos.size) { k -> Caminante(def, tam, color, semilla + k * 7919, lapiz, u, largo, sellos, muestra) }
 

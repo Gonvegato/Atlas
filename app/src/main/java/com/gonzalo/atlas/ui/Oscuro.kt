@@ -99,18 +99,16 @@ object O {
 fun EtiquetaO(t: String, mod: Modifier = Modifier, tam: TextUnit = 12.sp, color: Color = O.TINTA) =
     Text(t.uppercase(), mod, style = O.versalitas(tam, color), maxLines = 1, overflow = TextOverflow.Ellipsis)
 
-/** Un botón de texto plano de la familia: [lleno] en bloque de tinta (o del color dado), si no con borde. */
+/** Un botón de la mesa de dibujo: redondeado, gris de estudio; [lleno], en bloque del color dado. */
 @Composable
 fun BotonO(t: String, mod: Modifier = Modifier, lleno: Boolean = false, color: Color = O.TINTA, activo: Boolean = true, alPulsar: () -> Unit) {
-    val fondo = if (lleno) color else Color.Transparent
-    val letra = if (lleno) O.PAPEL else color
+    val forma = androidx.compose.foundation.shape.RoundedCornerShape(9.dp)
+    val fondo = if (!activo) O.CRUDO else if (lleno) color else Color(0xFF3A3A40)
+    val letra = if (!activo) O.GRIS_CLARO else if (lleno) (if (color == O.TINTA) O.PAPEL else Color.White) else color
     Box(
-        mod.then(if (!lleno) Modifier.border(BorderStroke(2.dp, if (activo) color else O.GRIS_CLARO)) else Modifier)
-            .background(if (activo) fondo else if (lleno) O.GRIS_CLARO else Color.Transparent)
-            .clickable(enabled = activo, onClick = alPulsar)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+        mod.clip(forma).background(fondo).clickable(enabled = activo, onClick = alPulsar).padding(horizontal = 14.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
-    ) { Text(t.uppercase(), style = O.versalitas(12.sp, if (activo) letra else if (lleno) O.PAPEL else O.GRIS_CLARO), maxLines = 1) }
+    ) { Text(t, style = TextStyle(fontFamily = O.inter, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = letra), maxLines = 1) }
 }
 
 /** Un enlace en versalitas (sin caja), como «+ NUEVA» de las hermanas. */
@@ -135,12 +133,12 @@ fun SeccionO(numero: Int?, t: String, mod: Modifier = Modifier, derecha: @Compos
 @Composable
 fun FileteO(grosor: Int = 1, color: Color = O.TINTA, mod: Modifier = Modifier) = Box(mod.fillMaxWidth().height(grosor.dp).background(color))
 
-/** Una ficha elegible (filtros, tipos). */
+/** Una ficha elegible (filtros, tipos): una píldora, clara si está elegida. */
 @Composable
 fun FichaO(t: String, elegida: Boolean, mod: Modifier = Modifier, color: Color = O.TINTA, alPulsar: () -> Unit) {
     Box(
-        mod.border(1.5.dp, if (elegida) color else O.GRIS_CLARO).background(if (elegida) color else Color.Transparent)
-            .clickable(onClick = alPulsar).padding(horizontal = 10.dp, vertical = 7.dp),
+        mod.clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).background(if (elegida) color else Color(0xFF34343A))
+            .clickable(onClick = alPulsar).padding(horizontal = 12.dp, vertical = 7.dp),
     ) { Text(t, style = O.texto(13.sp, if (elegida) O.PAPEL else O.TINTA), maxLines = 1) }
 }
 
@@ -173,11 +171,11 @@ fun Modifier.pulsableO(alPulsar: () -> Unit): Modifier = this.clickable(remember
 
 /** Una barra vertical (tamaño y opacidad del pincel, como en Procreate). [valor] 0..1, arriba = 1. */
 @Composable
-fun BarraVerticalO(valor: Float, etiqueta: String, mod: Modifier = Modifier, alCambiar: (Float) -> Unit) {
+fun BarraVerticalO(valor: Float, etiqueta: String, mod: Modifier = Modifier, alturaBarra: androidx.compose.ui.unit.Dp = 180.dp, alCambiar: (Float) -> Unit) {
     var alto by remember { mutableFloatStateOf(1f) }
     Column(mod, horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
-            Modifier.width(30.dp).height(180.dp)
+            Modifier.width(30.dp).height(alturaBarra)
                 .pointerInput(Unit) {
                     alto = size.height.toFloat()
                     detectDragGestures(onDragStart = { o -> alCambiar((1f - o.y / alto).coerceIn(0f, 1f)) }) { ch, _ -> alCambiar((1f - ch.position.y / alto).coerceIn(0f, 1f)) }

@@ -110,8 +110,8 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     val puedeDeshacer get() = atras.isNotEmpty()
     val puedeRehacer get() = alante.isNotEmpty()
 
-    fun enHilo(f: () -> Unit) { runCatching { hilo.execute { runCatching(f) } } }
-    fun enVivo(f: () -> Unit) { runCatching { hiloVivo.execute { runCatching(f) } } }
+    fun enHilo(f: () -> Unit) { runCatching { hilo.execute { runCatching(f).onFailure { it.printStackTrace() } } } }
+    fun enVivo(f: () -> Unit) { runCatching { hiloVivo.execute { runCatching(f).onFailure { it.printStackTrace() } } } }
     fun avisaVivo() = alCambiarVivo()
     fun cierra() { hilo.shutdown(); hiloVivo.shutdown(); nitidez.cierra() }
 
@@ -366,7 +366,7 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         val sel = seleccion?.takeIf { !it.vacia } ?: return nuevo
         val dentro = nuevo.copy(Bitmap.Config.ARGB_8888, true)
         val cd = Canvas(dentro); cd.translate(-tx(k) * L.toFloat(), -ty(k) * L.toFloat())
-        cd.drawPath(sel.path, Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) })
+        cd.drawPath(sel.fuera, Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
         val r = viejo?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
         val cr = Canvas(r); cr.save(); cr.translate(-tx(k) * L.toFloat(), -ty(k) * L.toFloat())
         cr.drawPath(sel.path, Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
@@ -379,6 +379,83 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         val nuevas = HashMap<Long, Bitmap?>()
         for ((k, v) in c.teselas.toMap()) nuevas[k] = enSeleccion(k, v, f(v))
         return cambia(c, nombre, nuevas)
+    }
+
+    // ---------------------------------------------------------------- selección
+
+    /** Las teselas de la capa que toca la selección (todas, si está invertida). */
+    private fun teselasEnSeleccion(c: CapaPx, sel: Seleccion): List<Long> {
+        if (sel.invertida) return c.teselas.keys.toList()
+        val r = sel.caja
+        return c.teselas.keys.filter { k -> tx(k) * L < r.right && (tx(k) + 1) * L > r.left && ty(k) * L < r.bottom && (ty(k) + 1) * L > r.top }
+    }
+
+    /** La tesela solo con lo de dentro de la selección ([dentro]) o solo con lo de fuera. */
+    private fun conForma(b: Bitmap, k: Long, sel: Seleccion, dentro: Boolean): Bitmap {
+        val n = b.copy(Bitmap.Config.ARGB_8888, true)
+        val cv = Canvas(n); cv.translate(-tx(k) * L.toFloat(), -ty(k) * L.toFloat())
+        cv.drawPath(if (dentro) sel.fuera else sel.path, Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
+        return n
+    }
+
+    /** Borra de la capa lo que cae dentro de la selección. */
+    fun borraSeleccion(c: CapaPx): Edicion? {
+        val sel = seleccion?.takeIf { !it.vacia } ?: return null
+        val nuevas = HashMap<Long, Bitmap?>()
+        for (k in teselasEnSeleccion(c, sel)) { val n = conForma(c.teselas[k] ?: continue, k, sel, false); nuevas[k] = if (estaVacia(n)) null else n }
+        return cambia(c, "Borrar lo seleccionado", nuevas)
+    }
+
+    /** Rellena de [color] la forma [forma] en la capa (dentro del lienzo). Para rellenar la selección o una forma hecha. */
+    fun rellenaForma(c: CapaPx, forma: android.graphics.Path, color: Int, nombre: String = "Rellenar"): Edicion? {
+        val r = RectF(); forma.computeBounds(r, true)
+        if (forma.isInverseFillType) r.set(RectF(limites()))
+        if (r.isEmpty || r.width() * r.height() > 16384f * 16384f) return null
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color; if (c.info.bloqueoAlfa) xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP) }
+        val nuevas = HashMap<Long, Bitmap?>()
+        for (ty in Math.floorDiv(floor(r.top).toInt(), L)..Math.floorDiv(ceil(r.bottom).toInt(), L)) for (tx in Math.floorDiv(floor(r.left).toInt(), L)..Math.floorDiv(ceil(r.right).toInt(), L)) {
+            if (!dentro(tx, ty)) continue
+            val k = clave(tx, ty); val viejo = c.teselas[k]
+            if (viejo == null && c.info.bloqueoAlfa) continue
+            val n = viejo?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
+            val cv = Canvas(n); cv.translate(-tx * L.toFloat(), -ty * L.toFloat()); cv.drawPath(forma, p)
+            if (viejo != null || !estaVacia(n)) nuevas[k] = n
+        }
+        return cambia(c, nombre, nuevas)
+    }
+
+    /** Lo seleccionado de la capa pasa a una capa nueva encima (y, si [cortar], se quita de la suya). */
+    fun copiaSeleccion(c: CapaPx, cortar: Boolean, alAcabar: (String) -> Unit = {}) {
+        val sel = seleccion?.takeIf { !it.vacia } ?: return
+        cambiaCapas(if (cortar) "Cortar a una capa" else "Copiar a una capa") {
+            val n = CapaPx(CapaInfo("c" + java.lang.Long.toString(System.nanoTime(), 36), if (cortar) "Recorte" else "Copia"))
+            for (k in teselasEnSeleccion(c, sel)) {
+                val b = c.teselas[k] ?: continue
+                val d = conForma(b, k, sel, true)
+                if (!estaVacia(d)) n.teselas[k] = d
+                if (cortar) { val f = conForma(b, k, sel, false); if (estaVacia(f)) c.teselas.remove(k) else c.teselas[k] = f; c.fondo.remove(k); c.fondoSucias += k }
+            }
+            capas.add(capas.indexOf(c) + 1, n); activa = n.info.id
+            alAcabar(n.info.id)
+        }
+    }
+
+    /** Pone trazos ya hechos (una costa generada, una forma) en la capa, guardados como datos (nítidos de cerca). */
+    fun ponTrazos(c: CapaPx, trazos: List<TrazoDatos>, nombre: String): Edicion? {
+        val partes = ArrayList<Edicion>()
+        for (d in trazos) {
+            val h = Humedo(1f, d.def.colorVariable); h.sellaTodo(Raster(d.def, 1f), d.sellos())
+            val nuevas = HashMap<Long, Bitmap?>()
+            for ((k, l) in h.lonas) {
+                if (!l.tocada || !dentro(tx(k), ty(k))) continue
+                val viejo = c.teselas[k]
+                val n = viejo?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
+                val cv = Canvas(n); cv.translate(-tx(k) * L.toFloat(), -ty(k) * L.toFloat()); d.funde(cv, l, 1f)
+                nuevas[k] = n
+            }
+            cambia(c, nombre, nuevas, if (d.def.repetible) TrazoV(d, ++c.seq) else null)?.let { partes += it }
+        }
+        return if (partes.isEmpty()) null else Edicion.Varias(nombre, partes)
     }
 
     // ---------------------------------------------------------------- trazos
@@ -449,16 +526,33 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         return bmp.getPixel(0, 0)
     }
 
+    /** La capa a la que se recorta la capa [i] (la primera de debajo que no es máscara de recorte), o null si no se recorta. */
+    fun baseDe(l: List<CapaPx>, i: Int): CapaPx? {
+        if (!l[i].info.recorte) return null
+        var j = i - 1; while (j >= 0 && l[j].info.recorte) j--
+        return l.getOrNull(j)
+    }
+
     /** Dibuja las capas visibles de la zona [r] (píxeles del lienzo) en [c] (ya colocado en coordenadas del lienzo). */
     fun componeZona(c: Canvas, r: Rect, incluir: (CapaPx) -> Boolean = { it.info.visible }) {
         val x0 = Math.floorDiv(r.left, L); val y0 = Math.floorDiv(r.top, L); val x1 = Math.floorDiv(r.right - 1, L); val y1 = Math.floorDiv(r.bottom - 1, L)
         val pCapa = Paint(Paint.FILTER_BITMAP_FLAG) // una por llamada: la usan varios hilos a la vez
-        for (capa in capas) {
+        val pDentro = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
+        val pNada = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR) }
+        val l = capas.toList()
+        for ((i, capa) in l.withIndex()) {
             if (!incluir(capa)) continue
+            val base = baseDe(l, i)
+            if (base != null && !base.info.visible) continue
             pCapa.alpha = (capa.info.opacidad * 255).toInt()
             pCapa.blendMode = fusion(capa.info.fusion)
             val g = c.saveLayer(r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), pCapa)
-            for (ty in y0..y1) for (tx in x0..x1) capa.teselas[clave(tx, ty)]?.let { c.drawBitmap(it, tx * L.toFloat(), ty * L.toFloat(), null) }
+            for (ty in y0..y1) for (tx in x0..x1) {
+                val b = capa.teselas[clave(tx, ty)] ?: continue
+                c.drawBitmap(b, tx * L.toFloat(), ty * L.toFloat(), null)
+                // Máscara de recorte: solo donde la capa de debajo tiene algo
+                if (base != null) { val m = base.teselas[clave(tx, ty)]; if (m != null) c.drawBitmap(m, tx * L.toFloat(), ty * L.toFloat(), pDentro) else c.drawRect(tx * L.toFloat(), ty * L.toFloat(), (tx + 1) * L.toFloat(), (ty + 1) * L.toFloat(), pNada) }
+            }
             c.restoreToCount(g)
         }
     }
@@ -566,7 +660,7 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
             val relleno = Bitmap.createBitmap(px, L, L, Bitmap.Config.ARGB_8888).copy(Bitmap.Config.ARGB_8888, true)
             val cr = Canvas(relleno)
             cr.drawRect(0f, 0f, L.toFloat(), L.toFloat(), Paint().apply { this.color = col; xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN) })
-            if (sel != null) { cr.translate(-tx(k) * L.toFloat(), -ty(k) * L.toFloat()); cr.drawPath(sel.path, Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }) }
+            if (sel != null) { cr.translate(-tx(k) * L.toFloat(), -ty(k) * L.toFloat()); cr.drawPath(sel.fuera, Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }) }
             val nuevo = viejo?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
             Canvas(nuevo).drawBitmap(relleno, 0f, 0f, p)
             nuevas[k] = nuevo
@@ -718,10 +812,13 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         fun fusion(f: String): BlendMode = when (f) {
             "multiplicar" -> BlendMode.MULTIPLY; "pantalla" -> BlendMode.SCREEN; "superponer" -> BlendMode.OVERLAY
             "aclarar" -> BlendMode.LIGHTEN; "oscurecer" -> BlendMode.DARKEN; "anadir" -> BlendMode.PLUS; "color" -> BlendMode.COLOR
-            "luz_suave" -> BlendMode.SOFT_LIGHT
+            "luz_suave" -> BlendMode.SOFT_LIGHT; "luz_fuerte" -> BlendMode.HARD_LIGHT; "subexponer" -> BlendMode.COLOR_BURN; "sobreexponer" -> BlendMode.COLOR_DODGE
+            "diferencia" -> BlendMode.DIFFERENCE; "exclusion" -> BlendMode.EXCLUSION; "tono" -> BlendMode.HUE; "saturacion" -> BlendMode.SATURATION; "luminosidad" -> BlendMode.LUMINOSITY
             else -> BlendMode.SRC_OVER
         }
-        val FUSIONES = listOf("normal" to "Normal", "multiplicar" to "Multiplicar", "pantalla" to "Pantalla", "superponer" to "Superponer",
-            "luz_suave" to "Luz suave", "aclarar" to "Aclarar", "oscurecer" to "Oscurecer", "anadir" to "Añadir", "color" to "Color")
+        val FUSIONES = listOf("normal" to "Normal", "multiplicar" to "Multiplicar", "oscurecer" to "Oscurecer", "subexponer" to "Subexponer color",
+            "aclarar" to "Aclarar", "pantalla" to "Pantalla", "sobreexponer" to "Sobreexponer color", "anadir" to "Añadir",
+            "superponer" to "Superponer", "luz_suave" to "Luz suave", "luz_fuerte" to "Luz fuerte", "diferencia" to "Diferencia", "exclusion" to "Exclusión",
+            "tono" to "Tono", "saturacion" to "Saturación", "color" to "Color", "luminosidad" to "Luminosidad")
     }
 }

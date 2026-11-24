@@ -124,6 +124,13 @@ class MotorTest {
         }
         assertEquals(2, capa.trazos.size)
         assertTrue(capa.fondo.isNotEmpty())
+        // Todos los pinceles de serie dejan pintura mientras se dibuja (no solo al soltar)
+        for (d in Catalogo2.SERIE) {
+            val v = lz.empiezaTrazo(d, 0xFF203040.toInt(), d.tamano, 1f, TrazoDatos.PINTAR, 1f, true, 0)!!
+            v.agrega(onda(40f, 400f, 600f, 20f)); espera(lz)
+            assertTrue(d.nombre, v.humedo.lonas.values.any { it.tocada })
+            v.cancela()
+        }
         val antes = lz.recorta(android.graphics.Rect(0, 0, 512, 256))
         // De cerca: la tesela nítida se hace con los dos trazos
         val cerca = lz.nitidez.construye(capa, 2, 2, 2)

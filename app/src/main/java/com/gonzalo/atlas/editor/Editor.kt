@@ -35,6 +35,7 @@ import kotlin.random.Random
 enum class Herramienta(val nombre: String) {
     PINCEL("Pintar"), DIFUMINAR("Difuminar"), GOMA("Borrar"), TRANSFORMAR("Transformar"), RELLENO("Relleno"), CUENTAGOTAS("Cuentagotas"), TERRITORIO("Territorios"),
     LUGAR("Lugares"), ROTULO("Rótulos"), RUTA("Rutas"), SELLO("Tus dibujos"), ELEGIR("Elegir"), REGLA("Regla"), MANO("Mover"), CALCO("Calco"), SECCION("Secciones"),
+    SELECCION("Selección"), LICUAR("Licuar"),
 }
 
 /** Cómo se marca un territorio: tocando dentro de tus líneas, pintándolo o quitándolo. */
@@ -96,10 +97,12 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     }
 
     fun defPincel() = Pinceles.def(when (herramienta) { Herramienta.GOMA -> goma; Herramienta.DIFUMINAR -> pincelDifuminar; else -> pincel })
-    fun tamanoActual() = when (herramienta) { Herramienta.GOMA -> tamanoGoma; Herramienta.DIFUMINAR -> tamanoDifuminar; else -> tamano }
-    fun opacidadActual() = when (herramienta) { Herramienta.GOMA -> opacidadGoma; Herramienta.DIFUMINAR -> fuerzaDifuminar; else -> opacidad }
-    fun ponTamano(v: Float) { when (herramienta) { Herramienta.GOMA -> tamanoGoma = v; Herramienta.DIFUMINAR -> tamanoDifuminar = v; else -> tamano = v } }
-    fun ponOpacidad(v: Float) { when (herramienta) { Herramienta.GOMA -> opacidadGoma = v; Herramienta.DIFUMINAR -> fuerzaDifuminar = v; else -> opacidad = v } }
+    fun tamanoActual() = when (herramienta) { Herramienta.GOMA -> tamanoGoma; Herramienta.DIFUMINAR -> tamanoDifuminar; Herramienta.LICUAR -> tamanoLicuar; else -> tamano }
+    fun opacidadActual() = when (herramienta) { Herramienta.GOMA -> opacidadGoma; Herramienta.DIFUMINAR -> fuerzaDifuminar; Herramienta.LICUAR -> fuerzaLicuar; else -> opacidad }
+    fun ponTamano(v: Float) { when (herramienta) { Herramienta.GOMA -> tamanoGoma = v; Herramienta.DIFUMINAR -> tamanoDifuminar = v; Herramienta.LICUAR -> tamanoLicuar = v; else -> tamano = v }; muestraTam = System.currentTimeMillis() + 700; alCambiarVista() }
+    fun ponOpacidad(v: Float) { when (herramienta) { Herramienta.GOMA -> opacidadGoma = v; Herramienta.DIFUMINAR -> fuerzaDifuminar = v; Herramienta.LICUAR -> fuerzaLicuar = v; else -> opacidad = v } }
+    /** Hasta cuándo se enseña en el lienzo el tamaño del pincel (mientras se mueve su barra). */
+    @Volatile var muestraTam = 0L
 
     /** Elige un pincel para la herramienta actual (pintar, difuminar o borrar), con su tamaño y su estabilización. */
     fun eligePincel(id: String) {
@@ -122,8 +125,53 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     }
     fun terminaDifuminar() { val d = difumino ?: return; difumino = null; lienzo.enHilo { d.termina()?.let { lienzo.apunta(it) } } }
 
+    // ---------------------------------------------------------------- licuar
+
+    var modoLicuar by mutableStateOf("empujar")
+    var tamanoLicuar by mutableStateOf(120f)
+    var fuerzaLicuar by mutableStateOf(0.7f)
+    private var licuar: com.gonzalo.atlas.lienzo.Licuar? = null
+    fun empiezaLicuar() { val c = lienzo.capaActiva() ?: return; licuar = com.gonzalo.atlas.lienzo.Licuar(lienzo, c, modoLicuar, tamanoLicuar / 2f, fuerzaLicuar) }
+    fun licua(xs: FloatArray, ys: FloatArray, ps: FloatArray, alPintar: (android.graphics.RectF) -> Unit) {
+        val d = licuar ?: return
+        lienzo.enHilo { var z: android.graphics.RectF? = null; for (i in xs.indices) d.punto(xs[i], ys[i], ps[i])?.let { r -> if (z == null) z = r else z!!.union(r) }; z?.let { principal.post { alPintar(it) } } }
+    }
+    fun terminaLicuar() { val d = licuar ?: return; licuar = null; lienzo.enHilo { d.termina()?.let { lienzo.apunta(it) } } }
+
+    // ---------------------------------------------------------------- selección
+
+    /** La selección del lienzo (la zona en la que se pinta, borra, rellena y ajusta). */
+    var marco by mutableStateOf<com.gonzalo.atlas.lienzo.Seleccion?>(null); private set
+    /** Cómo se selecciona: "lazo", "rect" o "elipse"; y si lo nuevo sustituye, se suma o se resta. */
+    var formaSeleccion by mutableStateOf("lazo")
+    var operSeleccion by mutableStateOf("nueva")
+    /** Lo que se está rodeando (para verlo mientras se hace): la forma y sus puntos. */
+    var marcoBorrador by mutableStateOf<Pair<String, FloatArray>?>(null)
+
+    fun ponMarco(s: com.gonzalo.atlas.lienzo.Seleccion?) { val v = s?.takeIf { !it.vacia }; lienzo.seleccion = v; marco = v; alCambiarVista() }
+    fun invierteMarco() { marco?.let { ponMarco(it.invertir()) } }
+    fun borraMarco() { val c = lienzo.capaActiva() ?: return; trabajo("Borrando…") { lienzo.borraSeleccion(c)?.let { lienzo.apunta(it) } } }
+    fun rellenaMarco() { val c = lienzo.capaActiva() ?: return; val m = marco ?: return; val col = color; trabajo("Rellenando…") { lienzo.rellenaForma(c, m.path, col, "Rellenar lo seleccionado")?.let { lienzo.apunta(it) } } }
+    /** Lo seleccionado pasa a una capa nueva; con [cortar] se quita de la suya y, con [mover], queda lista para transformarla. */
+    fun copiaMarco(cortar: Boolean, mover: Boolean = false) {
+        val c = lienzo.capaActiva() ?: return
+        lienzo.copiaSeleccion(c, cortar) { id -> principal.post { capaActiva = id; ponMarco(null); if (mover) herramienta = Herramienta.TRANSFORMAR } }
+    }
+
+    // ---------------------------------------------------------------- simetría
+
+    /** Pone (o quita, con null) la guía de simetría, con su centro en ([x], [y]). */
+    fun ponSimetria(tipo: String?, x: Float = 0f, y: Float = 0f, n: Int = 6) {
+        mapa.simetria = if (tipo == null) null else com.gonzalo.atlas.motor.Simetria(tipo, x, y, n)
+        mapa.avisaVector()
+    }
+
     // ---------------------------------------------------------------- ajustes y transformar
 
+    /** El ajuste de color que se está probando en la capa activa (se ve al momento; se aplica con [aplicaAjuste]). */
+    var vistaAjuste by mutableStateOf<android.graphics.ColorMatrix?>(null)
+    fun aplicaAjuste(nombre: String) { val cm = vistaAjuste ?: return; val c = lienzo.capaActiva() ?: return; trabajo("Ajustando…") { com.gonzalo.atlas.lienzo.Ajustes.matriz(lienzo, c, cm, nombre)?.let { lienzo.apunta(it) }; principal.post { vistaAjuste = null } } }
+    fun ajusta(texto: String, f: (Lienzo, com.gonzalo.atlas.lienzo.CapaPx) -> Edicion?) { val c = lienzo.capaActiva() ?: return; trabajo(texto) { f(lienzo, c)?.let { lienzo.apunta(it) } } }
     fun ajustaColor(tono: Float, sat: Float, brillo: Float) = lienzo.capaActiva()?.let { c -> trabajo("Ajustando…") { com.gonzalo.atlas.lienzo.Ajustes.color(lienzo, c, tono, sat, brillo)?.let { lienzo.apunta(it) } } }
     fun desenfoca(r: Int) = lienzo.capaActiva()?.let { c -> trabajo("Desenfocando…") { com.gonzalo.atlas.lienzo.Ajustes.desenfoca(lienzo, c, r)?.let { lienzo.apunta(it) } } }
     fun aplicaTransformacion() {
@@ -131,6 +179,76 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
         transformacion = null
         trabajo("Transformando…") { com.gonzalo.atlas.lienzo.Ajustes.transforma(lienzo, c, m)?.let { lienzo.apunta(it) } }
         herramienta = Herramienta.PINCEL
+    }
+
+    // ---------------------------------------------------------------- continentes generados
+
+    /** La forma que se está probando, dónde iría (se ve en el lienzo antes de ponerla). */
+    var vistaPrevia by mutableStateOf<Pair<Bitmap, RectF>?>(null)
+
+    /**
+     * Dibuja en el mapa un continente generado dentro de [rect]: la costa como trazos de tinta (en la capa de líneas: sirve
+     * para rellenar y marcar territorios) y, si se pide, la tierra y el mar de color en la capa de color. Si el mapa aún
+     * no tiene escala, queda fijada por el tamaño dado ([anchoKm]).
+     */
+    fun ponContinente(p: com.gonzalo.atlas.motor.FormaTierra, rect: RectF, anchoKm: Double, tinta: Int, tierra: Int?, mar: Int?, seccion: Boolean) {
+        vistaPrevia = null
+        trabajo("Dibujando la costa…") {
+            val asp = rect.width() / rect.height()
+            val g = (max(rect.width(), rect.height()) / 2.5f).toInt().coerceIn(256, 900)
+            val w = if (asp >= 1f) g else max(64, (g * asp).toInt()); val h = if (asp >= 1f) max(64, (g / asp).toInt()) else g
+            val campo = com.gonzalo.atlas.motor.Continente.campo(p, w, h)
+            val kx = rect.width() / w; val ky = rect.height() / h
+            val capaLineas = lienzo.capas.firstOrNull { it.info.referencia } ?: lienzo.capaActiva() ?: return@trabajo
+            val capaColor = lienzo.capas.firstOrNull { !it.info.referencia } ?: capaLineas
+            val partes = ArrayList<Edicion>()
+            if (tierra != null || mar != null) pintaCampo(capaColor, rect, campo, w, h, tierra ?: 0, mar ?: 0)?.let { partes += it }
+            val def = Pinceles.def("costa").copy(afiladoInicio = 0f, afiladoFin = 0f, presionTamano = 0f, estabilizacion = 0f)
+            val tam = (max(rect.width(), rect.height()) / 700f).coerceIn(1.6f, 6f)
+            val trazos = com.gonzalo.atlas.motor.Continente.costas(campo, w, h).map { com.gonzalo.atlas.motor.Continente.redondea(it, 2) }.mapIndexed { k, l ->
+                val n = com.gonzalo.atlas.motor.Continente.puntos(l); val cerrada = !com.gonzalo.atlas.motor.Continente.esAbierta(l)
+                val m = if (cerrada) n + 1 else n
+                val pts = FloatArray(m * 6)
+                for (i in 0 until m) { val j = i % n; val o = i * 6; pts[o] = rect.left + (l[j * 2] + 0.5f) * kx; pts[o + 1] = rect.top + (l[j * 2 + 1] + 0.5f) * ky; pts[o + 2] = 1f; pts[o + 3] = 0.3f; pts[o + 4] = 0f; pts[o + 5] = i * 6f }
+                com.gonzalo.atlas.lienzo.TrazoDatos(def, tinta, tam, 1f, com.gonzalo.atlas.lienzo.TrazoDatos.PINTAR, false, listOf(pts), 1000 + k, 1f, true, null, null)
+            }
+            lienzo.ponTrazos(capaLineas, trazos, "Costa")?.let { partes += it }
+            if (!mapa.escalaPuesta && anchoKm > 0.0) { mapa.kmPorPx = (anchoKm / rect.width()).toFloat(); mapa.escalaPuesta = true }
+            if (seccion) { val antes = mapa.vectorJson().toString(); mapa.secciones += com.gonzalo.atlas.motor.Seccion(mapa.nuevoId("s"), "Continente", rect.left, rect.top, rect.width(), rect.height()); partes += Edicion.Vector("Sección", antes, mapa.vectorJson().toString()) }
+            if (partes.isNotEmpty()) lienzo.apunta(Edicion.Varias("Continente", partes))
+            mapa.avisaVector()
+            aviso("Continente dibujado: la costa está en «${capaLineas.info.nombre}»")
+        }
+    }
+
+    /** Pinta la tierra y el mar del relieve [campo] (de [w] × [h] muestras) en el recuadro: un color donde es tierra y otro donde es mar (0: nada). */
+    private fun pintaCampo(c: com.gonzalo.atlas.lienzo.CapaPx, rect: RectF, campo: FloatArray, w: Int, h: Int, tierra: Int, mar: Int): Edicion? {
+        val L = Lienzo.L
+        val nuevas = HashMap<Long, Bitmap?>()
+        val x0 = kotlin.math.floor(rect.left).toInt(); val y0 = kotlin.math.floor(rect.top).toInt(); val x1 = kotlin.math.ceil(rect.right).toInt(); val y1 = kotlin.math.ceil(rect.bottom).toInt()
+        val kx = w / rect.width(); val ky = h / rect.height()
+        for (ty in Math.floorDiv(y0, L)..Math.floorDiv(y1 - 1, L)) for (tx in Math.floorDiv(x0, L)..Math.floorDiv(x1 - 1, L)) {
+            if (!lienzo.dentro(tx, ty)) continue
+            val px = IntArray(L * L); var algo = false
+            for (j in 0 until L) {
+                val Y = ty * L + j; if (Y < y0 || Y >= y1) continue
+                val gy = ((Y + 0.5f - rect.top) * ky - 0.5f).coerceIn(0f, h - 1.001f); val iy = gy.toInt(); val fy = gy - iy
+                for (i in 0 until L) {
+                    val X = tx * L + i; if (X < x0 || X >= x1) continue
+                    val gx = ((X + 0.5f - rect.left) * kx - 0.5f).coerceIn(0f, w - 1.001f); val ix = gx.toInt(); val fx = gx - ix
+                    val o = iy * w + ix
+                    val v = (campo[o] * (1 - fx) + campo[o + 1] * fx) * (1 - fy) + (campo[o + w] * (1 - fx) + campo[o + w + 1] * fx) * fy
+                    val col = if (v > 0f) tierra else mar
+                    if (col != 0) { px[j * L + i] = col; algo = true }
+                }
+            }
+            if (!algo) continue
+            val k = Lienzo.clave(tx, ty)
+            val n = c.teselas[k]?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
+            Canvas(n).drawBitmap(Bitmap.createBitmap(px, L, L, Bitmap.Config.ARGB_8888), 0f, 0f, null)
+            nuevas[k] = n
+        }
+        return lienzo.cambia(c, "Tierra y mar", nuevas)
     }
 
     fun ponColor(c: Int) {
@@ -216,6 +334,7 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
             Herramienta.TERRITORIO -> borrador = Linea("borrador", "territorio", floatArrayOf(x), floatArrayOf(y), null)
             Herramienta.REGLA -> regla = floatArrayOf(x, y, x, y)
             Herramienta.SECCION -> seccionBorrador = floatArrayOf(x, y, x, y)
+            Herramienta.SELECCION -> marcoBorrador = formaSeleccion to floatArrayOf(x, y, x, y)
             Herramienta.ELEGIR -> { arrastre = floatArrayOf(x, y); antesArrastre = mapa.vectorJson().toString() }
             else -> {}
         }
@@ -230,6 +349,10 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
             }
             Herramienta.REGLA -> regla = floatArrayOf(bx[0], by[0], x, y)
             Herramienta.SECCION -> seccionBorrador = floatArrayOf(bx[0], by[0], x, y)
+            Herramienta.SELECCION -> {
+                if (formaSeleccion == "lazo") { if (hypot(x - bx.last(), y - by.last()) < 1f) return; bx += x; by += y; marcoBorrador = "lazo" to FloatArray(bx.size * 2) { if (it % 2 == 0) bx[it / 2] else by[it / 2] } }
+                else marcoBorrador = formaSeleccion to floatArrayOf(bx[0], by[0], x, y)
+            }
             Herramienta.ELEGIR -> {
                 val a = arrastre ?: return
                 val dx = x - a[0]; val dy = y - a[1]
@@ -268,6 +391,22 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
                 val x0 = minOf(r[0], r[2]); val y0 = minOf(r[1], r[3]); val w = kotlin.math.abs(r[2] - r[0]); val h = kotlin.math.abs(r[3] - r[1])
                 if (w > 16f && h > 16f) nuevaSeccion(x0, y0, w, h)
             }
+            Herramienta.SELECCION -> {
+                val b = marcoBorrador; marcoBorrador = null
+                val p = b?.second
+                val nueva = when {
+                    p == null -> null
+                    b.first == "lazo" -> if (p.size >= 8) com.gonzalo.atlas.lienzo.Seleccion(listOf(p)) else null
+                    kotlin.math.abs(p[2] - p[0]) < 3f || kotlin.math.abs(p[3] - p[1]) < 3f -> null
+                    else -> RectF(minOf(p[0], p[2]), minOf(p[1], p[3]), maxOf(p[0], p[2]), maxOf(p[1], p[3])).let { if (b.first == "elipse") com.gonzalo.atlas.lienzo.Seleccion.elipse(it) else com.gonzalo.atlas.lienzo.Seleccion.rectangulo(it) }
+                }
+                val actual = marco
+                when {
+                    nueva == null -> if (operSeleccion == "nueva") ponMarco(null)
+                    operSeleccion == "nueva" || actual == null -> if (operSeleccion != "restar") ponMarco(nueva)
+                    else -> ponMarco(actual.con(nueva, operSeleccion == "restar"))
+                }
+            }
             Herramienta.ELEGIR -> {
                 if (arrastre != null && seleccion != null) antesArrastre?.let { lienzo.apunta(Edicion.Vector("Mover", it, mapa.vectorJson().toString())); mapa.avisaVector() }
                 arrastre = null
@@ -278,7 +417,7 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     }
 
     fun arrastra(): Boolean = when (herramienta) {
-        Herramienta.RUTA, Herramienta.REGLA, Herramienta.SECCION -> true
+        Herramienta.RUTA, Herramienta.REGLA, Herramienta.SECCION, Herramienta.SELECCION -> true
         Herramienta.TERRITORIO -> modoTerritorio != ModoTerritorio.ZONA
         Herramienta.ELEGIR -> seleccion != null
         else -> false
@@ -395,6 +534,17 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     fun cierra() { guardaYa { lienzo.cierra() } }
 
     companion object {
+        /** Una imagen pequeña de la forma de tierra (para elegirla antes de ponerla). */
+        fun imagenContinente(p: com.gonzalo.atlas.motor.FormaTierra, w: Int, h: Int, tierra: Int, mar: Int, tinta: Int): Bitmap {
+            val a = com.gonzalo.atlas.motor.Continente.campo(p, w, h)
+            val px = IntArray(w * h) { i ->
+                val x = i % w; val y = i / w; val t = a[i] > 0f
+                val costa = (x + 1 < w && (a[i + 1] > 0f) != t) || (y + 1 < h && (a[i + w] > 0f) != t)
+                if (costa) tinta else if (t) tierra else mar
+            }
+            return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+        }
+
         /** Quita puntos que casi no cambian la línea (Ramer-Douglas-Peucker). */
         fun simplifica(l: Linea, tol: Float): Linea {
             if (l.n < 3) return l

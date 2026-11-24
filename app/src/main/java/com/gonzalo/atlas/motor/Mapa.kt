@@ -44,9 +44,11 @@ class CapaInfo(
     var bloqueoAlfa: Boolean = false,
     /** Capa de referencia: el relleno y los territorios miran sus líneas aunque dibujes en otra. */
     var referencia: Boolean = false,
+    /** Máscara de recorte: solo se ve donde la capa de debajo tiene algo pintado. */
+    var recorte: Boolean = false,
 ) {
-    fun json() = JSONObject().put("id", id).put("n", nombre).put("v", visible).put("o", opacidad.toDouble()).put("f", fusion).put("a", bloqueoAlfa).put("r", referencia)
-    companion object { fun de(o: JSONObject) = CapaInfo(o.optString("id"), o.optString("n"), o.optBoolean("v", true), o.optDouble("o", 1.0).toFloat(), o.optString("f", "normal"), o.optBoolean("a"), o.optBoolean("r")) }
+    fun json() = JSONObject().put("id", id).put("n", nombre).put("v", visible).put("o", opacidad.toDouble()).put("f", fusion).put("a", bloqueoAlfa).put("r", referencia).put("k", recorte)
+    companion object { fun de(o: JSONObject) = CapaInfo(o.optString("id"), o.optString("n"), o.optBoolean("v", true), o.optDouble("o", 1.0).toFloat(), o.optString("f", "normal"), o.optBoolean("a"), o.optBoolean("r"), o.optBoolean("k")) }
 }
 
 /** La imagen para calcar: detrás (o encima) del dibujo, que no sale al exportar. Mide [ancho] px del lienzo. */

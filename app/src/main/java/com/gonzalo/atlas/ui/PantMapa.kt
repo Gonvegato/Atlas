@@ -16,6 +16,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Colorize
+import androidx.compose.material.icons.outlined.FormatColorFill
+import androidx.compose.material.icons.outlined.HighlightAlt
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.NearMe
 import androidx.compose.material.icons.outlined.Public
@@ -96,7 +99,10 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
     val mesa = remember(ed, actividad) { e.mesaDe(ed, actividad) }
     LaunchedEffect(ed.aviso) { if (ed.aviso.isNotBlank()) { kotlinx.coroutines.delay(2200); ed.aviso = "" } }
     LaunchedEffect(ed.seleccion) { if (ed.seleccion != null) panel = "sel" }
-    LaunchedEffect(ed.herramienta) { if (ed.herramienta == Herramienta.TRANSFORMAR) panel = "transformar" else if (panel == "transformar") panel = null }
+    LaunchedEffect(ed.herramienta) {
+        if (ed.herramienta == Herramienta.TRANSFORMAR) panel = "transformar" else if (panel == "transformar") panel = null
+        if (ed.herramienta != Herramienta.LICUAR && panel == "licuar") panel = null
+    }
 
     Box(Modifier.fillMaxSize().background(O.MESA)) {
         AndroidView({ mesa.also { (it.parent as? android.view.ViewGroup)?.removeView(it) } }, Modifier.fillMaxSize())
@@ -139,7 +145,10 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
                         "color" -> PanelColor(ed)
                         "capas" -> PanelCapas(e, ed, mesa)
                         "acciones" -> PanelAcciones(e, ed, mesa, taller)
-                        "ajustes" -> PanelAjustes(ed)
+                        "ajustes" -> PanelAjustes(ed) { panel = it }
+                        "licuar" -> PanelLicuar(ed)
+                        "marco" -> PanelMarco(ed)
+                        "continente" -> PanelContinente(ed, mesa)
                         "transformar" -> PanelTransformar(ed, mesa)
                         "mundo" -> PanelMundo(ed) { panel = it }
                         "territorios" -> PanelTerritorios(e, ed, mesa)
@@ -158,7 +167,8 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
 
 private val titulos = mapOf("pinceles" to "Biblioteca de pinceles", "estudio" to "Estudio del pincel", "color" to "Color", "capas" to "Capas",
     "acciones" to "Acciones", "ajustes" to "Ajustes", "transformar" to "Transformar", "mundo" to "Mundo", "territorios" to "Territorios",
-    "lugares" to "Lugares", "rutas" to "Rutas", "dibujos" to "Tus dibujos", "calco" to "Imagen para calcar", "secciones" to "Secciones del terreno", "sel" to "Lo elegido")
+    "lugares" to "Lugares", "rutas" to "Rutas", "dibujos" to "Tus dibujos", "calco" to "Imagen para calcar", "secciones" to "Secciones del terreno", "sel" to "Lo elegido",
+    "marco" to "Selección", "licuar" to "Licuar", "continente" to "Generar un continente")
 
 private fun nuevaCapa(ed: Editor) {
     val lz = ed.lienzo
@@ -180,16 +190,17 @@ private fun BarraSuperior(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean,
     fun herramienta(x: Herramienta, p: String) { if (ed.herramienta == x) abre(p) else { ed.herramienta = x; ed.seleccion = null; ed.regla = null; if (panel != null && panel != p) abre(p) } }
     // En un móvil no cabe todo en una fila: las herramientas de dibujo van en una segunda
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val estrecho = maxWidth < 640.dp
+        val estrecho = maxWidth < 700.dp
         @Composable fun Izquierda() {
             Text("Galería", Modifier.pulsableO { ed.guardaYa(); if (taller) e.cierraDibujo() else e.dibujando = false }.padding(horizontal = 10.dp, vertical = 8.dp), style = O.texto(17.sp, O.TINTA))
             Icono(Icons.Outlined.Build, "Acciones", panel == "acciones") { abre("acciones") }
             Icono(Icons.Outlined.AutoFixHigh, "Ajustes", panel == "ajustes") { abre("ajustes") }
+            Icono(Icons.Outlined.HighlightAlt, "Selección", h == Herramienta.SELECCION || panel == "marco") { if (h != Herramienta.SELECCION) { ed.herramienta = Herramienta.SELECCION; ed.seleccion = null; if (panel != "marco") abre("marco") } else abre("marco") }
             Icono(Icons.Outlined.NearMe, "Transformar", h == Herramienta.TRANSFORMAR) { ed.herramienta = if (h == Herramienta.TRANSFORMAR) Herramienta.PINCEL else Herramienta.TRANSFORMAR; if (h == Herramienta.TRANSFORMAR) ed.transformacion = null }
             Icono(Icons.Outlined.Wallpaper, "Calco", panel == "calco" || h == Herramienta.CALCO) { abre("calco") }
             if (!taller) {
                 Spacer(Modifier.width(4.dp)); Box(Modifier.width(1.dp).height(26.dp).background(O.GRIS_CLARO)); Spacer(Modifier.width(4.dp))
-                Icono(Icons.Outlined.Public, "Mundo", panel == "mundo" || h in herramientasMundo) { abre("mundo") }
+                Icono(Icons.Outlined.Public, "Mundo", panel == "mundo" || panel == "continente" || h in herramientasMundo) { abre("mundo") }
                 if (h in herramientasMundo && !estrecho) Text(h.nombre, Modifier.padding(start = 4.dp), style = O.versalitas(11.sp, O.ACENTO))
             }
         }
@@ -230,13 +241,21 @@ private fun IconoGoma(c: Color) {
 /** La barra de la izquierda (como la de Procreate): tamaño, cuentagotas, opacidad, deshacer y rehacer. */
 @Composable
 private fun BarraLateral(ed: Editor, mod: Modifier) {
-    Column(mod.clip(RoundedCornerShape(16.dp)).background(O.CABECERA.copy(alpha = 0.9f)).padding(horizontal = 6.dp, vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    val cfg = androidx.compose.ui.platform.LocalConfiguration.current
+    val alta = if (cfg.screenHeightDp < 620 || cfg.screenWidthDp < 700) 120.dp else 180.dp
+    @Composable fun Boton(i: ImageVector, desc: String, h: Herramienta) {
+        val activo = ed.herramienta == h
+        Box(Modifier.size(36.dp).clip(RoundedCornerShape(9.dp)).background(if (activo) O.CRUDO else Color.Transparent).pulsableO { ed.herramienta = if (activo) Herramienta.PINCEL else h }, contentAlignment = Alignment.Center) {
+            Icon(i, desc, Modifier.size(21.dp), tint = if (activo) O.ACENTO else O.TINTA)
+        }
+    }
+    Column(mod.clip(RoundedCornerShape(16.dp)).background(O.CABECERA.copy(alpha = 0.92f)).padding(horizontal = 6.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         val tam = ed.tamanoActual()
-        BarraVerticalO((ln(tam) / ln(500f)).coerceIn(0f, 1f), "${tam.roundToInt()}") { v -> ed.ponTamano(500f.pow(v).coerceAtLeast(1f)) }
-        Box(Modifier.size(30.dp).clip(RoundedCornerShape(6.dp)).border(2.dp, if (ed.herramienta == Herramienta.CUENTAGOTAS) O.ACENTO else O.GRIS, RoundedCornerShape(6.dp))
-            .pulsableO { ed.herramienta = if (ed.herramienta == Herramienta.CUENTAGOTAS) Herramienta.PINCEL else Herramienta.CUENTAGOTAS })
-        BarraVerticalO(ed.opacidadActual(), "${(ed.opacidadActual() * 100).roundToInt()}%") { ed.ponOpacidad(it.coerceAtLeast(0.02f)) }
+        BarraVerticalO((ln(tam / 0.3f) / ln(800f / 0.3f)).coerceIn(0f, 1f), if (tam < 10f) "%.1f".format(tam).replace('.', ',') else "${tam.roundToInt()}", alturaBarra = alta) { v -> ed.ponTamano(0.3f * (800f / 0.3f).pow(v)) }
+        Boton(Icons.Outlined.Colorize, "Cuentagotas", Herramienta.CUENTAGOTAS)
+        Boton(Icons.Outlined.FormatColorFill, "Bote de pintura", Herramienta.RELLENO)
+        BarraVerticalO(ed.opacidadActual(), "${(ed.opacidadActual() * 100).roundToInt()}%", alturaBarra = alta) { ed.ponOpacidad(it.coerceAtLeast(0.02f)) }
         Flecha(atras = true, activa = ed.puedeDeshacer) { ed.deshacer() }
         Flecha(atras = false, activa = ed.puedeRehacer) { ed.rehacer() }
     }
@@ -310,34 +329,59 @@ private fun EstudioPincel(ed: Editor, volver: () -> Unit) {
     Box(Modifier.fillMaxWidth().height(110.dp).clip(RoundedCornerShape(10.dp)).background(O.MESA)) { muestra?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize()) } }
     CampoO(d.nombre, { pon(d.copy(nombre = it)) }, Modifier.fillMaxWidth(), "Nombre")
     @Composable fun S(t: String, v: Float, r: ClosedFloatingPointRange<Float>, f: String, set: (Float) -> com.gonzalo.atlas.lienzo.DefPincel) = DeslizadorO(t, v, r, f) { pon(set(it)) }
+    @Composable fun P(t: String, v: Float, set: (Float) -> com.gonzalo.atlas.lienzo.DefPincel) = S(t, v, 0f..1f, "${(v * 100).roundToInt()}%", set)
     EtiquetaO("Trazo", tam = 11.sp, color = O.ACENTO)
-    S("Estabilización", d.estabilizacion, 0f..1f, "${(d.estabilizacion * 100).roundToInt()}%") { d.copy(estabilizacion = it) }
+    P("Estabilización", d.estabilizacion) { d.copy(estabilizacion = it) }
     S("Espaciado", d.espaciado, 0f..3f, if (d.espaciado < 0.02f) "Continuo" else "%.2f".format(d.espaciado)) { d.copy(espaciado = if (it < 0.02f) 0f else it) }
-    S("Dispersión", d.dispersion, 0f..2f, "%.2f".format(d.dispersion)) { d.copy(dispersion = it) }
-    S("Giro al azar", d.giroAzar, 0f..1f, "${(d.giroAzar * 180).roundToInt()}°") { d.copy(giroAzar = it) }
-    InterruptorO("La punta sigue la dirección del trazo", d.sigueDireccion) { pon(d.copy(sigueDireccion = it)) }
+    S("Dispersión", d.dispersion, 0f..4f, "%.2f".format(d.dispersion)) { d.copy(dispersion = it) }
+    S("Estampas en cada punto", d.numero.toFloat(), 1f..8f, "${d.numero}") { d.copy(numero = it.roundToInt().coerceIn(1, 8)) }
     EtiquetaO("Afilado", tam = 11.sp, color = O.ACENTO)
     S("Al empezar", d.afiladoInicio, 0f..20f, "%.1f".format(d.afiladoInicio)) { d.copy(afiladoInicio = it) }
     S("Al terminar", d.afiladoFin, 0f..20f, "%.1f".format(d.afiladoFin)) { d.copy(afiladoFin = it) }
+    Text("Con el dedo (sin presión), los pinceles que cambian de grosor se afilan solos al empezar y al acabar.", style = O.texto(11.sp, O.GRIS))
     EtiquetaO("Forma", tam = 11.sp, color = O.ACENTO)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         FichaO("Redonda", d.forma == "redonda") { pon(d.copy(forma = "redonda")) }
         FichaO("Plana", d.forma == "plana") { pon(d.copy(forma = "plana")) }
-        for ((k, n) in com.gonzalo.atlas.lienzo.Texturas.PUNTAS) FichaO(n, d.forma == k) { pon(d.copy(forma = k, espaciado = if (d.espaciado < 0.02f) 0.15f else d.espaciado)) }
+        for ((k, n) in com.gonzalo.atlas.lienzo.Texturas.PUNTAS) FichaO(n, d.forma == k) { pon(d.copy(forma = k, espaciado = if (d.espaciado < 0.02f) 0.1f else d.espaciado)) }
+        if (d.forma.contains(":")) FichaO("La importada", true) {}
     }
-    if (d.forma == "plana") { S("Achatado", d.achatado, 0.05f..1f, "%.2f".format(d.achatado)) { d.copy(achatado = it) }; S("Ángulo", d.angulo, -90f..90f, "${d.angulo.roundToInt()}°") { d.copy(angulo = it) } }
+    if (d.forma == "redonda") P("Dureza del borde", d.dureza) { d.copy(dureza = it) }
+    S("Achatado", d.achatado, 0.05f..1f, "%.2f".format(d.achatado)) { d.copy(achatado = it) }
+    S("Ángulo", d.angulo, -90f..90f, "${d.angulo.roundToInt()}°") { d.copy(angulo = it) }
+    S("Giro al azar", d.giroAzar, 0f..1f, "${(d.giroAzar * 180).roundToInt()}°") { d.copy(giroAzar = it) }
+    InterruptorO("La punta sigue la dirección del trazo", d.sigueDireccion) { pon(d.copy(sigueDireccion = it)) }
+    InterruptorO("La punta gira con el lápiz (acimut)", d.acimut) { pon(d.copy(acimut = it)) }
+    InterruptorO("Voltear al azar", d.volteo) { pon(d.copy(volteo = it)) }
     EtiquetaO("Grano", tam = 11.sp, color = O.ACENTO)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         FichaO("Sin grano", d.grano.isBlank()) { pon(d.copy(grano = "")) }
         for ((k, n) in com.gonzalo.atlas.lienzo.Texturas.GRANOS) FichaO(n, d.grano == k) { pon(d.copy(grano = k)) }
+        if (d.grano.contains(":")) FichaO("El importado", true) {}
     }
-    if (d.grano.isNotBlank()) S("Escala del grano", d.escalaGrano, 16f..512f, "${d.escalaGrano.roundToInt()} px") { d.copy(escalaGrano = it) }
-    EtiquetaO("Dinámica", tam = 11.sp, color = O.ACENTO)
-    S("Presión → tamaño", d.presionTamano, 0f..1f, "${(d.presionTamano * 100).roundToInt()}%") { d.copy(presionTamano = it) }
-    S("Presión → opacidad", d.presionOpacidad, 0f..1f, "${(d.presionOpacidad * 100).roundToInt()}%") { d.copy(presionOpacidad = it) }
-    S("Velocidad → tamaño", d.velocidadTamano, -0.9f..1f, "%+.2f".format(d.velocidadTamano)) { d.copy(velocidadTamano = it) }
-    S("Inclinación → tamaño", d.inclinacion, 0f..1f, "${(d.inclinacion * 100).roundToInt()}%") { d.copy(inclinacion = it) }
+    if (d.grano.isNotBlank()) {
+        S("Escala del grano", d.escalaGrano, 16f..512f, "${d.escalaGrano.roundToInt()} px") { d.copy(escalaGrano = it) }
+        P("Cuánto se nota", d.profGrano) { d.copy(profGrano = it) }
+        InterruptorO("El grano se mueve con cada estampa", d.granoMovil) { pon(d.copy(granoMovil = it)) }
+    }
+    EtiquetaO("Pintura", tam = 11.sp, color = O.ACENTO)
+    S("Flujo (pintura de cada estampa)", d.flujo, 0.02f..1f, "${(d.flujo * 100).roundToInt()}%") { d.copy(flujo = it) }
     InterruptorO("Acumula donde se cruza (acuarela, aerógrafo)", d.acumula) { pon(d.copy(acumula = it)) }
+    P("Bordes húmedos", d.bordes) { d.copy(bordes = it) }
+    P("Mezcla con lo que hay (óleo)", d.mezcla) { d.copy(mezcla = it) }
+    EtiquetaO("Lápiz", tam = 11.sp, color = O.ACENTO)
+    P("Presión → tamaño", d.presionTamano) { d.copy(presionTamano = it) }
+    P("Presión → opacidad", d.presionOpacidad) { d.copy(presionOpacidad = it) }
+    P("Inclinación → tamaño", d.inclinacion) { d.copy(inclinacion = it) }
+    P("Inclinación → más claro", d.inclinacionOpacidad) { d.copy(inclinacionOpacidad = it) }
+    EtiquetaO("Velocidad y azar", tam = 11.sp, color = O.ACENTO)
+    S("Velocidad → tamaño", d.velocidadTamano, -0.9f..1f, "%+.2f".format(d.velocidadTamano)) { d.copy(velocidadTamano = it) }
+    S("Velocidad → opacidad", d.velocidadOpacidad, -0.9f..0f, "%+.2f".format(d.velocidadOpacidad)) { d.copy(velocidadOpacidad = it) }
+    P("Azar de tamaño", d.azarTamano) { d.copy(azarTamano = it) }
+    P("Azar de opacidad", d.azarOpacidad) { d.copy(azarOpacidad = it) }
+    P("Azar de tono", d.azarTono) { d.copy(azarTono = it) }
+    P("Azar de saturación", d.azarSat) { d.copy(azarSat = it) }
+    P("Azar de brillo", d.azarBrillo) { d.copy(azarBrillo = it) }
     EtiquetaO("Propiedades", tam = 11.sp, color = O.ACENTO)
     S("Tamaño al elegirlo", d.tamano, 1f..400f, "${d.tamano.roundToInt()} px") { d.copy(tamano = it) }
     S("Opacidad al elegirlo", d.opacidad, 0.02f..1f, "${(d.opacidad * 100).roundToInt()}%") { d.copy(opacidad = it) }
@@ -448,7 +492,7 @@ private fun PanelCapas(e: EstadoApp, ed: Editor, mesa: Mesa) {
                 }
                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                     Text(c.info.nombre, style = O.texto(15.sp, O.TINTA), maxLines = 1)
-                    val extra = listOfNotNull("Referencia".takeIf { c.info.referencia }, "Transparencia bloqueada".takeIf { c.info.bloqueoAlfa })
+                    val extra = listOfNotNull("↳ Recortada a la de abajo".takeIf { c.info.recorte }, "Referencia".takeIf { c.info.referencia }, "Transparencia bloqueada".takeIf { c.info.bloqueoAlfa })
                     if (extra.isNotEmpty()) Text(extra.joinToString(" · "), style = O.texto(11.sp, if (activa) O.TINTA else O.GRIS))
                 }
                 Text(letraFusion(c.info.fusion), Modifier.padding(horizontal = 8.dp), style = O.titular(14.sp))
@@ -464,7 +508,8 @@ private fun PanelCapas(e: EstadoApp, ed: Editor, mesa: Mesa) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     for ((k, n) in Lienzo.FUSIONES) FichaO(n, c.info.fusion == k) { lz.cambiaCapas("Fusión") { c.info.fusion = k } }
                 }
-                InterruptorO("Bloquear transparencia", c.info.bloqueoAlfa) { v -> lz.cambiaCapas("Bloquear") { c.info.bloqueoAlfa = v } }
+                InterruptorO("Máscara de recorte (solo se ve sobre lo pintado en la capa de abajo)", c.info.recorte) { v -> lz.cambiaCapas("Máscara de recorte") { c.info.recorte = v } }
+                InterruptorO("Bloquear transparencia (pintar solo sobre lo ya pintado)", c.info.bloqueoAlfa) { v -> lz.cambiaCapas("Bloquear") { c.info.bloqueoAlfa = v } }
                 InterruptorO("Referencia (para rellenar y marcar territorios)", c.info.referencia) { v -> lz.cambiaCapas("Referencia") { c.info.referencia = v } }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     BotonO("Subir") { lz.cambiaCapas("Ordenar") { val i = lz.capas.indexOf(c); if (i < lz.capas.size - 1) { lz.capas.removeAt(i); lz.capas.add(i + 1, c) } } }
@@ -494,7 +539,8 @@ private fun PanelCapas(e: EstadoApp, ed: Editor, mesa: Mesa) {
     @Suppress("UNUSED_VARIABLE") val u = e.listas
 }
 
-private fun letraFusion(f: String) = when (f) { "multiplicar" -> "M"; "pantalla" -> "S"; "superponer" -> "Ov"; "luz_suave" -> "Sl"; "aclarar" -> "Li"; "oscurecer" -> "D"; "anadir" -> "Ad"; "color" -> "Cl"; else -> "N" }
+private fun letraFusion(f: String) = when (f) { "multiplicar" -> "M"; "pantalla" -> "P"; "superponer" -> "Sp"; "luz_suave" -> "Ls"; "luz_fuerte" -> "Lf"; "aclarar" -> "Ac"; "oscurecer" -> "Os"; "anadir" -> "Añ"; "color" -> "Co";
+    "subexponer" -> "Sb"; "sobreexponer" -> "Sx"; "diferencia" -> "Di"; "exclusion" -> "Ex"; "tono" -> "To"; "saturacion" -> "Sa"; "luminosidad" -> "Lu"; else -> "N" }
 
 /** Llena la capa del color (en lo que ya tiene, o entera si está vacía en lo que se ve). */
 private fun rellenaCapa(lz: Lienzo, c: CapaPx, color: Int) {
@@ -512,6 +558,8 @@ private fun PanelAcciones(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean)
         InterruptorO("Cuadrícula (casillas en km)", mesa.opciones.cuadricula) { mesa.opciones.cuadricula = it; mesa.refresca(); ed.cambios++ }
         Text("Mide en km: fija cuántos km es un píxel en Mundo → Escala (ahora ${m.kmPorPx.toString().replace('.', ',')} km por píxel${if (m.escalaPuesta) "" else ", sin fijar"}).", style = O.texto(12.sp, O.GRIS))
     }
+    GuiasDibujo(ed, mesa)
+    EtiquetaO("Gestos", tam = 11.sp, color = O.ACENTO)
     InterruptorO("Girar el lienzo con dos dedos", mesa.girar) { mesa.girar = it; ed.cambios++ }
     InterruptorO("Dibujar también con el dedo", mesa.dedoDibuja) { mesa.dedoDibuja = it; ed.cambios++ }
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { BotonO("Norte arriba") { mesa.endereza() }; BotonO("Ver todo") { mesa.encuadra(false) } }
@@ -534,21 +582,6 @@ private fun PanelAcciones(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean)
     EtiquetaO("Compartir", tam = 11.sp, color = O.ACENTO)
     BotonO("Guardar imagen (PNG)") { e.exporta(ed, mesa) }
     if (e.mensaje.isNotBlank()) Text(e.mensaje, style = O.texto(12.sp, O.ACENTO))
-}
-
-@Composable
-private fun PanelAjustes(ed: Editor) {
-    var tono by remember { mutableStateOf(0f) }; var sat by remember { mutableStateOf(1f) }; var brillo by remember { mutableStateOf(1f) }; var radio by remember { mutableStateOf(6f) }
-    Text("Sobre la capa «${ed.lienzo.capaActiva()?.info?.nombre}».", style = O.texto(13.sp, O.GRIS))
-    EtiquetaO("Tono, saturación y brillo", tam = 11.sp, color = O.ACENTO)
-    DeslizadorO("Tono", tono, -180f..180f, "${tono.roundToInt()}°") { tono = it }
-    DeslizadorO("Saturación", sat, 0f..2f, "${(sat * 100).roundToInt()}%") { sat = it }
-    DeslizadorO("Brillo", brillo, 0.2f..2f, "${(brillo * 100).roundToInt()}%") { brillo = it }
-    BotonO("Aplicar", lleno = true, color = O.ACENTO) { ed.ajustaColor(tono, sat, brillo); tono = 0f; sat = 1f; brillo = 1f }
-    EtiquetaO("Desenfoque gaussiano", tam = 11.sp, color = O.ACENTO)
-    DeslizadorO("Radio", radio, 1f..60f, "${radio.roundToInt()} px") { radio = it }
-    BotonO("Desenfocar", lleno = true, color = O.ACENTO) { ed.desenfoca(radio.roundToInt()) }
-    Text("Se deshace como todo (dos dedos).", style = O.texto(12.sp, O.GRIS))
 }
 
 @Composable
@@ -577,6 +610,9 @@ private fun PanelMundo(ed: Editor, abre: (String) -> Unit) {
             .pulsableO { ed.herramienta = h; ed.seleccion = null; if (h != Herramienta.REGLA) ed.regla = null; if (panel != null) abre(panel) else abre("mundo") }.padding(12.dp)) {
             Column { Text(t, style = O.texto(15.sp, O.TINTA)); Text(d, style = O.texto(12.sp, if (ed.herramienta == h) O.TINTA else O.GRIS)) }
         }
+    }
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(O.BLOQUE2).pulsableO { abre("continente") }.padding(12.dp)) {
+        Column { Text("Generar un continente", style = O.texto(15.sp, O.TINTA)); Text("Das el tamaño total en km y la costa se dibuja sola", style = O.texto(12.sp, O.TINTA)) }
     }
     F(Herramienta.SECCION, "Secciones del terreno", "Marcos con su tamaño en km: dibujas solo dentro", "secciones")
     F(Herramienta.TERRITORIO, "Territorios", "Imperios, reinos, provincias: toca dentro de tus fronteras", "territorios")
@@ -794,7 +830,7 @@ private fun EditaSello(ed: Editor, s: Sello) {
 @Composable
 private fun Flecha(atras: Boolean, activa: Boolean, alPulsar: () -> Unit) {
     val col = if (activa) O.TINTA else O.GRIS_CLARO
-    Box(Modifier.size(40.dp).border(2.dp, col).pulsableO { if (activa) alPulsar() }, contentAlignment = Alignment.Center) {
+    Box(Modifier.size(38.dp).clip(RoundedCornerShape(9.dp)).pulsableO { if (activa) alPulsar() }, contentAlignment = Alignment.Center) {
         androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
             val s = size.width
             val k = if (atras) 1f else -1f
