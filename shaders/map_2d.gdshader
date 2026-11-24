@@ -46,6 +46,9 @@ uniform vec3 biome_tint : source_color = vec3(0.95, 0.92, 0.84);
 uniform float biome_tint_amt = 0.0;
 // Fundido entre biomas: radio (píxeles del mapa) en el que se mezclan colores, árboles y patrones. 0 = linde seca.
 uniform float biome_blend = 16.0;
+// El fundido ya calculado (biome_blend.gdshader): rgb = colores × presencia, a = presencia.
+uniform sampler2D blend_tex : filter_linear, repeat_disable;
+uniform bool use_blend_tex = false;
 
 float hash1(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21));
@@ -323,7 +326,20 @@ void fragment() {
 		// desplazado por ruido para que la linde sea orgánica. Sin fundido, los 4 vecinos (linde nítida pero suave).
 		vec2 warp = (vec2(vnoise(UV * 90.0), vnoise(UV * 90.0 + 31.7)) - 0.5) * 3.0;
 		float forest_w = 0.0;
-		if (biome_blend >= 1.0) {
+		if (biome_blend >= 1.0 && use_blend_tex) {
+			vec2 wobble = (vec2(vnoise(UV * 23.0 + 3.1), vnoise(UV * 23.0 + 9.7)) - 0.5) * biome_blend * 0.8;
+			vec4 bt = texture(blend_tex, (UV * tex_size + warp + wobble) / tex_size);
+			float s_k = smoothstep(0.55, 0.95, elev) * 0.6;
+			color = (1.0 - s_k) * bt.rgb + s_k * bt.a * auto_col + (1.0 - bt.a) * auto_col;
+			// Cuánto bosque hay cerca: 5 muestras (para los árboles y el suelo del bosque).
+			for (int k = 0; k < 5; k++) {
+				vec2 o = k == 0 ? vec2(0.0) : vec2(cos(float(k) * 1.5708), sin(float(k) * 1.5708)) * biome_blend * 0.7;
+				int fid = id_at(biome_tex, (UV * tex_size + o) / tex_size);
+				if (fid > 0 && is_tree(int(round(texelFetch(biome_pal, ivec2(fid, 1), 0).r * 255.0)))) {
+					forest_w += 0.2;
+				}
+			}
+		} else if (biome_blend >= 1.0) {
 			vec2 wobble = (vec2(vnoise(UV * 23.0 + 3.1), vnoise(UV * 23.0 + 9.7)) - 0.5) * biome_blend * 0.8;
 			vec2 bc = UV * tex_size + warp + wobble;
 			vec3 acc = vec3(0.0);

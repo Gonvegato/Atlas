@@ -116,6 +116,15 @@ func _ready() -> void:
 	area.name = "Area"
 	for l in [height, biome, realm, area]:
 		add_child(l)
+	var li: int = 0
+	for l in [height, biome, realm, area]:
+		var idx: int = li
+		(l as PaintLayer).mirror_updated.connect(func(r: Rect2i):
+			_layer_dirty[idx] = true
+			if idx == 0:
+				_stats_rects.append(r)
+		)
+		li += 1
 	# Nada de leer texturas durante _ready(): el mundo se crea (o se abre el último) unos fotogramas después.
 	await get_tree().create_timer(0.25).timeout
 	var cfg := ConfigFile.new()
@@ -187,6 +196,7 @@ func create_world(size: Vector2i, seed: int, mode: int, inf: bool = false) -> vo
 	map_size = Vector2i(clampi(size.x, 256, MAX_SIDE), clampi(size.y, 256, MAX_SIDE))
 	world_seed = seed
 	world_mode = mode
+	_all_dirty()
 	height.setup(map_size, hdr)
 	biome.setup(map_size, false)
 	realm.setup(map_size, false)
@@ -262,6 +272,7 @@ func extend(dir: String, frac: float = 0.5) -> bool:
 		l.setup(new_size, l.hdr)
 		await l.load_image(img)
 	map_size = new_size
+	_all_dirty()
 	for p in places:
 		var uv: Vector2 = p["uv"]
 		p["uv"] = (uv * Vector2(old_size) + Vector2(offset)) / Vector2(new_size)
@@ -1002,20 +1013,32 @@ func save_map(extra: Dictionary = {}) -> void:
 	meta["mode"] = world_mode
 	meta["infinite"] = infinite
 	meta["origin"] = world_origin
-	var layers: Array = [["relieve", height.mirror.duplicate()], ["biomas", biome.mirror.duplicate()], ["reinos", realm.mirror.duplicate()], ["regiones", area.mirror.duplicate()]]
-	var thumb: Image = _thumbnail()
+	# Solo se copian (en el hilo principal) las capas que han cambiado desde el último guardado; en un mundo infinito,
+	# solo los trozos tocados. Lo demás ya está en disco.
 	var inf: bool = infinite
-	var origin: Vector2i = world_origin
-	var wsize: Vector2i = map_size
-	var dirty: Dictionary = _dirty_chunks.duplicate()
+	var all_layers: Array = [["relieve", height], ["biomas", biome], ["reinos", realm], ["regiones", area]]
+	var layers: Array = []
+	var was_dirty: Array = _layer_dirty.duplicate()
+	if not inf:
+		for i in 4:
+			if bool(_layer_dirty[i]) or not FileAccess.file_exists(dir + "/" + str(all_layers[i][0]) + ".bin"):
+				layers.append([all_layers[i][0], (all_layers[i][1] as PaintLayer).mirror.duplicate()])
+	_layer_dirty = [false, false, false, false]
+	var small: Image = _height_small().duplicate()
+	var sl: float = sea_level
+	var chunk_regs: Array = []
+	if inf:
+		chunk_regs = _dirty_chunk_regions(_dirty_chunks)
+	var dirty_backup: Dictionary = _dirty_chunks.duplicate()
 	_dirty_chunks.clear()
 	var task := func() -> bool:
 		var ok: bool = true
-		if inf and not dirty.is_empty():
+		var thumb: Image = _thumbnail_from(small, sl)
+		if inf and not chunk_regs.is_empty():
 			# Mundo infinito: los trozos tocados de la ventana (el resto del mundo ya está en los suyos o lo hace el
 			# generador igual).
-			ok = _write_chunks(dir, [layers[0][1], layers[1][1], layers[2][1], layers[3][1]], origin, wsize, dirty)
-		for l in ([] if inf else layers):
+			ok = _write_chunk_regions(dir, chunk_regs)
+		for l in layers:
 			var img: Image = l[1]
 			var f := FileAccess.open_compressed(dir + "/" + str(l[0]) + ".bin.tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
 			if f == null:
@@ -1034,7 +1057,10 @@ func save_map(extra: Dictionary = {}) -> void:
 		thumb.save_png(dir + "/miniatura.png")
 		if ok:
 			# Se cambia de golpe al terminar: un cierre a medias nunca deja el mapa roto.
-			for n in (["mundo"] if inf else ["relieve", "biomas", "reinos", "regiones", "mundo"]):
+			var names: Array = ["mundo"]
+			for l in layers:
+				names.append(str(l[0]))
+			for n in names:
 				DirAccess.rename_absolute(dir + "/" + n + ".bin.tmp", dir + "/" + n + ".bin")
 		return ok
 	var result: Array = [false]
@@ -1043,6 +1069,13 @@ func save_map(extra: Dictionary = {}) -> void:
 		await get_tree().process_frame
 	WorkerThreadPool.wait_for_task_completion(tid)
 	var ok: bool = bool(result[0])
+	if not ok:
+		# Que se vuelva a intentar todo lo que no se pudo escribir.
+		for i in 4:
+			if bool(was_dirty[i]):
+				_layer_dirty[i] = true
+		for k in dirty_backup.keys():
+			_dirty_chunks[k] = true
 	_remember_map()
 	_saving = false
 	saved.emit(ok)
@@ -1052,7 +1085,10 @@ func save_map(extra: Dictionary = {}) -> void:
 
 ## Miniatura de 256 px del relieve (mar azul, tierra en tonos de altura) para la lista de mapas.
 func _thumbnail() -> Image:
-	var small: Image = _small(height, Image.INTERPOLATE_BILINEAR)
+	return _thumbnail_from(_height_small().duplicate(), sea_level)
+
+## Lo mismo a partir del relieve pequeño (se puede hacer en otro hilo).
+static func _thumbnail_from(small: Image, sea_level: float) -> Image:
 	small.resize(maxi(small.get_width() * 2, 1), maxi(small.get_height() * 2, 1), Image.INTERPOLATE_BILINEAR)
 	var out := Image.create(small.get_width(), small.get_height(), false, Image.FORMAT_RGB8)
 	var sea_col := Color(0.24, 0.36, 0.50)
@@ -1102,6 +1138,7 @@ func load_map(id: String) -> bool:
 			if im == null:
 				return false
 	world_ready = false
+	_all_dirty()
 	infinite = inf
 	world_origin = m.get("origin", Vector2i.ZERO)
 	world_mode = int(m.get("mode", 0))
@@ -1175,6 +1212,7 @@ func duplicate_map(new_name: String, extra: Dictionary) -> void:
 	var old_dir: String = MAPS_DIR + "/" + map_id
 	map_id = _new_map_id()
 	map_name = new_name
+	_layer_dirty = [true, true, true, true]
 	if infinite:
 		# Los trozos de fuera de la ventana también.
 		var new_dir: String = MAPS_DIR + "/" + map_id
@@ -1239,6 +1277,44 @@ static func _write_chunks(dir: String, imgs: Array, origin: Vector2i, wsize: Vec
 				DirAccess.rename_absolute(path + ".tmp", path)
 	return ok
 
+## Los trozos tocados de la ventana como imágenes sueltas [capa, trozo del mundo, imagen] (copias pequeñas).
+func _dirty_chunk_regions(dirty: Dictionary) -> Array:
+	var out: Array = []
+	var layers: Array[PaintLayer] = [height, biome, realm, area]
+	var oc: Vector2i = world_origin / CHUNK
+	var n: Vector2i = map_size / CHUNK
+	for wc in dirty.keys():
+		var c: Vector2i = Vector2i(wc) - oc
+		if c.x < 0 or c.y < 0 or c.x >= n.x or c.y >= n.y:
+			continue
+		for li in 4:
+			out.append([li, Vector2i(wc), layers[li].mirror.get_region(Rect2i(c * CHUNK, Vector2i(CHUNK, CHUNK)))])
+	return out
+
+static func _write_chunk_regions(dir: String, regs: Array) -> bool:
+	var ok: bool = true
+	for e in regs:
+		var li: int = e[0]
+		var wc: Vector2i = e[1]
+		var reg: Image = e[2]
+		var path: String = _chunk_file(dir, li, wc)
+		var data: PackedByteArray = reg.get_data()
+		if li > 0 and data.count(0) == data.size():
+			if FileAccess.file_exists(path):
+				DirAccess.remove_absolute(path)
+			continue
+		var f := FileAccess.open_compressed(path + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
+		if f == null:
+			ok = false
+			continue
+		f.store_32(reg.get_width())
+		f.store_32(reg.get_height())
+		f.store_32(reg.get_format())
+		f.store_buffer(data)
+		f.close()
+		DirAccess.rename_absolute(path + ".tmp", path)
+	return ok
+
 ## Compone la ventana en world_origin: el generador (con las coordenadas del mundo), encima lo que se conserva de la
 ## ventana anterior ([keep] desplazado [keep_offset]) y los trozos guardados que no estaban en ella.
 func _compose_window(dir: String, keep: Array, keep_offset: Vector2i, keep_chunks: Dictionary) -> void:
@@ -1297,13 +1373,12 @@ func recenter(dc: Vector2i) -> void:
 	world_ready = false
 	var dir: String = MAPS_DIR + "/" + map_id
 	DirAccess.make_dir_recursive_absolute(dir)
-	var old: Array = [height.mirror.duplicate(), biome.mirror.duplicate(), realm.mirror.duplicate(), area.mirror.duplicate()]
-	var origin: Vector2i = world_origin
-	var wsize: Vector2i = map_size
-	var dirty: Dictionary = _dirty_chunks.duplicate()
+	# El relieve se copia (al componer se lee de la GPU encima de su espejo); las demás capas no cambian hasta el final.
+	var old: Array = [height.mirror.duplicate(), biome.mirror, realm.mirror, area.mirror]
+	var regs: Array = _dirty_chunk_regions(_dirty_chunks)
 	_dirty_chunks.clear()
-	if not dirty.is_empty():
-		var tid: int = WorkerThreadPool.add_task(func(): _write_chunks(dir, old, origin, wsize, dirty))
+	if not regs.is_empty():
+		var tid: int = WorkerThreadPool.add_task(func(): _write_chunk_regions(dir, regs))
 		while not WorkerThreadPool.is_task_completed(tid):
 			await get_tree().process_frame
 		WorkerThreadPool.wait_for_task_completion(tid)
@@ -1319,6 +1394,8 @@ func recenter(dc: Vector2i) -> void:
 			if wc.x >= old_oc.x and wc.y >= old_oc.y and wc.x < old_oc.x + n.x and wc.y < old_oc.y + n.y:
 				keep_chunks[wc] = true
 	await _compose_window(dir, old, -shift_px, keep_chunks)
+	_stats_small = null
+	_stats_rects.clear()
 	var d: Vector2 = Vector2(shift_px) / Vector2(map_size)
 	for p in places:
 		p["uv"] = Vector2(p["uv"]) - d
@@ -1459,10 +1536,62 @@ func _small(layer: PaintLayer, interp: int) -> Image:
 		small.convert(Image.FORMAT_R8)
 	return small
 
+## El relieve en pequeño (STATS_SIDE px), para las cifras y la miniatura. Se mantiene al día por zonas: antes se
+## reducía el relieve entero tras cada trazo y cada guardado (100 ms de tirón en un mapa de 4.096).
+var _stats_small: Image
+var _stats_rects: Array = []
+## Qué capas han cambiado desde el último guardado (solo esas se copian y se escriben).
+var _layer_dirty: Array = [true, true, true, true]
+
+func _all_dirty() -> void:
+	_layer_dirty = [true, true, true, true]
+	_stats_small = null
+	_stats_rects.clear()
+
+func _height_small() -> Image:
+	if height == null or height.mirror == null:
+		return null
+	var side_w: int = STATS_SIDE if map_size.x >= map_size.y else int(round(STATS_SIDE * float(map_size.x) / float(map_size.y)))
+	var side_h: int = STATS_SIDE if map_size.y >= map_size.x else int(round(STATS_SIDE * float(map_size.y) / float(map_size.x)))
+	side_w = maxi(side_w, 1)
+	side_h = maxi(side_h, 1)
+	var full: bool = _stats_small == null or _stats_small.get_size() != Vector2i(side_w, side_h)
+	var area_px: int = 0
+	for r in _stats_rects:
+		area_px += (r as Rect2i).get_area()
+	if full or area_px > map_size.x * map_size.y / 3:
+		_stats_small = _small(height, Image.INTERPOLATE_BILINEAR)
+		_stats_rects.clear()
+		return _stats_small
+	var fx: float = float(map_size.x) / float(side_w)
+	var fy: float = float(map_size.y) / float(side_h)
+	for r0 in _stats_rects:
+		var r: Rect2i = r0
+		var sx0: int = clampi(int(floor(r.position.x / fx)), 0, side_w - 1)
+		var sy0: int = clampi(int(floor(r.position.y / fy)), 0, side_h - 1)
+		var sx1: int = clampi(int(ceil(r.end.x / fx)), sx0 + 1, side_w)
+		var sy1: int = clampi(int(ceil(r.end.y / fy)), sy0 + 1, side_h)
+		var src := Rect2i(int(sx0 * fx), int(sy0 * fy), 0, 0)
+		src.end = Vector2i(mini(int(ceil(sx1 * fx)), map_size.x), mini(int(ceil(sy1 * fy)), map_size.y))
+		if src.size.x <= 0 or src.size.y <= 0:
+			continue
+		var reg: Image = height.mirror.get_region(src)
+		if reg.get_format() != Image.FORMAT_R8:
+			reg.convert(Image.FORMAT_RF)
+		reg.resize(sx1 - sx0, sy1 - sy0, Image.INTERPOLATE_BILINEAR)
+		if reg.get_format() != Image.FORMAT_R8:
+			reg.convert(Image.FORMAT_R8)
+		_stats_small.blit_rect(reg, Rect2i(Vector2i.ZERO, reg.get_size()), Vector2i(sx0, sy0))
+	_stats_rects.clear()
+	return _stats_small
+
 func _compute_stats() -> void:
 	if height == null or height.mirror == null:
 		return
-	var data: PackedByteArray = _small(height, Image.INTERPOLATE_BILINEAR).get_data()
+	var sm: Image = _height_small()
+	if sm == null:
+		return
+	var data: PackedByteArray = sm.get_data()
 	var threshold: int = int(round(sea_level * 255.0))
 	var land: int = 0
 	var top: int = 0

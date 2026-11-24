@@ -108,6 +108,11 @@ var cliff_steps: float = 7.0
 ## Fundido entre biomas, 0-1 (se guarda con el mapa). El radio en píxeles crece con el tamaño del mapa.
 var biome_blend: float = 0.5
 var blend_slider: HSlider
+var blend_vp: SubViewport
+var blend_rect: ColorRect
+var mat_blend: ShaderMaterial
+var _blend_queued: bool = false
+var _last_blend_ms: int = 0
 var place_size_box: VBoxContainer
 var place_size_slider: HSlider
 var place_size_val: Label
@@ -490,6 +495,21 @@ func _setup_materials() -> void:
 	mat_2d.shader = load("res://shaders/map_2d.gdshader")
 	mat_2d.set_shader_parameter("biome_pal", biome_pal_tex)
 	map_canvas.material = mat_2d
+	# El fundido entre biomas se precalcula aquí (ver _bake_blend).
+	blend_vp = SubViewport.new()
+	blend_vp.transparent_bg = true
+	blend_vp.disable_3d = true
+	blend_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	blend_vp.size = Vector2i(512, 512)
+	add_child(blend_vp)
+	blend_rect = ColorRect.new()
+	blend_rect.position = Vector2.ZERO
+	blend_rect.size = Vector2(512, 512)
+	mat_blend = ShaderMaterial.new()
+	mat_blend.shader = load("res://shaders/biome_blend.gdshader")
+	mat_blend.set_shader_parameter("biome_pal", biome_pal_tex)
+	blend_rect.material = mat_blend
+	blend_vp.add_child(blend_rect)
 
 	mat_3d = ShaderMaterial.new()
 	mat_3d.shader = load("res://shaders/terrain_3d.gdshader")
@@ -598,6 +618,8 @@ func _connect_signals() -> void:
 	engine.layer_changed.connect(func(layer_name: String):
 		if layer_name == "realm":
 			_places3d_dirty = true
+		if layer_name == "biome":
+			_queue_blend_bake()
 		if layer_name == "biome" or layer_name == "height":
 			_world3d_dirty = true
 			_places3d_dirty = true
@@ -716,6 +738,10 @@ func _on_stroke_moved(pos: Vector2, pressure: float) -> void:
 			var r: float = _tool_radius() if section == "relieve" else brush_radius * float(maxi(engine.map_size.x, engine.map_size.y)) / 1024.0
 			var s: float = _tool_strength(pressure)
 			engine.paint_uv(uv, r, s, cliff_steps)
+			# El fundido de biomas se recalcula mientras pintas (como mucho cada 0,1 s).
+			if section in ["biomas", "regiones"] and Time.get_ticks_msec() - _last_blend_ms > 100:
+				_last_blend_ms = Time.get_ticks_msec()
+				_queue_blend_bake()
 			var subtracts: bool = section == "relieve" and current_tool in ["sea", "river", "valley", "canyon"]
 			overlay.show_ring(pos, _brush_px_on_screen(r), subtracts)
 		"place":
@@ -1155,6 +1181,7 @@ func _apply_theme(idx: int) -> void:
 	var ink: Color = t["ink"]
 	mat_2d.set_shader_parameter("col_land_high", high)
 	mat_2d.set_shader_parameter("col_ink", ink)
+	_queue_blend_bake()
 	overlay.ink = ink
 	overlay.queue_redraw()
 	for i in theme_buttons.size():
@@ -2616,8 +2643,40 @@ func _view_extra() -> Dictionary:
 func _blend_px() -> float:
 	return biome_blend * 80.0 * float(maxi(engine.map_size.x, engine.map_size.y)) / 2048.0
 
+## Pinta (una vez) el fundido entre biomas en blend_vp: a 1/4 del mapa (como mucho 2.048 px); el mapa lo lee con una
+## muestra. Se pide al cambiar los biomas, el estilo, la paleta o el radio, y se hace al final del fotograma.
+func _queue_blend_bake() -> void:
+	if _blend_queued:
+		return
+	_blend_queued = true
+	_bake_blend.call_deferred()
+
+func _bake_blend() -> void:
+	_blend_queued = false
+	if engine == null or not engine.world_ready or blend_vp == null:
+		return
+	var px: float = _blend_px()
+	if px < 1.0:
+		mat_2d.set_shader_parameter("use_blend_tex", false)
+		return
+	var ms: Vector2i = engine.map_size
+	var sz := Vector2i(clampi(ms.x / 4, 64, 2048), clampi(ms.y / 4, 64, 2048))
+	if blend_vp.size != sz:
+		blend_vp.size = sz
+	blend_rect.size = Vector2(sz)
+	mat_blend.set_shader_parameter("biome_tex", engine.biome.get_texture())
+	mat_blend.set_shader_parameter("biome_pal", biome_pal_tex)
+	mat_blend.set_shader_parameter("tex_size", Vector2(ms))
+	mat_blend.set_shader_parameter("biome_blend", px)
+	for k in ["biome_desat", "biome_tint", "biome_tint_amt"]:
+		mat_blend.set_shader_parameter(k, mat_2d.get_shader_parameter(k))
+	blend_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	mat_2d.set_shader_parameter("blend_tex", blend_vp.get_texture())
+	mat_2d.set_shader_parameter("use_blend_tex", true)
+
 func _apply_blend() -> void:
 	var px: float = _blend_px()
+	_queue_blend_bake()
 	mat_2d.set_shader_parameter("biome_blend", px)
 	mat_3d.set_shader_parameter("biome_blend", px)
 	if vegetation != null:

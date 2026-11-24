@@ -49,7 +49,21 @@ static func size_name(kind: String, size: int) -> String:
 
 ## {buildings: [[tipo, Vector2 pos, giro, escala]], walls: {r, gates: [ángulos]} o {}, roads: [[Vector2...]],
 ##  plaza: radio, radius: radio total (para dejarlo sin árboles)}
+## Trazados ya hechos (son puros: mismo tipo, tamaño e id → mismo trazado). Los comparten el 3D, la máscara de
+## calles, los huecos sin árboles y el 2D.
+static var _cache: Dictionary = {}
+
 static func generate(kind: String, size: int, seed: int) -> Dictionary:
+	var key: String = "%s:%d:%d" % [kind, size, seed]
+	if _cache.has(key):
+		return _cache[key]
+	if _cache.size() > 256:
+		_cache.clear()
+	var plan: Dictionary = _generate(kind, size, seed)
+	_cache[key] = plan
+	return plan
+
+static func _generate(kind: String, size: int, seed: int) -> Dictionary:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed * 7919 + 17 + size * 131
 	var count: int = count_for(kind, size)
