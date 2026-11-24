@@ -273,6 +273,30 @@ class MotorTest {
         assertEquals(2, capa2.trazos.size)
         assertTrue(antes.sameAs(ed2.lienzo.recorta(android.graphics.Rect(0, 0, 512, 256))))
         assertTrue(cerca.sameAs(ed2.lienzo.nitidez.construye(capa2, 2, 2, 2)))
+        // Un mapa guardado con la 2.0–2.2 (todos los trazos en un archivo, sin origen ni rellenos) se abre igual
+        run {
+            val cd = File(m.dir, "capas/${capa2.info.id}")
+            val o = java.io.DataOutputStream(java.util.zip.DeflaterOutputStream(File(cd, "trazos.bin").outputStream()))
+            o.writeInt(Lienzo.FORMATO_2); o.writeLong(capa2.seq)
+            val fs = capa2.fondo.entries.toList(); o.writeInt(fs.size); for ((k, f) in fs) { o.writeLong(k); o.writeLong(f.desde) }
+            o.writeInt(capa2.trazos.size)
+            for (t in capa2.trazos) {
+                val b = java.io.ByteArrayOutputStream(); t.datos.escribe(java.io.DataOutputStream(b))
+                // (Lo que escribía la versión anterior: lo mismo sin los 17 bytes finales del origen y el relleno)
+                o.writeLong(t.seq); o.write(b.toByteArray(), 0, b.size() - 17)
+            }
+            o.close(); File(cd, "trazos").deleteRecursively()
+            val viejo = Editor(Biblioteca(bib.raiz).abre(m.id)!!, ctx.resources); espera(viejo.lienzo)
+            val cv = viejo.lienzo.capaActiva()!!
+            assertEquals(2, cv.trazos.size)
+            assertTrue(cerca.sameAs(viejo.lienzo.nitidez.construye(cv, 2, 2, 2)))
+            // Y al guardarlo queda ya en el formato nuevo, igual
+            cv.trazosSucios = true
+            val l2 = java.util.concurrent.CountDownLatch(1); viejo.lienzo.enHilo { viejo.lienzo.guarda(); l2.countDown() }; l2.await()
+            assertTrue(File(cd, "trazos/0.bin").exists())
+            val otra = Editor(Biblioteca(bib.raiz).abre(m.id)!!, ctx.resources); espera(otra.lienzo)
+            assertTrue(cerca.sameAs(otra.lienzo.nitidez.construye(otra.lienzo.capaActiva()!!, 2, 2, 2)))
+        }
         // Rellenar encima no estropea los trazos: el relleno se guarda como una forma más y las teselas siguen rehaciéndose de cerca
         ed2.lienzo.rellena(200, 200, 0xFF88AA55.toInt(), 1f)?.let { ed2.lienzo.apunta(it) }
         assertEquals(3, capa2.trazos.size); assertNotNull(capa2.trazos[2].datos.relleno)
