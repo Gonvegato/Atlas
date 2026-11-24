@@ -4,6 +4,36 @@ App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma fir
 Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
 etiqueta `v0.15.0`.
 
+## 2.0.0 — motor de dibujo propio
+
+- **Motor de pinceles nuevo, hecho para ATLAS** (se quita androidx.ink). Un trazo es una fila de estampas de la punta del
+  pincel (forma × grano, el modelo de Procreate), calculadas píxel a píxel con 16 bits de transparencia. Lo que se ve
+  mientras dibujas es exactamente lo que queda al soltar (es la misma pintura), y cada trazo se guarda como datos y se
+  vuelve a pintar al tamaño de la pantalla al acercarte: nítido a cualquier acercamiento (hasta 32×), con grano y todo, en
+  cualquier Android. Rellenar, difuminar o ajustar una zona deja solo esas teselas como píxeles (no toda la capa).
+- **56 pinceles de serie** en ocho categorías (Bocetos, Entintado, Pintura, Acuarela, Aerógrafo, Texturas, Cartografía y
+  **Sellos del mapa**: montañas, colinas, pinar, bosque, hierba, pantano, dunas, olas…). Estudio del pincel con todo:
+  dureza, flujo, espaciado, dispersión, estampas por punto, giro, acimut, volteo, grano (escala, profundidad, móvil),
+  bordes húmedos, mezcla con lo que hay (óleo), presión, inclinación, velocidad, azar de tamaño, opacidad y color, afilado.
+  Con el dedo (sin presión), los pinceles se afilan solos al empezar y al acabar.
+- **Formas rápidas**: deja el lápiz quieto al acabar un trazo y se convierte en recta, arco, línea quebrada, elipse,
+  círculo, triángulo, rectángulo o polígono; arrastra sin levantar para ajustarla.
+- **Selección** (a mano, rectángulo, elipse; sumar, restar, invertir): pintar, borrar, rellenar y ajustar solo dentro;
+  copiar o cortar a una capa; mover y transformar lo seleccionado.
+- **Capas**: máscara de recorte, 17 modos de fusión, bote de pintura y cuentagotas en la barra lateral.
+- **Ajustes** con vista al momento: tono/saturación/brillo, brillo y contraste, balance de color, mapa de degradado,
+  invertir, desenfoque gaussiano y de movimiento, enfocar, ruido y **licuar** (empujar, remolino, pellizcar, hinchar).
+- **Simetría** (espejo, cuatro, radial) al dibujar.
+- **Generar un continente** (Mundo): das el ancho y el alto en km y eliges el tipo (un continente, dos, archipiélago, mar
+  interior, costa); se ve en el lienzo antes de ponerlo. La costa queda como trazos de tinta en la capa de líneas (sirve
+  para rellenar y marcar territorios), con la tierra y el mar de color si quieres, y fija la escala del mapa si no la tenía.
+- **Pinceles .brush**: exportar los tuyos e importarlos en otro ATLAS idénticos. De los de Procreate se leen la punta, el
+  grano y los ajustes principales (su formato no está documentado: no salen idénticos). Los .brush exportados siguen la
+  estructura de Procreate, pero **no se ha podido comprobar que Procreate los abra**.
+- Los trazos guardados por la 1.3.0 como vectores (de otro motor) se quedan como píxeles: no se pierde nada dibujado.
+- Sin probar en un dispositivo real (aquí no hay emulador): la latencia del trazo y el rendimiento con pinceles muy
+  grandes están por medir en tu tableta.
+
 ## 1.3.0
 
 - **Trazos nítidos a cualquier acercamiento.** Antes, al levantar el lápiz el trazo pasaba a los píxeles de la capa y, de

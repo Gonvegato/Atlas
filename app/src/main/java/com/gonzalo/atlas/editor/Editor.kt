@@ -51,7 +51,7 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     var herramienta by mutableStateOf(Herramienta.PINCEL)
     var pincel by mutableStateOf("lapiz6b")
     /** El pincel de cada herramienta (como en Procreate: pintar, difuminar y borrar eligen pincel por separado). */
-    var goma by mutableStateOf("aeroduro")
+    var goma by mutableStateOf("tecnico")
     var pincelDifuminar by mutableStateOf("redondo")
     var tamanoDifuminar by mutableStateOf(40f)
     var fuerzaDifuminar by mutableStateOf(0.6f)

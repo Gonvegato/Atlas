@@ -33,9 +33,21 @@ class ProcreateTest {
         assertEquals("Tinta seca", def.nombre)
         assertTrue(com.gonzalo.atlas.lienzo.MuestrasPincel.de(def) != null)
         val d = Procreate.dir(dir).listFiles()!!.single()
+        val dirPrimero = d
         val j = JSONObject(File(d, "pincel.json").readText())
         assertEquals("Tinta seca", j.getString("n"))
-        assertEquals(0.25, j.getDouble("esp"), 1e-6)
+        assertEquals(0.5, j.getDouble("esp"), 1e-6) // el espaciado se guarda al cuadrado
+        // Exportar un pincel de ATLAS y volver a importarlo: vuelve idéntico (con su punta y su grano)
+        val orig = com.gonzalo.atlas.lienzo.Pinceles.def("carboncillo")
+        val archivo = Procreate.exporta(orig)
+        File(System.getProperty("capturas") ?: "build/capturas").let { it.mkdirs(); File(it, "Carboncillo.brush").writeBytes(archivo) }
+        val raiz = com.gonzalo.atlas.lienzo.Bplist.raizArchivo(java.util.zip.ZipInputStream(archivo.inputStream()).use { z -> generateSequence { z.nextEntry }.first { it.name == "Brush.archive" }; z.readBytes() })
+        assertEquals("Carboncillo", raiz["name"]); assertEquals(0.08 * 0.08, (raiz["plotSpacing"] as Number).toDouble(), 1e-6)
+        assertEquals(1, Procreate.importa(archivo, dir))
+        val vuelto = com.gonzalo.atlas.lienzo.Pinceles.defs().last { it.categoria == "Importados" }
+        assertEquals(orig.copy(id = vuelto.id, categoria = "Importados", forma = vuelto.forma, grano = vuelto.grano), vuelto)
+        assertTrue(vuelto.forma.endsWith(":forma") && vuelto.grano.endsWith(":grano"))
+        assertTrue(com.gonzalo.atlas.lienzo.MuestrasPincel.de(vuelto) != null)
         assertTrue(j.getBoolean("grano"))
         val forma = BitmapFactory.decodeFile(File(d, "forma.png").path)
         assertTrue("el centro de la punta pinta", Color.alpha(forma.getPixel(32, 32)) > 240)

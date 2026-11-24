@@ -288,12 +288,12 @@ private fun BibliotecaPinceles(e: EstadoApp, ed: Editor, abreEstudio: () -> Unit
                     style = O.texto(14.sp, O.TINTA))
             }
             Spacer(Modifier.height(8.dp))
-            Text("+ Importar de Procreate", Modifier.pulsableO { importar.launch(arrayOf("*/*")) }.padding(10.dp), style = O.texto(12.sp, O.ACENTO))
+            Text("+ Importar pinceles (.brush, .brushset)", Modifier.pulsableO { importar.launch(arrayOf("*/*")) }.padding(10.dp), style = O.texto(12.sp, O.ACENTO))
             if (msg.isNotBlank()) Text(msg, Modifier.padding(horizontal = 10.dp), style = O.texto(11.sp, O.GRIS))
         }
         Column(Modifier.weight(1f).padding(start = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             val lista = Pinceles.defs().filter { it.categoria == cat }
-            if (lista.isEmpty()) Text(if (cat == "Importados") "Importa tus .brush o .brushset de Procreate." else "Aún no hay.", style = O.texto(13.sp, O.GRIS))
+            if (lista.isEmpty()) Text(if (cat == "Importados") "Importa pinceles .brush o .brushset (los de Procreate o los exportados desde ATLAS). De los de Procreate se leen la punta, el grano y los ajustes principales; no salen idénticos." else "Aún no hay.", style = O.texto(13.sp, O.GRIS))
             for (d in lista) {
                 val sel = d.id == actual
                 val muestra by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, d.json().toString()) {
@@ -322,6 +322,14 @@ private fun EstudioPincel(ed: Editor, volver: () -> Unit) {
     val actual = when (ed.herramienta) { Herramienta.GOMA -> ed.goma; Herramienta.DIFUMINAR -> ed.pincelDifuminar; else -> ed.pincel }
     var d by remember(actual) { mutableStateOf(Pinceles.def(actual).copy()) }
     fun pon(n: com.gonzalo.atlas.lienzo.DefPincel) { d = n }
+    val exportar = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        val def = d
+        Thread {
+            val r = runCatching { ctx.contentResolver.openOutputStream(uri)!!.use { it.write(com.gonzalo.atlas.lienzo.Procreate.exporta(def)) } }
+            android.os.Handler(android.os.Looper.getMainLooper()).post { ed.aviso = if (r.isSuccess) "Pincel exportado" else "No se pudo exportar: ${r.exceptionOrNull()?.message}" }
+        }.start()
+    }
     val muestra by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, d) {
         kotlinx.coroutines.delay(120)
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.gonzalo.atlas.lienzo.MuestrasPincel.de(d, 460, 110) }
@@ -388,6 +396,7 @@ private fun EstudioPincel(ed: Editor, volver: () -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         BotonO("Hecho", lleno = true, color = O.ACENTO) { Pinceles.guarda(d); ed.eligePincel(d.id); volver() }
         BotonO("Duplicar") { val n = Pinceles.duplica(d); ed.eligePincel(n.id); volver() }
+        BotonO("Exportar") { exportar.launch(d.nombre.replace(Regex("[^\\p{L}\\p{N} _-]"), "").ifBlank { "Pincel" } + ".brush") }
         if (Pinceles.cambiado(d.id)) BotonO("Restablecer") { Pinceles.restablece(d.id); d = Pinceles.def(d.id).copy() }
         if (d.propio || d.categoria == "Importados") BotonO("Borrar", color = O.ROJO) { Pinceles.borra(d.id); ed.eligePincel("lapiz6b"); volver() }
     }

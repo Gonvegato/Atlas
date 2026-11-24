@@ -52,6 +52,54 @@ object Bplist {
         return obj(raiz)
     }
 
+    /**
+     * Escribe una lista de propiedades binaria. Valores: mapas (claves de texto), listas, textos, enteros, decimales,
+     * booleanos, [Uid] y bytes. Cada valor va como un objeto aparte (sin compartir repetidos).
+     */
+    fun escribe(raiz: Any?): ByteArray {
+        val objs = ArrayList<Any?>()
+        fun junta(v: Any?): Int {
+            val i = objs.size; objs += v
+            when (v) {
+                is Map<*, *> -> { val ks = v.keys.map { junta(it.toString()) }; val vs = v.values.map { junta(it) }; objs[i] = Triple('D', ks, vs) }
+                is List<*> -> objs[i] = Triple('A', v.map { junta(it) }, emptyList<Int>())
+            }
+            return i
+        }
+        junta(raiz)
+        val tamRef = if (objs.size < 256) 1 else 2
+        val o = java.io.ByteArrayOutputStream()
+        o.write("bplist00".toByteArray(Charsets.US_ASCII))
+        val offs = IntArray(objs.size)
+        fun entero(v: Long, n: Int) { for (k in n - 1 downTo 0) o.write(((v shr (8 * k)) and 0xff).toInt()) }
+        fun cabeza(tipo: Int, n: Int) { if (n < 15) o.write((tipo shl 4) or n) else { o.write((tipo shl 4) or 0xf); if (n < 256) { o.write(0x10); o.write(n) } else { o.write(0x11); entero(n.toLong(), 2) } } }
+        for ((i, v) in objs.withIndex()) {
+            offs[i] = o.size()
+            when (v) {
+                null -> o.write(0x00)
+                is Boolean -> o.write(if (v) 0x09 else 0x08)
+                is Int, is Long -> { val n = (v as Number).toLong(); if (n in 0..255) { o.write(0x10); o.write(n.toInt()) } else if (n in 0..65535) { o.write(0x11); entero(n, 2) } else if (n in 0..0xffffffffL) { o.write(0x12); entero(n, 4) } else { o.write(0x13); entero(n, 8) } }
+                is Float, is Double -> { o.write(0x23); entero(java.lang.Double.doubleToLongBits((v as Number).toDouble()), 8) }
+                is Uid -> { if (v.i < 256) { o.write(0x80); o.write(v.i) } else { o.write(0x81); entero(v.i.toLong(), 2) } }
+                is ByteArray -> { cabeza(0x4, v.size); o.write(v) }
+                is String -> if (v.all { it.code < 128 }) { cabeza(0x5, v.length); o.write(v.toByteArray(Charsets.US_ASCII)) } else { cabeza(0x6, v.length); o.write(v.toByteArray(Charsets.UTF_16BE)) }
+                is Triple<*, *, *> -> {
+                    @Suppress("UNCHECKED_CAST") val a = v.second as List<Int>; @Suppress("UNCHECKED_CAST") val b = v.third as List<Int>
+                    cabeza(if (v.first == 'D') 0xD else 0xA, a.size)
+                    for (r in a) entero(r.toLong(), tamRef); for (r in b) entero(r.toLong(), tamRef)
+                }
+                else -> o.write(0x00)
+            }
+        }
+        val tabla = o.size()
+        val tamOff = if (tabla < 65536) 2 else 4
+        for (x in offs) entero(x.toLong(), tamOff)
+        repeat(6) { o.write(0) }
+        o.write(tamOff); o.write(tamRef)
+        entero(objs.size.toLong(), 8); entero(0L, 8); entero(tabla.toLong(), 8)
+        return o.toByteArray()
+    }
+
     /** El objeto raíz de un NSKeyedArchiver, con sus valores ya resueltos (los Uid apuntan a $objects). */
     fun raizArchivo(b: ByteArray): Map<String, Any?> {
         val top = lee(b) as? Map<*, *> ?: return emptyMap()
@@ -94,14 +142,73 @@ object Procreate {
             val d = File(dir(recursos), id); d.mkdirs()
             (if (forma != null) aAlfa(forma, true) else puntoRedondo()).let { b -> File(d, "forma.png").outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) } }
             grano?.let { g -> aAlfa(g, false).let { b -> File(d, "grano.png").outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) } } }
-            val num = { k: String, def: Double -> (ajustes[k] as? Number)?.toDouble() ?: def }
             val nombre = (ajustes["name"] as? String)?.takeIf { it.isNotBlank() } ?: c.substringAfterLast('/').ifBlank { "Pincel de Procreate" }.removeSuffix(".brush")
-            JSONObject().put("n", nombre).put("esp", num("plotSpacing", 0.1)).put("tam", num("paintSize", 0.3)).put("tex", num("textureScale", 0.5))
-                .put("grano", grano != null).put("inv", false).let { File(d, "pincel.json").writeText(it.toString()) }
+            File(d, "pincel.json").writeText(ajustesAJson(ajustes, nombre, grano != null).toString())
             n++
         }
         if (n > 0) Pinceles.cargaImportados(recursos)
         return n
+    }
+
+    /**
+     * Los ajustes de un Brush.archive, traducidos a lo que guarda ATLAS de un pincel importado. Procreate no documenta su
+     * formato; los nombres de las claves son los que usan los lectores hechos por la comunidad, y de la mayoría solo se sabe
+     * que existen, no su escala exacta: se leen como fracciones (0 a 1) y se acotan. El espaciado se guarda al cuadrado.
+     * Si el pincel lo exportó ATLAS, trae sus ajustes exactos («atlasDef»).
+     */
+    fun ajustesAJson(a: Map<String, Any?>, nombre: String, conGrano: Boolean): JSONObject {
+        fun num(k: String): Double? = when (val v = a[k]) { is Number -> v.toDouble(); is Boolean -> if (v) 1.0 else 0.0; else -> null }
+        fun n(k: String, def: Double) = num(k) ?: def
+        val j = JSONObject().put("n", nombre).put("grano", conGrano).put("inv", false)
+        j.put("esp", Math.sqrt(n("plotSpacing", 0.01).coerceAtLeast(0.0))).put("tam", n("paintSize", 0.3)).put("tex", n("textureScale", 0.5))
+        j.put("disp", n("plotJitter", 0.0)).put("giro", n("shapeScatter", 0.0).coerceIn(0.0, 1.0))
+        j.put("sigue", Math.abs(n("shapeRotation", 0.0)) > 0.5).put("acimut", n("shapeAzimuth", 0.0) > 0.5).put("num", n("shapeCount", 1.0).toInt().coerceIn(1, 16))
+        j.put("pt", Math.abs(n("dynamicsPressureSize", 0.6)).coerceIn(0.0, 1.0)).put("po", Math.abs(n("dynamicsPressureOpacity", 0.0)).coerceIn(0.0, 1.0))
+        j.put("zt", Math.abs(n("dynamicsJitterSize", 0.0)).coerceIn(0.0, 1.0)).put("zo", Math.abs(n("dynamicsJitterOpacity", 0.0)).coerceIn(0.0, 1.0))
+        j.put("ai", n("taperStartLength", 0.0).coerceIn(0.0, 1.0) * 8.0).put("af", n("taperEndLength", 0.0).coerceIn(0.0, 1.0) * 8.0)
+        j.put("op", (num("maxOpacity") ?: n("paintOpacity", 1.0)).coerceIn(0.05, 1.0)).put("fl", (num("dynamicsGlazedFlow") ?: n("dynamicsGlazeFlow", 1.0)).coerceIn(0.05, 1.0))
+        j.put("pg", n("grainDepth", 1.0).coerceIn(0.0, 1.0)).put("gm", num("textureMovement")?.let { it < 0.5 } ?: false).put("est", n("plotSmoothing", 0.1).coerceIn(0.0, 1.0))
+        (a["atlasDef"] as? String)?.let { t -> runCatching { JSONObject(t) }.getOrNull()?.let { j.put("atlas", it) } }
+        return j
+    }
+
+    /**
+     * Exporta un pincel como archivo .brush (un zip con Brush.archive, Shape.png y Grain.png, como los de Procreate). Lleva
+     * dentro los ajustes exactos de ATLAS, así que otro ATLAS lo importa idéntico; para Procreate se escriben además las
+     * claves conocidas de su formato (sin poder garantizar que Procreate lo acepte: su formato no está documentado).
+     */
+    fun exporta(d: DefPincel): ByteArray {
+        val punta = Texturas.de(d.forma) ?: redonda(d.dureza)
+        val grano = Texturas.de(d.grano)
+        fun gris(t: Textura): ByteArray { val b = Bitmap.createBitmap(IntArray(t.lado * t.lado) { val v = t.a[it].toInt() and 255; Color.rgb(v, v, v) }, t.lado, t.lado, Bitmap.Config.ARGB_8888); return java.io.ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray() }
+        val raiz = LinkedHashMap<String, Any?>()
+        raiz["\$class"] = Bplist.Uid(3); raiz["name"] = Bplist.Uid(2); raiz["version"] = 2
+        raiz["paintSize"] = ((d.tamano - 4f) / 120f).coerceIn(0.01f, 1f).toDouble(); raiz["maxOpacity"] = d.opacidad.toDouble(); raiz["paintOpacity"] = d.opacidad.toDouble()
+        val esp = if (d.espaciado < 0.02f) 0.07 else d.espaciado.toDouble()
+        raiz["plotSpacing"] = esp * esp; raiz["plotJitter"] = d.dispersion.toDouble(); raiz["plotSmoothing"] = d.estabilizacion.toDouble()
+        raiz["shapeScatter"] = d.giroAzar.toDouble(); raiz["shapeRotation"] = if (d.sigueDireccion) 1.0 else 0.0; raiz["shapeAzimuth"] = d.acimut; raiz["shapeCount"] = d.numero
+        raiz["shapeFlipXJitter"] = d.volteo; raiz["shapeRoundness"] = d.achatado.toDouble()
+        raiz["dynamicsPressureSize"] = d.presionTamano.toDouble(); raiz["dynamicsPressureOpacity"] = d.presionOpacidad.toDouble()
+        raiz["dynamicsJitterSize"] = d.azarTamano.toDouble(); raiz["dynamicsJitterOpacity"] = d.azarOpacidad.toDouble(); raiz["dynamicsSpeedSize"] = d.velocidadTamano.toDouble()
+        raiz["dynamicsGlazedFlow"] = d.flujo.toDouble(); raiz["grainDepth"] = d.profGrano.toDouble(); raiz["textureScale"] = ((d.escalaGrano - 64f) / 448f).coerceIn(0f, 1f).toDouble()
+        raiz["textureMovement"] = if (d.granoMovil) 0.0 else 1.0
+        raiz["taperStartLength"] = (d.afiladoInicio / 8f).coerceIn(0f, 1f).toDouble(); raiz["taperEndLength"] = (d.afiladoFin / 8f).coerceIn(0f, 1f).toDouble()
+        raiz["atlasDef"] = Bplist.Uid(4)
+        val archivo = Bplist.escribe(linkedMapOf("\$version" to 100000, "\$archiver" to "NSKeyedArchiver", "\$top" to mapOf("root" to Bplist.Uid(1)),
+            "\$objects" to listOf("\$null", raiz, d.nombre, mapOf("\$classname" to "SilicaBrush", "\$classes" to listOf("SilicaBrush", "ValkyrieBrush", "NSObject")), d.json().toString())))
+        val o = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(o).use { z ->
+            fun pon(n: String, b: ByteArray) { z.putNextEntry(java.util.zip.ZipEntry(n)); z.write(b); z.closeEntry() }
+            pon("Brush.archive", archivo); pon("Shape.png", gris(punta)); if (grano != null) pon("Grain.png", gris(grano))
+            pon("QuickLook/Thumbnail.png", (MuestrasPincel.de(d, 600, 180) ?: Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)).let { b -> java.io.ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray() })
+        }
+        return o.toByteArray()
+    }
+
+    /** La punta redonda con su dureza, como textura (para exportarla). */
+    private fun redonda(dureza: Float): Textura {
+        val l = 256; val c = (l - 1) / 2f; val blando = (1f - dureza).coerceIn(0.02f, 1f)
+        return Textura(l, ByteArray(l * l) { i -> val r = kotlin.math.hypot(i % l - c, i / l - c) / c; val t = ((1f - r) / blando).coerceIn(0f, 1f); ((t * t * (3f - 2f * t)) * 255).toInt().toByte() })
     }
 
     /**
@@ -129,6 +236,10 @@ object Procreate {
     /** El pincel para uno importado: su punta como sello y, si tiene, su grano; con los ajustes que se han podido leer. */
     fun def(id: String, j: JSONObject, conGrano: Boolean): DefPincel {
         fun n(k: String, d: Double) = j.optDouble(k, d).toFloat()
+        // Exportado por ATLAS: sus ajustes exactos, con la punta y el grano que trae el archivo
+        j.optJSONObject("atlas")?.let { a -> runCatching { DefPincel.de(a) }.getOrNull()?.let { o ->
+            return o.copy(id = id, categoria = "Importados", forma = if (o.forma == "redonda" || o.forma == "plana") o.forma else "$id:forma", grano = if (o.grano.isBlank() || !conGrano) "" else "$id:grano", propio = false)
+        } }
         return DefPincel(id, j.optString("n", "Pincel"), "Importados", forma = "$id:forma", tamano = (4.0 + j.optDouble("tam", 0.3) * 120.0).toFloat(),
             opacidad = n("op", 1.0).coerceIn(0.05f, 1f), flujo = n("fl", 1.0).coerceIn(0.02f, 1f),
             presionTamano = n("pt", 0.6).coerceIn(0f, 1f), presionOpacidad = n("po", 0.0).coerceIn(0f, 1f),
