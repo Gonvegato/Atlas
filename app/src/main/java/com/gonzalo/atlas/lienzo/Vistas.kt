@@ -38,7 +38,12 @@ class VeloTerritorios(private val lz: Lienzo) {
         val m = lz.mapa
         val L = Lienzo.L
         val tinte = (m.tinteTerritorios.coerceIn(0f, 1f) * 255).toInt()
-        val col = IntArray(256) { id -> if (id == 0) 0 else m.colorDe(id) }
+        val ano = m.anoVista
+        val col = IntArray(256) { id -> if (id == 0) 0 else m.colorDe(id, ano) }
+        // En la línea del tiempo, lo ocupado va rayado: el color de quien lo ocupa y el de antes
+        val ocupado = BooleanArray(256) { id -> id != 0 && ano != null && m.ocupado(id, ano) }
+        val antes = IntArray(256) { id -> if (ocupado[id]) m.colorAntesDe(id, ano) else 0 }
+        val gx0 = Lienzo.tx(k) * L; val gy0 = Lienzo.ty(k) * L
         // Los vecinos de fuera de la tesela, para que el borde no se corte en las juntas
         fun v(x: Int, y: Int): Int {
             if (x in 0 until L && y in 0 until L) return a[y * L + x].toInt() and 255
@@ -48,7 +53,8 @@ class VeloTerritorios(private val lz: Lienzo) {
         for (y in 0 until L) for (x in 0 until L) {
             val id = a[y * L + x].toInt() and 255
             if (id == 0) continue
-            val c = col[id]
+            if (col[id] == 0) continue
+            val c = if (ocupado[id] && Math.floorMod((gx0 + x + gy0 + y) / 9, 2) == 0) antes[id] else col[id]
             val borde = v(x + 1, y) != id || v(x - 1, y) != id || v(x, y + 1) != id || v(x, y - 1) != id ||
                 v(x + 2, y) != id || v(x - 2, y) != id || v(x, y + 2) != id || v(x, y - 2) != id
             px[y * L + x] = if (borde) (0xE0 shl 24) or (oscuro(c) and 0xFFFFFF) else (tinte shl 24) or (c and 0xFFFFFF)

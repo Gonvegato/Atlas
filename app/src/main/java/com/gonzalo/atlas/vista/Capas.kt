@@ -265,7 +265,7 @@ class Capas(private val ctx: Context) {
 
     private fun nombreTerritorio(c: Canvas, mapa: Mapa, v: Vista, ce: Centro, sel: Any?) {
         val t = mapa.territorio(ce.id) ?: return
-        if (!t.verNombre) return
+        if (!t.verNombre || !mapa.existe(t.id)) return
         val lado = sqrt(ce.pixeles.toFloat())
         if (lado * v.zoom < 50f * dens && t !== sel) return
         val auto = (lado * v.zoom * when (ce.nivel) { 0 -> 0.11f; 1 -> 0.085f; else -> 0.07f }).coerceIn(10f * dens, when (ce.nivel) { 0 -> 46f; 1 -> 32f; else -> 22f } * dens)
@@ -332,7 +332,7 @@ class Capas(private val ctx: Context) {
     private fun entradasLeyenda(mapa: Mapa, superficies: LongArray): List<Pair<String, String>> {
         val l = mapa.leyenda
         val out = ArrayList<Pair<String, String>>()
-        if (l.territorios) for (t in mapa.territorios.filter { it.padre == 0 && superficies.getOrElse(it.id) { 0L } > 0 }) out += ("color:" + t.color) to t.nombre
+        if (l.territorios) for (t in mapa.territorios.filter { mapa.padreDe(it) == 0 && mapa.existe(it.id) && superficies.getOrElse(it.id) { 0L } > 0 }) out += ("color:" + t.color) to t.nombre
         if (l.lugares) for (tipo in mapa.lugares.map { it.tipo }.distinct()) out += tipo to com.gonzalo.atlas.motor.Catalogo.lugar(tipo).nombre
         for (e in l.extra) { val p = e.split('|', limit = 2); if (p.size == 2) out += p[0] to p[1] }
         return out

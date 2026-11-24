@@ -64,6 +64,28 @@ class CapaInfo(
     companion object { fun de(o: JSONObject) = CapaInfo(o.optString("id"), o.optString("n"), o.optBoolean("v", true), o.optDouble("o", 1.0).toFloat(), o.optString("f", "normal"), o.optBoolean("a"), o.optBoolean("r"), o.optBoolean("k"), o.optString("g"), o.optBoolean("m")) }
 }
 
+/**
+ * Un cambio de un territorio desde un año: pasa a depender de otro ([padre]; conquista, cesión, herencia), se hace
+ * independiente, aparece (antes no existía) o desaparece. [ocupado]: el cambio es una ocupación (se ve rayado con el color de
+ * antes). La línea del tiempo enseña el mapa de cada año con los cambios que llevan hasta él.
+ */
+class CambioTerritorio(val id: String, var territorio: Int, var ano: Int, var tipo: String = "pasa", var padre: Int = 0, var ocupado: Boolean = false, var nota: String = "") {
+    fun json() = JSONObject().put("id", id).put("t", territorio).put("a", ano).put("k", tipo).put("p", padre).put("o", ocupado).put("n", nota)
+    companion object {
+        fun de(o: JSONObject) = CambioTerritorio(o.optString("id"), o.optInt("t"), o.optInt("a"), o.optString("k", "pasa"), o.optInt("p"), o.optBoolean("o"), o.optString("n"))
+        val TIPOS = listOf("pasa" to "Pasa a ser de", "independiente" to "Se hace independiente", "aparece" to "Aparece (antes no existía)", "desaparece" to "Desaparece")
+        fun nombreTipo(k: String) = TIPOS.firstOrNull { it.first == k }?.second ?: k
+    }
+}
+
+/** El acabado de la costa: líneas de agua alrededor de la tierra y sombra en el litoral, hechas solas a partir de la costa. */
+class AcabadoCosta(var lineas: Int = 3, var separacionKm: Float = 0f, var apagado: Float = 0.6f, var sombra: Boolean = true, var color: Int = 0xFF567884.toInt()) {
+    fun json() = JSONObject().put("l", lineas).put("s", separacionKm.toDouble()).put("a", apagado.toDouble()).put("o", sombra).put("c", color)
+    companion object {
+        fun de(o: JSONObject?) = o?.let { AcabadoCosta(it.optInt("l", 3), it.optDouble("s", 0.0).toFloat(), it.optDouble("a", 0.6).toFloat(), it.optBoolean("o", true), it.optInt("c", 0xFF567884.toInt())) }
+    }
+}
+
 /** Un grupo de capas: se ve o se esconde entero, se pliega en la lista y se ordena junto. */
 class GrupoCapas(val id: String, var nombre: String, var visible: Boolean = true, var plegado: Boolean = false) {
     fun json() = JSONObject().put("id", id).put("n", nombre).put("v", visible).put("p", plegado)
@@ -241,6 +263,39 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
     val secciones = CopyOnWriteArrayList<Seccion>()
     /** Los grupos de capas (las capas dicen en cuál están). */
     val grupos = CopyOnWriteArrayList<GrupoCapas>()
+    /** Los cambios de los territorios con los años (la línea del tiempo). */
+    val cambios = CopyOnWriteArrayList<CambioTerritorio>()
+    /** El año que se está viendo en la línea del tiempo; null: el mapa tal como está dibujado (sin cambios). No se guarda. */
+    @Volatile var anoVista: Int? = null
+    /** El acabado de la costa puesto (null: ninguno). */
+    var acabadoCosta: AcabadoCosta? = null
+
+    /** Los cambios de [id] hasta el año [a], por orden. */
+    private fun cambiosHasta(id: Int, a: Int?): List<CambioTerritorio> { if (a == null) return emptyList(); return cambios.filter { it.territorio == id && it.ano <= a }.sortedBy { it.ano } }
+
+    /** De quién depende [t] en el año [a] (por omisión, el que se ve). */
+    fun padreDe(t: Territorio, a: Int? = anoVista): Int {
+        var p = t.padre
+        for (c in cambiosHasta(t.id, a)) when (c.tipo) { "pasa" -> p = c.padre; "independiente" -> p = 0 }
+        return p
+    }
+
+    /** Si [id] existe en el año [a] (los que tienen «aparece» no existen antes de ese año). */
+    fun existe(id: Int, a: Int? = anoVista): Boolean {
+        if (a == null) return true
+        var vive = cambios.none { it.territorio == id && it.tipo == "aparece" }
+        for (c in cambiosHasta(id, a)) when (c.tipo) { "aparece" -> vive = true; "desaparece" -> vive = false }
+        return vive
+    }
+
+    /** Si [id], en el año [a], está ocupado (el último cambio de manos fue una ocupación). */
+    fun ocupado(id: Int, a: Int? = anoVista): Boolean = cambiosHasta(id, a).lastOrNull { it.tipo == "pasa" || it.tipo == "independiente" }?.ocupado == true
+
+    /** El color que tenía [id] antes de su ocupación (para rayarlo), en el año [a]. */
+    fun colorAntesDe(id: Int, a: Int? = anoVista): Int {
+        val ult = cambiosHasta(id, a).lastOrNull { it.tipo == "pasa" || it.tipo == "independiente" } ?: return colorDe(id, a)
+        return colorDe(id, ult.ano - 1)
+    }
     /** Las tierras generadas en este mapa (para poder unirlas con las siguientes). */
     val tierras = CopyOnWriteArrayList<Tierra>()
     /** La sección en la que se dibuja (lo de fuera no se pinta); "" ninguna. */
@@ -260,20 +315,21 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
     fun nuevoId(prefijo: String) = prefijo + java.lang.Long.toString(System.nanoTime() xor (Math.random() * 1e15).toLong(), 36).takeLast(9)
 
     /** La cadena de un territorio hasta arriba (él, su padre, el padre de su padre…). */
-    fun linaje(id: Int): List<Territorio> {
+    fun linaje(id: Int, a: Int? = anoVista): List<Territorio> {
         val l = ArrayList<Territorio>(); var t = territorio(id); val vistos = HashSet<Int>()
-        while (t != null && vistos.add(t.id)) { l += t; t = if (t.padre != 0) territorio(t.padre) else null }
+        while (t != null && vistos.add(t.id)) { l += t; val p = padreDe(t, a); t = if (p != 0) territorio(p) else null }
         return l
     }
 
     /** El territorio que da el color a [id] según [colorPorNivel]. */
-    fun colorDe(id: Int): Int {
-        val l = linaje(id); if (l.isEmpty()) return 0
+    fun colorDe(id: Int, a: Int? = anoVista): Int {
+        if (!existe(id, a)) return 0
+        val l = linaje(id, a); if (l.isEmpty()) return 0
         return when (colorPorNivel) { 0 -> l.last().color; 1 -> l.getOrElse(l.size - 2) { l.last() }.color; else -> l.first().color }
     }
 
     /** Los hijos directos de un territorio (0: los de arriba del todo). */
-    fun hijos(id: Int) = territorios.filter { it.padre == id && it.id != id }
+    fun hijos(id: Int) = territorios.filter { padreDe(it) == id && it.id != id && existe(it.id) }
 
     fun vectorJson(): JSONObject = JSONObject()
         .put("territorios", JSONArray().also { a -> territorios.forEach { a.put(it.json()) } })
@@ -286,6 +342,8 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         .put("secciones", JSONArray().also { a -> secciones.forEach { a.put(it.json()) } }).put("seccionActiva", seccionActiva)
         .put("capas", JSONArray().also { a -> capas.forEach { a.put(it.json()) } })
         .put("grupos", JSONArray().also { a -> grupos.forEach { a.put(it.json()) } })
+        .put("cambios", JSONArray().also { a -> cambios.forEach { a.put(it.json()) } })
+        .put("costa", acabadoCosta?.json() ?: JSONObject.NULL)
         .put("tierras", JSONArray().also { a -> tierras.forEach { a.put(it.json()) } })
 
     fun ponVector(o: JSONObject) {
@@ -303,6 +361,8 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         seccionActiva = o.optString("seccionActiva")
         if (o.has("capas")) lista("capas", capas, CapaInfo::de)
         lista("grupos", grupos, GrupoCapas::de)
+        lista("cambios", cambios, CambioTerritorio::de)
+        acabadoCosta = AcabadoCosta.de(o.optJSONObject("costa"))
         lista("tierras", tierras, Tierra::de)
     }
 

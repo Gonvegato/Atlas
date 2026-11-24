@@ -119,6 +119,14 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
                 EtiquetaO("← Volver a $anterior", tam = 12.sp)
             }
         }
+        // Viendo un año de la línea del tiempo: que se sepa (y volver al mapa tal cual de un toque)
+        @Suppress("UNUSED_VARIABLE") val alDiaAno = ed.cambios
+        ed.mapa.anoVista?.let { a ->
+            Row(Modifier.align(Alignment.BottomCenter).padding(bottom = if (!taller && e.pila.isNotEmpty()) 70.dp else 18.dp).clip(RoundedCornerShape(20.dp)).background(O.BLOQUE2), verticalAlignment = Alignment.CenterVertically) {
+                Text("AÑO $a", Modifier.pulsableO { panel = "tiempo" }.padding(start = 16.dp, end = 10.dp, top = 10.dp, bottom = 10.dp), style = O.titular(14.sp, O.TINTA))
+                Text("✕ Sin año", Modifier.pulsableO { verAno(ed, mesa, null) }.padding(end = 16.dp, top = 10.dp, bottom = 10.dp), style = O.texto(12.sp, O.TINTA))
+            }
+        }
         if (ed.aviso.isNotBlank() || ed.ocupado) {
             Box(Modifier.align(Alignment.TopCenter).padding(top = 100.dp).clip(RoundedCornerShape(20.dp)).background(O.CABECERA.copy(alpha = 0.92f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Text(if (ed.ocupado) "Un momento…" else ed.aviso, style = O.texto(13.sp, O.TINTA))
@@ -171,6 +179,9 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
                         "dibujos" -> PanelDibujos(e, ed)
                         "calco" -> PanelCalco(e, ed, mesa)
                         "secciones" -> PanelSecciones(ed, mesa)
+                        "costa" -> PanelCosta(ed)
+                        "viajes" -> PanelViajes(e, ed)
+                        "tiempo" -> PanelTiempo(e, ed, mesa)
                         "sel" -> PanelSeleccion(e, ed, mesa)
                     }
                 }
@@ -182,7 +193,8 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
 private val titulos = mapOf("pinceles" to "Biblioteca de pinceles", "estudio" to "Estudio del pincel", "color" to "Color", "capas" to "Capas",
     "acciones" to "Acciones", "ajustes" to "Ajustes", "transformar" to "Transformar", "mundo" to "Mundo", "territorios" to "Territorios",
     "lugares" to "Lugares", "rutas" to "Rutas", "dibujos" to "Tus dibujos", "calco" to "Imagen para calcar", "secciones" to "Secciones del terreno", "sel" to "Lo elegido",
-    "marco" to "Selección", "licuar" to "Licuar", "continente" to "Generar un continente", "tierras" to "Tierras generadas", "consulta" to "Política del mundo")
+    "marco" to "Selección", "licuar" to "Licuar", "continente" to "Generar un continente", "tierras" to "Tierras generadas", "consulta" to "Política del mundo",
+    "costa" to "Acabado de la costa", "viajes" to "Viajes", "tiempo" to "Línea del tiempo")
 
 private fun nuevaCapa(ed: Editor) {
     val lz = ed.lienzo
@@ -746,6 +758,14 @@ private fun PanelMundo(ed: Editor, abre: (String) -> Unit) {
         Column { Text("Generar un continente", style = O.texto(15.sp, O.TINTA)); Text("Das el tamaño total en km y la costa se dibuja sola", style = O.texto(12.sp, O.TINTA)) }
     }
     F(Herramienta.TIERRA, "Tierras generadas", "Mover, juntar, separar o borrar los continentes generados", "tierras")
+    @Composable fun P(t: String, d: String, panel: String) {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(O.CRUDO).pulsableO { abre(panel) }.padding(12.dp)) {
+            Column { Text(t, style = O.texto(15.sp, O.TINTA)); Text(d, style = O.texto(12.sp, O.GRIS)) }
+        }
+    }
+    P("Acabado de la costa", "Líneas de agua y sombra del litoral alrededor de las tierras generadas", "costa")
+    P("Línea del tiempo", "Las fronteras de cada año: conquistas, independencias, guerras", "tiempo")
+    P("Viajes", "Cuánto se recorre en un día: los días de viaje de cada ruta", "viajes")
     F(Herramienta.SECCION, "Secciones del terreno", "Marcos con su tamaño en km: dibujas solo dentro", "secciones")
     F(Herramienta.TERRITORIO, "Territorios", "Imperios, reinos, provincias: toca dentro de tus fronteras", "territorios")
     F(Herramienta.LUGAR, "Lugares", "Ciudades, castillos, templos… con su mapa propio", "lugares")
@@ -864,7 +884,7 @@ private fun PanelSeleccion(e: EstadoApp, ed: Editor, mesa: Mesa) {
         is Territorio -> EditaTerritorio(e, ed, s)
         is Lugar -> EditaLugar(e, ed, s)
         is Rotulo -> EditaRotulo(ed, s)
-        is Linea -> EditaRuta(ed, s)
+        is Linea -> EditaRuta(e, ed, s)
         is Sello -> EditaSello(ed, s)
         is Leyenda -> { Text("La leyenda: arrástrala con «Elegir» para moverla; su contenido, en «Más».", style = O.texto(13.sp)); BotonO("Quitar la leyenda", color = O.ROJO) { ed.borraSeleccion() } }
         else -> Text("Toca algo del mapa con «Elegir» (un lugar, un rótulo, una ruta, un nombre, uno de tus dibujos) para cambiarlo.", style = O.texto(13.sp, O.GRIS))
@@ -946,13 +966,14 @@ private fun EditaRotulo(ed: Editor, r: Rotulo) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun EditaRuta(ed: Editor, l: Linea) {
+private fun EditaRuta(e: EstadoApp, ed: Editor, l: Linea) {
     CampoVector(ed, l.nombre, "Nombre (opcional)") { l.nombre = it }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         for (t in Catalogo.RUTAS) FichaO(t.nombre, l.tipo == t.clave) { ed.cambiaVector("Ruta") { l.tipo = t.clave } }
     }
     var largo = 0.0; for (i in 1 until l.n) largo += kotlin.math.hypot((l.xs[i] - l.xs[i - 1]).toDouble(), (l.ys[i] - l.ys[i - 1]).toDouble())
     Text("Largo: " + Medidas.formatoKm(largo * ed.mapa.kmPorPx), style = O.titular(18.sp))
+    TiemposRuta(e, ed, l, largo * ed.mapa.kmPorPx)
     BotonO("Borrar", color = O.ROJO) { ed.borraSeleccion() }
 }
 

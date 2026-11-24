@@ -55,6 +55,8 @@ object Nube {
         campos["obra"] = m.obras.firstOrNull() ?: ""
         campos["obras"] = m.obras.joinToString(",")
         campos["mundo"] = m.mundo
+        // De qué es (mundo, continente, región, ciudad, lugar, otro): el visor de la familia lo pone en su ficha
+        campos["k"] = m.tipo
         val l = ed.lienzo.limites()
         val w = l.width().toFloat(); val h = l.height().toFloat()
         campos["w"] = l.width(); campos["h"] = l.height()

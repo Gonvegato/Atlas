@@ -24,12 +24,18 @@ class Cronica(private val archivo: File) {
     val entradas = LinkedHashMap<String, Entrada>()
     /** La situación política del mundo, contada de una vez (quién manda, quién amenaza a quién). */
     var situacion = ""
+    /** Lo que se recorre en un día (km), por cómo se viaja: para los tiempos de viaje de las rutas. */
+    val velocidades = LinkedHashMap(VELOCIDADES)
+    /** El año «de ahora» en el mundo (el de la novela), para ir a él en la línea del tiempo; null: sin decir. */
+    var anoActual: Int? = null
 
     init { lee() }
 
     private fun lee() {
         val o = runCatching { JSONObject(archivo.readText()) }.getOrNull() ?: return
         situacion = o.optString("situacion")
+        o.optJSONObject("vel")?.let { v -> for (k in v.keys()) v.optDouble(k).takeIf { it > 0 }?.let { velocidades[k] = it } }
+        anoActual = if (o.has("ano")) o.optInt("ano") else null
         val e = o.optJSONObject("entradas") ?: return
         for (k in e.keys()) {
             val j = e.getJSONObject(k)
@@ -45,7 +51,8 @@ class Cronica(private val archivo: File) {
         for ((k, v) in entradas) e.put(k, JSONObject().put("cat", v.cat).put("titulo", v.titulo).put("campos", JSONObject(v.campos as Map<*, *>))
             .put("texto", v.texto).put("enlace", v.enlace).put("u", v.u).put("mas", org.json.JSONArray(v.mas)))
         archivo.parentFile?.mkdirs()
-        val tmp = File(archivo.path + ".tmp"); tmp.writeText(JSONObject().put("v", 1).put("situacion", situacion).put("entradas", e).toString())
+        val tmp = File(archivo.path + ".tmp"); tmp.writeText(JSONObject().put("v", 1).put("situacion", situacion).put("entradas", e)
+            .put("vel", JSONObject(velocidades as Map<*, *>)).also { o -> anoActual?.let { o.put("ano", it) } }.toString())
         if (!tmp.renameTo(archivo)) { archivo.delete(); tmp.renameTo(archivo) }
     }
 
@@ -106,7 +113,28 @@ class Cronica(private val archivo: File) {
         /** Para resumir en una línea («Vasallos: X, Y»). */
         val RESUMEN = listOf("guerra" to "En guerra con", "enemigo" to "Enemigos", "aliado" to "Aliados", "senor" to "Su señor", "vasallo" to "Vasallos", "comercio" to "Comercia con", "tregua" to "En tregua con")
         val ESTADOS_GUERRA = listOf("Se avecina", "En curso", "En tregua", "Terminada")
+        /** Lo que se recorre en un día por tierra (por calzada) o por mar, de serie (km). */
+        val VELOCIDADES = linkedMapOf("pie" to 27.0, "caballo" to 55.0, "carro" to 36.0, "barco" to 150.0)
+        val MODOS = listOf("pie" to "A pie", "caballo" to "A caballo", "carro" to "En carro", "barco" to "En barco")
+        /** Cuánto cunde el día según el camino (la calzada es la referencia). */
+        fun factorRuta(tipo: String) = when (tipo) { "calzada" -> 1.0; "camino", "viaje" -> 0.85; "sendero" -> 0.65; else -> 1.0 }
+        /** El primer año que se lee en un texto («340», «año 340 de la Segunda Era», «-12»); null si no hay. */
+        fun ano(s: String?): Int? = s?.let { Regex("-?\\d{1,6}").find(it)?.value?.toIntOrNull() }
     }
+
+    /**
+     * Los días de viaje de una ruta de [km] de tipo [tipo]: por tierra, a pie, a caballo y en carro (según el camino); por mar,
+     * en barco. Las fronteras no se viajan (lista vacía).
+     */
+    fun tiempos(km: Double, tipo: String): List<Pair<String, Double>> = when (tipo) {
+        "frontera" -> emptyList()
+        "maritima" -> listOf("barco" to km / (velocidades["barco"] ?: 150.0))
+        else -> listOf("pie", "caballo", "carro").map { it to km / ((velocidades[it] ?: VELOCIDADES[it]!!) * factorRuta(tipo)) }
+    }
+
+    /** Los años de las guerras (empieza, termina) para la línea del tiempo. */
+    fun anosDeGuerras(): List<Triple<Entrada, Int?, Int?>> = de("guerra").map { Triple(it, ano(it.campos["Empieza"]), ano(it.campos["Termina"])) }
+
 }
 
 /** Cuentas: superficies y formato de distancias. */

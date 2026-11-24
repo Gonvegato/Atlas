@@ -308,6 +308,11 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
             }
             lienzo.ponTrazos(costa, trazos, "Costa")
         }
+        // El acabado de la costa (líneas de agua y sombra del litoral), si está puesto
+        val viejaAcabado = lienzo.capa(CAPA_ACABADO)
+        val acabado = mapa.acabadoCosta?.takeIf { ts.isNotEmpty() && (it.lineas > 0 || it.sombra) }?.let { a ->
+            com.gonzalo.atlas.lienzo.CapaPx(viejaAcabado?.info ?: CapaInfo(CAPA_ACABADO, "Acabado de la costa (generado)")).also { pintaAcabado(it, a, rs) }
+        }
         // Las capas nuevas, en el sitio de las viejas
         synchronized(lienzo.cierre) {
             fun pon(vieja: com.gonzalo.atlas.lienzo.CapaPx?, nueva: com.gonzalo.atlas.lienzo.CapaPx?, donde: () -> Int) {
@@ -321,10 +326,61 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
                 else if (nueva != null) lienzo.capas.add(donde().coerceIn(0, lienzo.capas.size), nueva)
             }
             pon(viejaColor, color) { 0 }
+            pon(viejaAcabado, acabado) { lienzo.capas.indexOfFirst { it.info.id == CAPA_TIERRA } + 1 }
             pon(viejaCosta, costa) { lienzo.capas.indexOfFirst { it.info.referencia }.let { if (it < 0) lienzo.capas.size else it } }
             if (lienzo.capa(lienzo.activa) == null) lienzo.activa = lienzo.capas.lastOrNull { !it.info.referencia && it.info.id != CAPA_TIERRA }?.info?.id ?: lienzo.capas.lastOrNull()?.info?.id.orEmpty()
         }
     }
+
+    /**
+     * El acabado de la costa en [capa]: alrededor de cada costa generada, [AcabadoCosta.lineas] líneas de agua cada vez más
+     * lejos (y más apagadas) y, si se pide, una sombra suave en el mar pegada a la costa. Nada queda sobre la tierra.
+     */
+    private fun pintaAcabado(capa: com.gonzalo.atlas.lienzo.CapaPx, a: com.gonzalo.atlas.motor.AcabadoCosta, rs: List<Relieve>) {
+        val L = Lienzo.L
+        val lineas = rs.flatMap { r -> r.costas().map { (l, cerrada) -> android.graphics.Path().apply { moveTo(l[0], l[1]); var i = 2; while (i < l.size) { lineTo(l[i], l[i + 1]); i += 2 }; if (cerrada) close() } } }
+        if (lineas.isEmpty()) return
+        val grosor = rs.maxOf { it.grosor } * 0.7f
+        // La separación: la pedida en km o, si no, una que se vea bien con el tamaño de las tierras
+        val sep = if (a.separacionKm > 0f) (a.separacionKm / mapa.kmPorPx).coerceAtLeast(grosor * 2.5f) else (rs.maxOf { max(it.rect.width(), it.rect.height()) } / 90f).coerceAtLeast(grosor * 3f)
+        val n = a.lineas.coerceIn(0, 8)
+        val margen = sep * (n + 1) + grosor * 4
+        val claves = HashSet<Long>()
+        for (r in rs) for (ty in Math.floorDiv(kotlin.math.floor(r.rect.top - margen).toInt(), L)..Math.floorDiv(kotlin.math.ceil(r.rect.bottom + margen).toInt(), L))
+            for (tx in Math.floorDiv(kotlin.math.floor(r.rect.left - margen).toInt(), L)..Math.floorDiv(kotlin.math.ceil(r.rect.right + margen).toInt(), L)) if (lienzo.dentro(tx, ty)) claves += Lienzo.clave(tx, ty)
+        val pTinta = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { style = android.graphics.Paint.Style.STROKE; strokeJoin = android.graphics.Paint.Join.ROUND; strokeCap = android.graphics.Paint.Cap.ROUND }
+        val pHueco = android.graphics.Paint(pTinta).apply { xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR) }
+        val pSombra = android.graphics.Paint(pTinta).apply { maskFilter = android.graphics.BlurMaskFilter(sep * 0.6f, android.graphics.BlurMaskFilter.Blur.NORMAL) }
+        for (k in claves) {
+            val tx = Lienzo.tx(k); val ty = Lienzo.ty(k)
+            val b = Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
+            val cv = android.graphics.Canvas(b); cv.translate(-tx * L.toFloat(), -ty * L.toFloat())
+            // De la más lejana a la más cercana: el anillo entero y luego se vacía por dentro, dejando la línea
+            for (i in n downTo 1) {
+                val d = sep * i
+                val alfa = if (n <= 1) 1f else 1f - a.apagado.coerceIn(0f, 1f) * (i - 1) / (n - 1)
+                pTinta.color = a.color; pTinta.alpha = (alfa * 255 * (android.graphics.Color.alpha(a.color) / 255f)).toInt(); pTinta.strokeWidth = 2 * d + grosor
+                for (p in lineas) cv.drawPath(p, pTinta)
+                pHueco.strokeWidth = 2 * d - grosor
+                for (p in lineas) cv.drawPath(p, pHueco)
+            }
+            // La sombra del litoral: un velo del color de las líneas pegado a la costa
+            if (a.sombra) { pSombra.color = a.color; pSombra.alpha = 70; pSombra.strokeWidth = sep * 1.4f; for (p in lineas) cv.drawPath(p, pSombra) }
+            // Nada sobre la tierra
+            val px = IntArray(L * L); b.getPixels(px, 0, L, 0, 0, L, L)
+            var algo = false
+            for (j in 0 until L) for (i in 0 until L) {
+                val o = j * L + i
+                if (px[o] ushr 24 == 0) continue
+                val x = tx * L + i + 0.5f; val y = ty * L + j + 0.5f
+                if (rs.any { it.en(x, y) > 0f }) px[o] = 0 else algo = true
+            }
+            if (algo) capa.teselas[k] = Bitmap.createBitmap(px, L, L, Bitmap.Config.ARGB_8888)
+        }
+    }
+
+    /** Pone (o quita, con null) el acabado de la costa de las tierras generadas, y lo apunta para deshacer. */
+    fun ponAcabadoCosta(a: com.gonzalo.atlas.motor.AcabadoCosta?) = cambiaTierras(if (a == null) "Quitar el acabado de la costa" else "Acabado de la costa", null) { mapa.acabadoCosta = a }
 
     /** Cambia las tierras generadas con [f] (añadir, mover, borrar…), las vuelve a dibujar y lo apunta todo para deshacerlo de una vez. */
     private fun cambiaTierras(nombre: String, dicho: String?, f: () -> Unit) = trabajo("Dibujando las tierras…") {
@@ -739,6 +795,7 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
         /** Las capas de las tierras generadas (las crea y las redibuja la app). */
         const val CAPA_TIERRA = "tierras_color"
         const val CAPA_COSTA = "tierras_costa"
+        const val CAPA_ACABADO = "tierras_acabado"
         /** Una imagen pequeña de la forma de tierra (para elegirla antes de ponerla). */
         fun imagenContinente(p: com.gonzalo.atlas.motor.FormaTierra, w: Int, h: Int, tierra: Int, mar: Int, tinta: Int): Bitmap {
             val a = com.gonzalo.atlas.motor.Continente.campo(p, w, h)
