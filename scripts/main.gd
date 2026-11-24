@@ -25,7 +25,7 @@ const Labels3D = preload("res://scripts/ui/labels_3d.gd")
 @onready var cam_pivot: Node3D = $Workspace/View3DContainer/SubViewport3D/CameraPivot
 @onready var cam_3d: Camera3D = $Workspace/View3DContainer/SubViewport3D/CameraPivot/Camera3D
 
-const SECTIONS = [["relieve", "RELIEVE"], ["biomas", "BIOMAS"], ["regiones", "REGIONES"], ["politico", "POLÍTICO"], ["lugares", "LUGARES"], ["viajes", "VIAJES"], ["mundo", "MUNDO"]]
+const SECTIONS = [["portada", "PORTADA"], ["relieve", "RELIEVE"], ["biomas", "BIOMAS"], ["regiones", "REGIONES"], ["politico", "POLÍTICO"], ["lugares", "LUGARES"], ["viajes", "VIAJES"], ["mundo", "MUNDO"]]
 ## [id, nombre, velocidad relativa a ir a pie]
 const TRAVEL_MODES = [["pie", "A PIE", 1.0], ["caballo", "A CABALLO", 2.0], ["carro", "EN CARRO", 1.4], ["barco", "EN BARCO", 2.5]]
 
@@ -282,7 +282,7 @@ func _ready() -> void:
 	_update_3d_camera()
 	_select_tool(current_tool)
 	_select_biome(current_biome)
-	_select_section("relieve")
+	_select_section("portada")
 	_set_draw_mode("pincel")
 	# El 3D a la resolución real de la pantalla (no a la lógica de 1280×800), con MSAA 4×.
 	view_3d_container.stretch = false
@@ -525,6 +525,8 @@ func _on_layers_ready(size: Vector2i) -> void:
 		m.set_shader_parameter("biome_tex", engine.biome.get_texture())
 		m.set_shader_parameter("realm_tex", engine.realm.get_texture())
 	mat_2d.set_shader_parameter("area_tex", engine.area.get_texture())
+	if section == "portada":
+		_refresh_portada.call_deferred()
 	if map_frame != null:
 		# En un mundo infinito no hay marco: el mapa no acaba.
 		map_frame.visible = not engine.infinite
@@ -982,6 +984,12 @@ func _apply_2d_transform() -> void:
 		mat_2d.set_shader_parameter("symbol_cell", clampf(cell * 1.6, 8.0, 96.0))
 
 var _recenter_timer: Timer
+var portada_page: Panel
+var portada_box: GridContainer
+var _portada_key: String = ""
+var _portada_tex: ImageTexture
+## Mapa con el que se va a unir y lado, mientras se elige.
+var _join_open: String = ""
 var grid_btn: Button
 var lbl_realm_extent: Label
 var map_km_edit: LineEdit
@@ -1058,6 +1066,8 @@ func _fit_shadows() -> void:
 	sun_light.shadow_blur = 1.0
 
 func _toggle_3d() -> void:
+	if section == "portada":
+		_select_section("relieve")
 	input_ctrl.is_3d_mode = not input_ctrl.is_3d_mode
 	var in_3d: bool = input_ctrl.is_3d_mode
 	view_3d_container.visible = in_3d
@@ -1262,7 +1272,10 @@ func _cardinal(deg: float) -> String:
 	return names[i]
 
 ## Un mundo nuevo con el tamaño y la forma elegidos en Mundo (o los actuales).
-func _new_world() -> void:
+func _new_world(keep_world: bool = false) -> void:
+	var prev_world: String = engine.world_id
+	var prev_world_name: String = engine.world_name
+	var prev_obras: Array = engine.map_obras.duplicate()
 	var long_side: int = SIZES[new_size_idx][1]
 	var inf: bool = long_side == 0
 	if inf:
@@ -1279,7 +1292,15 @@ func _new_world() -> void:
 	route_pts.clear()
 	await engine.save_map(_view_extra())
 	await engine.create_world(size, s, 1 if new_mode == 2 else new_mode, inf)
-	if new_obra != "":
+	if keep_world:
+		# Un mapa más del mismo mundo (con sus escritos).
+		engine.world_id = prev_world
+		engine.world_name = prev_world_name
+		engine.map_name = "%s · mapa %d" % [prev_world_name, _world_map_count(prev_world) + 1]
+		engine.map_obras = prev_obras
+		engine.map_obra = str(prev_obras[0]) if not prev_obras.is_empty() else ""
+		lbl_world.text = engine.map_name.to_upper()
+	elif new_obra != "":
 		_set_obra(new_obra, false)
 	map_name_edit.text = engine.map_name
 	_refresh_route()
@@ -1312,6 +1333,10 @@ func _confirm(key: String, b: Button, text_ready: String, action: Callable) -> v
 
 func _select_section(id: String) -> void:
 	section = id
+	if portada_page != null:
+		portada_page.visible = id == "portada"
+		if id == "portada":
+			_refresh_portada()
 	for k in tab_buttons.keys():
 		_paint_tab(tab_buttons[k], str(k) == id)
 	for k in sections_ui.keys():
@@ -1672,6 +1697,7 @@ func _build_ui() -> void:
 	_build_tabs()
 	_build_panel()
 	_build_map_frame()
+	_build_portada()
 
 	overlay = MapOverlay.new()
 	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -2796,6 +2822,8 @@ func _on_map_loaded() -> void:
 	# Abrir no es un cambio: sin autoguardado.
 	autosave_timer.stop()
 	lbl_save_state.text = "ABIERTO"
+	if section == "portada":
+		_refresh_portada.call_deferred()
 
 func _set_sea_level(x: float) -> void:
 	sea_level = x
@@ -2842,8 +2870,7 @@ func _set_obra(id: String, save: bool = true) -> void:
 ## La lámina: el mapa 2D entero con sus rótulos, a 3.072 px de lado mayor, para el visor de solo lectura de los
 ## escritos (Cobalto, Seshat…). Se dibuja aparte (un SubViewport con el mismo material y una capa de rótulos propia)
 ## y se devuelve la imagen.
-func _render_lamina() -> Image:
-	var long_side: int = 3072
+func _render_lamina(long_side: int = 3072) -> Image:
 	var ms := Vector2(engine.map_size)
 	var sz := Vector2i(long_side, int(round(long_side * ms.y / ms.x))) if ms.x >= ms.y else Vector2i(int(round(long_side * ms.x / ms.y)), long_side)
 	var vp := SubViewport.new()
@@ -3361,3 +3388,241 @@ func _slider_row(parent: Control, label: String, min_v: float, max_v: float, ste
 	s.value_changed.connect(on_change)
 	box.add_child(s)
 	return val
+
+
+# ================================================================ portada
+
+## La portada (como la de las hermanas): el mapa en el que trabajas en grande con su botón para seguir, los demás
+## mapas de su mundo (abrir, unir, uno nuevo) y los otros mundos.
+func _build_portada() -> void:
+	portada_page = Panel.new()
+	portada_page.add_theme_stylebox_override("panel", Estilo.caja(Estilo.PAPEL))
+	portada_page.set_anchors_preset(Control.PRESET_FULL_RECT)
+	portada_page.offset_top = HEADER_H + TABS_H
+	portada_page.mouse_filter = Control.MOUSE_FILTER_STOP
+	portada_page.visible = false
+	add_child(portada_page)
+	var scroll := ScrollContainer.new()
+	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	portada_page.add_child(scroll)
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for k in ["margin_left", "margin_right"]:
+		margin.add_theme_constant_override(k, 28)
+	margin.add_theme_constant_override("margin_top", 24)
+	margin.add_theme_constant_override("margin_bottom", 32)
+	scroll.add_child(margin)
+	portada_box = GridContainer.new()
+	portada_box.columns = 2
+	portada_box.add_theme_constant_override("h_separation", 36)
+	portada_box.add_theme_constant_override("v_separation", 28)
+	portada_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_child(portada_box)
+
+func _world_map_count(wid: String) -> int:
+	for w in engine.list_worlds():
+		if str(w["id"]) == wid:
+			return (w["maps"] as Array).size()
+	return 0
+
+func _refresh_portada() -> void:
+	if portada_box == null or not engine.world_ready:
+		return
+	for c in portada_box.get_children():
+		c.queue_free()
+	var portrait: bool = get_viewport().get_visible_rect().size.y > get_viewport().get_visible_rect().size.x
+	portada_box.columns = 1 if portrait else 2
+	var page_w: float = get_viewport().get_visible_rect().size.x - 56.0
+	var col_w: float = page_w if portrait else (page_w - 36.0) * 0.5
+	var left := VBoxContainer.new()
+	left.add_theme_constant_override("separation", 0)
+	left.custom_minimum_size = Vector2(col_w, 0)
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	portada_box.add_child(left)
+	var right := VBoxContainer.new()
+	right.add_theme_constant_override("separation", 12)
+	right.custom_minimum_size = Vector2(col_w, 0)
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	portada_box.add_child(right)
+	_portada_cartel(left, col_w)
+	_portada_world(right)
+
+## El cartel: la lámina del mapa abierto sobre negro, con el paspartú de papel, y debajo qué es y el botón.
+func _portada_cartel(parent: Control, w: float) -> void:
+	var dark := PanelContainer.new()
+	dark.add_theme_stylebox_override("panel", Estilo.caja(Estilo.TINTA_CABECERA, Color(0, 0, 0, 0), 0, 24, 24))
+	parent.add_child(dark)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	dark.add_child(v)
+	var frame := PanelContainer.new()
+	frame.add_theme_stylebox_override("panel", Estilo.caja(Estilo.PAPEL, Color(0, 0, 0, 0), 0, 10, 10))
+	frame.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	v.add_child(frame)
+	var tr := TextureRect.new()
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	var aspect: float = float(engine.map_size.y) / float(engine.map_size.x)
+	var tw: float = minf(w - 68.0, 420.0 / maxf(aspect, 0.01))
+	tr.custom_minimum_size = Vector2(tw, tw * aspect)
+	frame.add_child(tr)
+	var key: String = "%s:%d:%d:%d" % [engine.map_id, engine.stroke_count, engine.places.size(), engine.realms.size()]
+	if key == _portada_key and _portada_tex != null:
+		tr.texture = _portada_tex
+	else:
+		_portada_key = key
+		_render_portada_tex(tr)
+	v.add_child(Control.new())
+	var ante := Estilo.etiqueta("AHORA DIBUJAS · %s" % engine.world_name.to_upper(), 12, Estilo.acento_sobre_negro())
+	ante.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(ante)
+	var title := Estilo.etiqueta(engine.map_name.to_upper(), 34, Estilo.PAPEL, Estilo.grotesca())
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(title)
+	var land: String = MapOverlay.fmt_km2_corto(_area_km2(1.0))
+	var data := Estilo.etiqueta("%s × %s PX · %s · %s · %s" % [Estilo.miles(engine.map_size.x), Estilo.miles(engine.map_size.y),
+		("INFINITO" if engine.infinite else land.to_upper()), _cuenta(engine.places.size(), "LUGAR", "LUGARES"), _cuenta(engine.realms.size(), "REINO", "REINOS")], 12, Estilo.SOBRE_CABECERA)
+	data.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(data)
+	var go := Estilo.boton("SEGUIR CON EL MAPA", 16, Estilo.SOBRE_ACENTO, Estilo.ACENTO, Estilo.ACENTO.darkened(0.15), 24, 20)
+	go.add_theme_font_override("font", Estilo.grotesca())
+	go.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	go.text = "SEGUIR CON EL MAPA   →"
+	go.pressed.connect(func(): _select_section("relieve"))
+	parent.add_child(go)
+
+func _render_portada_tex(tr: TextureRect) -> void:
+	var img: Image = await _render_lamina(1100)
+	_portada_tex = ImageTexture.create_from_image(img)
+	if is_instance_valid(tr):
+		tr.texture = _portada_tex
+
+## La columna del mundo: su nombre, sus mapas y los otros mundos.
+func _portada_world(v: Control) -> void:
+	var head := HBoxContainer.new()
+	v.add_child(head)
+	var t := Estilo.etiqueta("Este mundo", 30, Estilo.TINTA, Estilo.grotesca())
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(t)
+	var worlds: Array = engine.list_worlds()
+	var mine: Dictionary = {}
+	for w in worlds:
+		if str(w["id"]) == engine.world_id:
+			mine = w
+	var n_maps: int = (mine.get("maps", []) as Array).size() if not mine.is_empty() else 1
+	head.add_child(Estilo.etiqueta("%d %s" % [n_maps, "MAPA" if n_maps == 1 else "MAPAS"], 12, Estilo.ACENTO))
+	v.add_child(_caption("NOMBRE DEL MUNDO"))
+	var name_edit := _line_edit(v, func(txt: String):
+		if txt.strip_edges() != "":
+			engine.set_world_name(txt.strip_edges())
+			_refresh_portada()
+	)
+	name_edit.text = engine.world_name
+	var row := HFlowContainer.new()
+	row.add_theme_constant_override("h_separation", 16)
+	v.add_child(row)
+	_accent_link(row, "+ NUEVO MAPA EN ESTE MUNDO", func():
+		await _new_world(true)
+		_refresh_portada()
+	)
+	_note(v, "Cada mapa es independiente (otra región, otra época, el mapa de una ciudad…). UNIR pega otro mapa de este mundo a un lado del abierto en un mapa nuevo; los dos de antes no cambian.")
+	v.add_child(Estilo.filete(2))
+	for m in mine.get("maps", []):
+		_portada_map_row(v, m)
+	var others: Array = worlds.filter(func(w): return str(w["id"]) != engine.world_id)
+	if not others.is_empty():
+		v.add_child(Control.new())
+		var t2 := Estilo.etiqueta("Otros mundos", 30, Estilo.TINTA, Estilo.grotesca())
+		v.add_child(t2)
+		v.add_child(Estilo.filete(2))
+		for w in others:
+			var maps: Array = w["maps"]
+			var d: Dictionary = Time.get_datetime_dict_from_unix_time(int(w["saved_at"]))
+			var b := Estilo.boton("%s · %d %s · %02d.%02d.%02d" % [str(w["name"]), maps.size(), "mapa" if maps.size() == 1 else "mapas", d["day"], d["month"], int(d["year"]) % 100], 17, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 10, 10)
+			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			b.clip_text = true
+			_paint_row(b, false)
+			b.add_theme_font_size_override("font_size", 17)
+			var first: String = str(maps[0]["id"])
+			b.pressed.connect(func(): await _open_map(first))
+			v.add_child(b)
+
+## Una fila de mapa: miniatura, nombre en serif, cifras y acciones (abrir, unir).
+func _portada_map_row(v: Control, m: Dictionary) -> void:
+	var mid: String = m["id"]
+	var current: bool = mid == engine.map_id
+	var line := HBoxContainer.new()
+	line.add_theme_constant_override("separation", 14)
+	v.add_child(line)
+	var thumb := TextureRect.new()
+	thumb.custom_minimum_size = Vector2(92, 92)
+	thumb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	thumb.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	var png: String = engine.MAPS_DIR + "/" + mid + "/miniatura.png"
+	if FileAccess.file_exists(png):
+		var im := Image.load_from_file(png)
+		if im != null:
+			thumb.texture = ImageTexture.create_from_image(im)
+	line.add_child(thumb)
+	var info := VBoxContainer.new()
+	info.add_theme_constant_override("separation", 4)
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	line.add_child(info)
+	var nm := Estilo.etiqueta(str(m["name"]), 19, Estilo.TINTA, Estilo.F_SERIF_SEMI if current else Estilo.F_SERIF)
+	nm.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.add_child(nm)
+	var sz: Vector2i = m["size"]
+	var d: Dictionary = Time.get_datetime_dict_from_unix_time(int(m["saved_at"]))
+	var size_txt: String = "INFINITO" if bool(m.get("infinite", false)) else "%s × %s PX" % [Estilo.miles(sz.x), Estilo.miles(sz.y)]
+	info.add_child(Estilo.etiqueta("%s · %s · %s · %02d.%02d.%02d" % [size_txt, _cuenta(int(m.get("places", 0)), "LUGAR", "LUGARES"), _cuenta(int(m.get("realms", 0)), "REINO", "REINOS"), d["day"], d["month"], int(d["year"]) % 100], 11, Estilo.GRIS))
+	var acts := HFlowContainer.new()
+	acts.add_theme_constant_override("h_separation", 14)
+	info.add_child(acts)
+	if current:
+		acts.add_child(Estilo.etiqueta("ABIERTO", 11, Estilo.ACENTO))
+	else:
+		_accent_link(acts, "ABRIR", func(): await _open_map(mid))
+		if not engine.infinite and not bool(m.get("infinite", false)):
+			_accent_link(acts, "UNIR AL ABIERTO →", func():
+				_join_open = "" if _join_open == mid else mid
+				_refresh_portada()
+			)
+	if _join_open == mid:
+		var sides := HFlowContainer.new()
+		sides.add_theme_constant_override("h_separation", 6)
+		sides.add_theme_constant_override("v_separation", 6)
+		v.add_child(sides)
+		for sd in [["E", "AL ESTE"], ["O", "AL OESTE"], ["N", "AL NORTE"], ["S", "AL SUR"]]:
+			var side: String = sd[0]
+			var b := Estilo.boton(str(sd[1]), 11, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 9)
+			_paint_filter(b, false)
+			b.custom_minimum_size.y = 40
+			b.pressed.connect(func(): await _join_with(mid, side))
+			sides.add_child(b)
+	v.add_child(Estilo.filete(1, Color(Estilo.TINTA, 0.18)))
+
+static func _cuenta(n: int, uno: String, varios: String) -> String:
+	return "%d %s" % [n, uno if n == 1 else varios]
+
+func _open_map(mid: String) -> void:
+	if mid == engine.map_id:
+		return
+	await engine.save_map(_view_extra())
+	await engine.load_map(mid)
+	_refresh_maps_list()
+	if section == "portada":
+		_refresh_portada()
+
+func _join_with(mid: String, side: String) -> void:
+	_join_open = ""
+	await engine.save_map(_view_extra())
+	var e: String = await engine.join_map(mid, side)
+	if e != "":
+		_toast(e)
+	else:
+		await engine.save_map(_view_extra())
+		_toast("Unidos en un mapa nuevo: «%s». Los dos de antes siguen como estaban." % engine.map_name)
+		map_name_edit.text = engine.map_name
+		lbl_world.text = engine.map_name.to_upper()
+	_refresh_portada()

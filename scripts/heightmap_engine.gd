@@ -68,6 +68,9 @@ var map_obra: String = ""
 var map_obra_t: String = ""
 ## Todos los escritos (obras de Cobalto) con los que está vinculado el mapa; map_obra es el primero (el de siempre).
 var map_obras: Array = []
+## El mundo al que pertenece el mapa (un mundo agrupa varios mapas; los viejos son cada uno su propio mundo).
+var world_id: String = ""
+var world_name: String = ""
 var _saving: bool = false
 var _save_again: bool = false
 
@@ -228,6 +231,8 @@ func create_world(size: Vector2i, seed: int, mode: int, inf: bool = false) -> vo
 	stroke_count = 0
 	map_id = _new_map_id()
 	map_name = "Mundo nº %04d" % seed
+	world_id = map_id
+	world_name = map_name
 	map_obra = ""
 	map_obra_t = ""
 	map_obras = []
@@ -1026,6 +1031,8 @@ func save_map(extra: Dictionary = {}) -> void:
 	meta["obra"] = map_obra
 	meta["obra_t"] = map_obra_t
 	meta["obras"] = map_obras.duplicate()
+	meta["world"] = world_id
+	meta["world_name"] = world_name
 	meta["size"] = map_size
 	meta["seed"] = world_seed
 	meta["sea_level"] = sea_level
@@ -1172,6 +1179,8 @@ func load_map(id: String) -> bool:
 	map_obra_t = str(m.get("obra_t", ""))
 	var obs: Array = m.get("obras", [map_obra] if map_obra != "" else [])
 	map_obras = obs.duplicate()
+	world_id = str(m.get("world", id))
+	world_name = world_names().get(world_id, str(m.get("world_name", m.get("name", "Mi mundo"))))
 	world_seed = int(m.get("seed", 42))
 	sea_level = float(m.get("sea_level", 0.5))
 	stroke_count = int(m.get("stroke_count", 0))
@@ -1220,7 +1229,9 @@ static func list_maps() -> Array:
 		var m: Dictionary = meta
 		out.append({"id": id, "name": str(m.get("name", id)), "size": m.get("size", Vector2i.ZERO), "saved_at": float(m.get("saved_at", 0.0)),
 			"obra": str(m.get("obra", "")), "obra_t": str(m.get("obra_t", "")), "infinite": bool(m.get("infinite", false)),
-			"obras": m.get("obras", [])})
+			"obras": m.get("obras", []), "world": str(m.get("world", id)),
+			"world_name": str(m.get("world_name", m.get("name", id))), "places": (m.get("places", []) as Array).size(),
+			"realms": (m.get("realms", []) as Array).size()})
 	out.sort_custom(func(a, b): return float(a["saved_at"]) > float(b["saved_at"]))
 	return out
 
@@ -1247,6 +1258,218 @@ func duplicate_map(new_name: String, extra: Dictionary) -> void:
 			if f.begins_with("trozo_"):
 				DirAccess.copy_absolute(old_dir + "/" + f, new_dir + "/" + f)
 	await save_map(extra)
+
+# ---------------------------------------------------------------- mundos (grupos de mapas)
+
+const WORLDS_CFG := "user://mundos.cfg"
+
+## Los nombres de los mundos (id → nombre), guardados aparte para que renombrar un mundo valga para todos sus mapas.
+static func world_names() -> Dictionary:
+	var c := ConfigFile.new()
+	c.load(WORLDS_CFG)
+	var out: Dictionary = {}
+	if c.has_section("nombres"):
+		for k in c.get_section_keys("nombres"):
+			out[k] = str(c.get_value("nombres", k, k))
+	return out
+
+func set_world_name(n: String) -> void:
+	world_name = n
+	var c := ConfigFile.new()
+	c.load(WORLDS_CFG)
+	c.set_value("nombres", world_id, n)
+	c.save(WORLDS_CFG)
+	dirty_changed.emit()
+
+## Los mundos con sus mapas: [{id, name, maps: [mapa…] (el más reciente primero), saved_at}], el más reciente primero.
+static func list_worlds() -> Array:
+	var names: Dictionary = world_names()
+	var by: Dictionary = {}
+	for m in list_maps():
+		var wid: String = str(m["world"])
+		if not by.has(wid):
+			by[wid] = {"id": wid, "name": names.get(wid, str(m["world_name"])), "maps": [], "saved_at": float(m["saved_at"])}
+		(by[wid]["maps"] as Array).append(m)
+	var out: Array = by.values()
+	out.sort_custom(func(a, b): return float(a["saved_at"]) > float(b["saved_at"]))
+	return out
+
+## Une el mapa [other_id] (del disco) al abierto, por el lado [side] ("E", "O", "N", "S"), en un mapa NUEVO del
+## mismo mundo (los dos de antes no cambian). Los reinos y regiones del otro se renumeran para no chocar. Devuelve
+## "" o el motivo por el que no se puede.
+func join_map(other_id: String, side: String) -> String:
+	if infinite:
+		return "Un mundo infinito no se une: ya no tiene bordes."
+	var dir: String = MAPS_DIR + "/" + other_id
+	var mf := FileAccess.open(dir + "/mundo.bin", FileAccess.READ)
+	if mf == null:
+		return "No se encuentra ese mapa."
+	var mv: Variant = mf.get_var(false)
+	mf.close()
+	if typeof(mv) != TYPE_DICTIONARY:
+		return "Ese mapa está dañado."
+	var m: Dictionary = mv
+	if bool(m.get("infinite", false)):
+		return "Un mundo infinito no se une."
+	var bimgs: Array = []
+	for n in LAYER_FILES:
+		var im: Image = _read_layer(dir + "/" + str(n) + ".bin")
+		if im == null:
+			return "Faltan capas de ese mapa."
+		bimgs.append(im)
+	var bsize: Vector2i = (bimgs[0] as Image).get_size()
+	var asize: Vector2i = map_size
+	var new_size: Vector2i
+	var off_a := Vector2i.ZERO
+	var off_b := Vector2i.ZERO
+	match side:
+		"E":
+			new_size = Vector2i(asize.x + bsize.x, maxi(asize.y, bsize.y))
+			off_b = Vector2i(asize.x, (new_size.y - bsize.y) / 2)
+			off_a.y = (new_size.y - asize.y) / 2
+		"O":
+			new_size = Vector2i(asize.x + bsize.x, maxi(asize.y, bsize.y))
+			off_a = Vector2i(bsize.x, (new_size.y - asize.y) / 2)
+			off_b.y = (new_size.y - bsize.y) / 2
+		"N":
+			new_size = Vector2i(maxi(asize.x, bsize.x), asize.y + bsize.y)
+			off_a = Vector2i((new_size.x - asize.x) / 2, bsize.y)
+			off_b.x = (new_size.x - bsize.x) / 2
+		_:
+			new_size = Vector2i(maxi(asize.x, bsize.x), asize.y + bsize.y)
+			off_b = Vector2i((new_size.x - bsize.x) / 2, asize.y)
+			off_a.x = (new_size.x - asize.x) / 2
+	if new_size.x > MAX_SIDE or new_size.y > MAX_SIDE:
+		return "Juntos pasarían de 8.192 px de lado: hazlos más pequeños o usa un mundo infinito."
+	# Reinos y regiones del otro, con números libres.
+	var b_realms: Array = m.get("realms", [])
+	var b_areas: Array = m.get("areas", [])
+	var used_r: Dictionary = {}
+	for r in realms:
+		used_r[int(r["id"])] = true
+	var used_a: Dictionary = {}
+	for a in areas:
+		used_a[int(a["id"])] = true
+	var map_r: Dictionary = {}
+	var nid: int = 1
+	for r in b_realms:
+		while used_r.has(nid) and nid < 63:
+			nid += 1
+		if used_r.has(nid):
+			return "Juntos tendrían más de 63 reinos."
+		map_r[int(r["id"])] = nid
+		used_r[nid] = true
+	var map_a: Dictionary = {}
+	nid = 1
+	for a in b_areas:
+		while used_a.has(nid) and nid < 255:
+			nid += 1
+		if used_a.has(nid):
+			return "Juntos tendrían más de 255 regiones."
+		map_a[int(a["id"])] = nid
+		used_a[nid] = true
+	world_ready = false
+	var fills: Array = [Color(sea_level - 0.12, 0, 0), Color(0, 0, 0), Color(0, 0, 0), Color(0, 0, 0)]
+	var layers: Array[PaintLayer] = [height, biome, realm, area]
+	for i in 4:
+		var l: PaintLayer = layers[i]
+		var img := Image.create(new_size.x, new_size.y, false, l.mirror_format)
+		img.fill(fills[i])
+		img.blit_rect(l.mirror, Rect2i(Vector2i.ZERO, asize), off_a)
+		var bi: Image = bimgs[i]
+		if bi.get_format() != l.mirror_format:
+			bi.convert(l.mirror_format)
+		img.blit_rect(bi, Rect2i(Vector2i.ZERO, bsize), off_b)
+		l.setup(new_size, l.hdr)
+		await l.load_image(img)
+	map_size = new_size
+	# Renumerar en la GPU lo del otro (zona del otro, tabla de 256).
+	for pair in [[realm, map_r], [area, map_a]]:
+		var mp: Dictionary = pair[1]
+		if mp.is_empty():
+			continue
+		var lut := Image.create(256, 1, false, Image.FORMAT_R8)
+		for v in 256:
+			lut.set_pixel(v, 0, Color(float(mp.get(v, v)) / 255.0, 0, 0))
+		var mat := _mat("res://shaders/id_lut.gdshader")
+		mat.set_shader_parameter("snap", (pair[0] as PaintLayer).snapshot_texture())
+		mat.set_shader_parameter("lut", ImageTexture.create_from_image(lut))
+		mat.set_shader_parameter("zone_min", Vector2(off_b) / Vector2(new_size))
+		mat.set_shader_parameter("zone_max", Vector2(off_b + bsize) / Vector2(new_size))
+		await (pair[0] as PaintLayer).apply_full(mat)
+	# Lo de cada uno, a su sitio en el mapa nuevo.
+	var conv_a := func(uv: Vector2) -> Vector2: return (uv * Vector2(asize) + Vector2(off_a)) / Vector2(new_size)
+	var conv_b := func(uv: Vector2) -> Vector2: return (uv * Vector2(bsize) + Vector2(off_b)) / Vector2(new_size)
+	for p in places:
+		p["uv"] = conv_a.call(Vector2(p["uv"]))
+	for r in routes + roads:
+		var pts: Array = r["points"]
+		for i in pts.size():
+			pts[i] = conv_a.call(Vector2(pts[i]))
+	for p0 in m.get("places", []):
+		var p: Dictionary = (p0 as Dictionary).duplicate(true)
+		p["id"] = _next_place_id
+		_next_place_id += 1
+		p["uv"] = conv_b.call(Vector2(p["uv"]))
+		places.append(p)
+	for r0 in m.get("realms", []):
+		var r: Dictionary = (r0 as Dictionary).duplicate(true)
+		r["id"] = map_r[int(r["id"])]
+		r["parent"] = int(map_r.get(int(r.get("parent", 0)), 0))
+		realms.append(r)
+	for a0 in b_areas:
+		var a: Dictionary = (a0 as Dictionary).duplicate(true)
+		a["id"] = map_a[int(a["id"])]
+		areas.append(a)
+	for x0 in m.get("relations", []):
+		var x: Dictionary = (x0 as Dictionary).duplicate(true)
+		var ra: int = int(map_r.get(int(x["a"]), 0))
+		var rb: int = int(map_r.get(int(x["b"]), 0))
+		if ra > 0 and rb > 0:
+			relations.append({"a": mini(ra, rb), "b": maxi(ra, rb), "kind": x["kind"]})
+	var max_route: int = 0
+	for r in routes:
+		max_route = maxi(max_route, int(r["id"]))
+	for x0 in m.get("routes", []):
+		var x: Dictionary = (x0 as Dictionary).duplicate(true)
+		max_route += 1
+		x["id"] = max_route
+		var pts: Array = x["points"]
+		for i in pts.size():
+			pts[i] = conv_b.call(Vector2(pts[i]))
+		routes.append(x)
+	var max_road: int = 0
+	for r in roads:
+		max_road = maxi(max_road, int(r["id"]))
+	for x0 in m.get("roads", []):
+		var x: Dictionary = (x0 as Dictionary).duplicate(true)
+		max_road += 1
+		x["id"] = max_road
+		var pts: Array = x["points"]
+		for i in pts.size():
+			pts[i] = conv_b.call(Vector2(pts[i]))
+		roads.append(x)
+	_road_grid_dirty = true
+	# Un mapa nuevo del mismo mundo; los dos de antes se quedan como estaban.
+	var b_name: String = str(m.get("name", "otro"))
+	map_id = _new_map_id()
+	map_name = "%s + %s" % [map_name, b_name]
+	_all_dirty()
+	undo_stack.clear()
+	redo_stack.clear()
+	world_ready = true
+	layers_ready.emit(map_size)
+	_emit_history()
+	realms_changed.emit()
+	places_changed.emit()
+	roads_changed.emit()
+	areas_changed.emit()
+	_compute_stats()
+	_compute_centroids()
+	_compute_area_shapes()
+	layer_changed.emit("height")
+	layer_changed.emit("biome")
+	return ""
 
 # ---------------------------------------------------------------- mundo infinito
 #
@@ -1689,7 +1912,8 @@ func _compute_centroids() -> void:
 	small.resize(w, h, Image.INTERPOLATE_NEAREST)
 	_centroid_gen += 1
 	var gen: int = _centroid_gen
-	WorkerThreadPool.add_task(func():
+	_reap_centroid_task()
+	_centroid_task = WorkerThreadPool.add_task(func():
 		var data: PackedByteArray = small.get_data()
 		var acc: Dictionary = {}
 		for i in data.size():
@@ -1707,6 +1931,19 @@ func _compute_centroids() -> void:
 			out[id] = {"uv": Vector2(a.x / a.z / float(w), a.y / a.z / float(h)), "area": a.z / total}
 		_centroids_done.call_deferred(gen, out)
 	)
+
+var _centroid_task: int = -1
+
+## Recoge la tarea anterior (si ya terminó) para que no quede colgando; al salir, la espera.
+func _reap_centroid_task(wait: bool = false) -> void:
+	if _centroid_task < 0:
+		return
+	if wait or WorkerThreadPool.is_task_completed(_centroid_task):
+		WorkerThreadPool.wait_for_task_completion(_centroid_task)
+		_centroid_task = -1
+
+func _exit_tree() -> void:
+	_reap_centroid_task(true)
 
 func _centroids_done(gen: int, out: Dictionary) -> void:
 	if gen != _centroid_gen:

@@ -2,6 +2,19 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.15.0
+
+- **Portada, como en la familia.** ATLAS abre en PORTADA (la primera pestaña): el mapa en el que trabajas en grande
+  (su lámina sobre negro con el paspartú de papel), «AHORA DIBUJAS · <mundo>», su nombre, sus cifras y SEGUIR CON EL MAPA;
+  al lado, el mundo con su nombre (editable), sus mapas (miniatura, nombre en serif, tamaño, lugares, reinos, fecha;
+  ABRIR) y los otros mundos.
+- **Mundos con varios mapas.** Un mundo agrupa mapas independientes (otra región, otra época, el plano de una ciudad…):
+  + NUEVO MAPA EN ESTE MUNDO (hereda sus escritos). Los mapas de antes son cada uno su propio mundo. El nombre del mundo
+  vale para todos sus mapas.
+- **Unir mapas.** UNIR AL ABIERTO → al este, oeste, norte o sur: los dos mapas en uno nuevo del mismo mundo (los de antes
+  no cambian). Los reinos y las regiones del que se une se renumeran (en la capa, en la GPU) para no chocar; lugares,
+  caminos, rutas y relaciones van a su sitio. Hasta 8.192 px de lado; los infinitos no se unen.
+
 ## 0.14.1
 
 - **Escala.** Barra de escala en el mapa 2D (abajo a la izquierda, junto al norte), con una medida redonda según el zoom;
