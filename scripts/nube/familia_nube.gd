@@ -243,8 +243,8 @@ func mapas() -> Array:
 			if typeof(o) != TYPE_DICTIONARY or int(o.get("b", 0)) > 0:
 				continue
 			var d: Dictionary = o
-			out.append({"id": str(k), "t": str(d.get("t", k)), "obra": str(d.get("obra", "")), "ul": int(d.get("ul", 0)),
-				"w": int(d.get("w", 0)), "h": int(d.get("h", 0)), "nube": d.get("nube", {})})
+			out.append({"id": str(k), "t": str(d.get("t", k)), "obra": str(d.get("obra", "")), "obras": str(d.get("obras", "")), "ul": int(d.get("ul", 0)),
+				"w": int(d.get("w", 0)), "h": int(d.get("h", 0)), "nube": d.get("nube", {}), "lam": d.get("lam", {})})
 	out.sort_custom(func(a, b): return int(a["ul"]) > int(b["ul"]))
 	return out
 
@@ -394,7 +394,9 @@ static func desempaqueta(datos: PackedByteArray, dir: String) -> bool:
 	return ok
 
 ## Sube un mapa guardado: el archivo a Drive, la miniatura a familia_img y la ficha a familia/atlas. "" o el error.
-func sube_mapa(id: String, ficha: Dictionary) -> String:
+## [lamina]: la imagen del mapa para el visor de los escritos (WebP); se sube a Drive al lado del mapa y su
+## referencia va en el campo «lam» ({gd, n, s, w, h}).
+func sube_mapa(id: String, ficha: Dictionary, lamina: PackedByteArray = PackedByteArray(), lam_size: Vector2i = Vector2i.ZERO) -> String:
 	if not dentro:
 		return "Sin sesión en la cuenta."
 	if await _drive_token() == "":
@@ -409,6 +411,11 @@ func sube_mapa(id: String, ficha: Dictionary) -> String:
 		return "No se pudo subir el mapa a Google Drive."
 	var campos: Dictionary = ficha.duplicate()
 	campos["nube"] = {"gd": gd, "n": nombre, "s": datos.size()}
+	if not lamina.is_empty():
+		var nl: String = id + ".lamina.webp"
+		var gl: String = await _sube(nl, lamina)
+		if gl != "":
+			campos["lam"] = {"gd": gl, "n": nl, "s": lamina.size(), "w": lam_size.x, "h": lam_size.y}
 	campos["ul"] = _ahora()
 	var mini: String = dir + "/miniatura.png"
 	if FileAccess.file_exists(mini):

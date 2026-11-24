@@ -2,6 +2,18 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.14.0
+
+- **Mapas vinculados con escritos.** En Mundo → Cuenta de la familia, ESCRITOS DE ESTE MAPA: un mapa puede ir con varias
+  obras de Thot/Nova (una saga que comparte mapa). La ficha del mapa en la cuenta lleva `obras` (ids separados por comas;
+  `obra` sigue siendo la principal), `lug` (los lugares: nombre, tipo y posición) y `lam`, la **lámina**: el mapa 2D
+  entero con sus rótulos a 3.072 px en WebP, en tu Drive al lado del mapa, para el visor de solo lectura de los escritos
+  (lo hace Familia-Revista). Al subir a mano se rehace siempre; sola, como mucho cada 10 minutos.
+- **Fluidez.** Sin tirones al terminar un trazo ni al autoguardar: el relieve pequeño de las cifras y la miniatura se
+  mantiene al día por zonas (antes se reducía el relieve entero cada vez, ≈100 ms con 4.096 px), la miniatura se hace en
+  el hilo de guardado y solo se copian las capas o trozos que han cambiado. El fundido de biomas se precalcula en una
+  textura (una muestra por píxel en vez de 13). Los trazados de las ciudades se calculan una vez.
+
 ## 0.13.0
 
 - **Mundos infinitos.** Nuevo mundo → tamaño INFINITO. La app trabaja sobre una ventana de 4.096 px (con todos los

@@ -594,7 +594,7 @@ func _connect_signals() -> void:
 	upload_timer = Timer.new()
 	upload_timer.one_shot = true
 	upload_timer.wait_time = 20.0
-	upload_timer.timeout.connect(_upload_now)
+	upload_timer.timeout.connect(func(): _upload_now(false))
 	add_child(upload_timer)
 	engine.realms_changed.connect(func(): _refresh_route.call_deferred())
 	engine.history_changed.connect(func(can_undo: bool, can_redo: bool):
@@ -2710,7 +2710,7 @@ func _notification(what: int) -> void:
 		await engine.save_map(_view_extra())
 		if nube != null and nube.dentro and not upload_timer.is_stopped():
 			upload_timer.stop()
-			_upload_now()
+			_upload_now(false)
 	elif what == NOTIFICATION_WM_CLOSE_REQUEST:
 		await engine.save_map(_view_extra())
 		get_tree().quit()
@@ -2760,10 +2760,21 @@ func _obra_titulo(id: String) -> String:
 			return str(o["t"])
 	return ""
 
+## Vincula o desvincula el mapa con una obra (el primer vínculo es la obra principal, la de siempre).
+func _toggle_obra(id: String) -> void:
+	if engine.map_obras.has(id):
+		engine.map_obras.erase(id)
+	else:
+		engine.map_obras.append(id)
+	var first: String = str(engine.map_obras[0]) if not engine.map_obras.is_empty() else ""
+	_set_obra(first)
+
 ## Enlaza el mapa abierto con una novela de Nova. Si el mapa aún tiene su nombre de serie, toma el de la novela.
 func _set_obra(id: String, save: bool = true) -> void:
 	engine.map_obra = id
 	engine.map_obra_t = _obra_titulo(id)
+	if id != "" and not engine.map_obras.has(id):
+		engine.map_obras.insert(0, id)
 	if id != "" and engine.map_name.begins_with("Mundo nº"):
 		engine.map_name = "Mapa de " + engine.map_obra_t
 		map_name_edit.text = engine.map_name
@@ -2771,12 +2782,95 @@ func _set_obra(id: String, save: bool = true) -> void:
 	if save:
 		_do_save()
 
-func _upload_now() -> void:
+## La lámina: el mapa 2D entero con sus rótulos, a 3.072 px de lado mayor, para el visor de solo lectura de los
+## escritos (Cobalto, Seshat…). Se dibuja aparte (un SubViewport con el mismo material y una capa de rótulos propia)
+## y se devuelve la imagen.
+func _render_lamina() -> Image:
+	var long_side: int = 3072
+	var ms := Vector2(engine.map_size)
+	var sz := Vector2i(long_side, int(round(long_side * ms.y / ms.x))) if ms.x >= ms.y else Vector2i(int(round(long_side * ms.x / ms.y)), long_side)
+	var vp := SubViewport.new()
+	vp.size = sz
+	vp.disable_3d = true
+	vp.transparent_bg = false
+	vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	add_child(vp)
+	var bg := ColorRect.new()
+	bg.color = Estilo.PAPEL
+	bg.position = Vector2.ZERO
+	bg.size = Vector2(sz)
+	vp.add_child(bg)
+	var rect := ColorRect.new()
+	rect.position = Vector2.ZERO
+	rect.size = Vector2(sz)
+	rect.material = mat_2d
+	vp.add_child(rect)
+	# Árboles y símbolos del tamaño que tocan a esta escala (luego se devuelven los de la vista).
+	var old_tree: Variant = mat_2d.get_shader_parameter("tree_cell")
+	var old_sym: Variant = mat_2d.get_shader_parameter("symbol_cell")
+	var tpp: float = ms.x / float(sz.x)
+	var cell: float = clampf(pow(2.0, floor(log(maxf(10.0 * tpp, 1.0)) / log(2.0))), 4.0, 64.0)
+	mat_2d.set_shader_parameter("tree_cell", cell)
+	mat_2d.set_shader_parameter("symbol_cell", clampf(cell * 1.6, 8.0, 96.0))
+	var ov := MapOverlay.new()
+	ov.position = Vector2.ZERO
+	ov.size = Vector2(sz)
+	ov.print_mode = true
+	ov.label_scale_override = float(sz.x) / 1500.0
+	ov.ink = overlay.ink
+	ov.places = engine.places
+	ov.realms = engine.realms
+	ov.centroids = overlay.centroids
+	ov.realm_parent = overlay.realm_parent
+	ov.areas = engine.areas
+	ov.area_shapes = overlay.area_shapes
+	ov.routes = engine.routes
+	ov.roads = engine.roads
+	ov.map_px = ms
+	ov.show_area_names = overlay.show_area_names
+	ov.show_realm_names = overlay.show_realm_names
+	ov.show_place_names = overlay.show_place_names
+	vp.add_child(ov)
+	ov.set_view(Vector2.ZERO, Vector2(sz), 4.0)
+	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	var img: Image = vp.get_texture().get_image()
+	mat_2d.set_shader_parameter("tree_cell", old_tree)
+	mat_2d.set_shader_parameter("symbol_cell", old_sym)
+	vp.queue_free()
+	return img
+
+## Cuándo se subió la última lámina (ms): se rehace al subir a mano o, sola, como mucho cada 10 minutos.
+var _lamina_ms: int = -10000000
+
+## Los lugares del mapa para el visor (buscar por nombre): [{n, k, x, y}] con x, y en 0-1.
+func _lugares_json() -> String:
+	var out: Array = []
+	for p in engine.places:
+		var uv: Vector2 = p["uv"]
+		out.append({"n": str(p["name"]), "k": str(p["kind"]), "x": snappedf(uv.x, 0.0001), "y": snappedf(uv.y, 0.0001)})
+	return JSON.stringify(out)
+
+func _upload_now(manual: bool = true) -> void:
 	if not nube.dentro or not engine.world_ready:
 		return
 	lbl_nube_estado.text = "SUBIENDO A LA CUENTA…"
+	var lam := PackedByteArray()
+	var lam_size := Vector2i.ZERO
+	if manual or Time.get_ticks_msec() - _lamina_ms > 600000:
+		var img: Image = await _render_lamina()
+		lam_size = img.get_size()
+		var res: Array = [PackedByteArray()]
+		var tid: int = WorkerThreadPool.add_task(func(): res[0] = img.save_webp_to_buffer(true, 0.82))
+		while not WorkerThreadPool.is_task_completed(tid):
+			await get_tree().process_frame
+		WorkerThreadPool.wait_for_task_completion(tid)
+		lam = res[0]
+		_lamina_ms = Time.get_ticks_msec()
 	var e: String = await nube.sube_mapa(engine.map_id, {"t": engine.map_name, "obra": engine.map_obra,
-		"w": engine.map_size.x, "h": engine.map_size.y})
+		"obras": ",".join(engine.map_obras), "lug": _lugares_json(),
+		"w": engine.map_size.x, "h": engine.map_size.y}, lam, lam_size)
 	var t: Dictionary = Time.get_time_dict_from_system()
 	lbl_nube_estado.text = ("EN LA CUENTA · %02d:%02d" % [t["hour"], t["minute"]]) if e == "" else e.to_upper()
 	if e != "":
@@ -2816,9 +2910,11 @@ func _refresh_cuenta(reload: bool = false) -> void:
 	row.add_child(who)
 	var out := _accent_button(row, "SALIR")
 	out.pressed.connect(func(): _confirm("salir", out, "SALIR", func(): nube.salir()))
-	cuenta_box.add_child(_caption("NOVELA DE ESTE MAPA"))
-	var ob := _option_button()
-	cuenta_box.add_child(ob)
+	cuenta_box.add_child(_caption("ESCRITOS DE ESTE MAPA"))
+	cuenta_box.add_child(_note_label("Toca las obras (de Thot/Nova) en las que sale este mapa: en cada una se podrá ver, sin editar, desde el visor de sus escritos."))
+	var obras_box := VBoxContainer.new()
+	obras_box.add_theme_constant_override("separation", 0)
+	cuenta_box.add_child(obras_box)
 	cuenta_box.add_child(lbl_nube_estado)
 	var sync := HFlowContainer.new()
 	sync.add_theme_constant_override("h_separation", 14)
@@ -2836,14 +2932,21 @@ func _refresh_cuenta(reload: bool = false) -> void:
 		if not is_instance_valid(lbl_nube_estado):
 			return
 		lbl_nube_estado.text = "%d NOVELAS · %d MAPAS EN LA CUENTA" % [nube_obras.size(), nube_mapas.size()]
-	ob.add_item("NINGUNA")
-	ob.set_item_metadata(0, "")
+	if not is_instance_valid(obras_box):
+		return
+	if nube_obras.is_empty():
+		obras_box.add_child(_note_label("No hay obras en la cuenta todavía."))
 	for o in nube_obras:
-		ob.add_item(str(o["t"]).to_upper())
-		ob.set_item_metadata(ob.item_count - 1, str(o["id"]))
-		if str(o["id"]) == engine.map_obra:
-			ob.select(ob.item_count - 1)
-	ob.item_selected.connect(func(i: int): _set_obra(str(ob.get_item_metadata(i))))
+		var oid: String = str(o["id"])
+		var rb := Estilo.boton(str(o["t"]), 15, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 10, 8)
+		rb.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		rb.clip_text = true
+		_paint_row(rb, engine.map_obras.has(oid))
+		rb.pressed.connect(func():
+			_toggle_obra(oid)
+			_paint_row(rb, engine.map_obras.has(oid))
+		)
+		obras_box.add_child(rb)
 	var local: Dictionary = {}
 	for m in engine.list_maps():
 		local[m["id"]] = float(m["saved_at"])

@@ -107,8 +107,13 @@ func _draw() -> void:
 		draw_line(ring_center - Vector2(5, 0), ring_center + Vector2(5, 0), c, 2.0)
 		if not ring_subtracts:
 			draw_line(ring_center - Vector2(0, 5), ring_center + Vector2(0, 5), c, 2.0)
-	_draw_north(Vector2(40, size.y - 46))
-	_draw_zoom_tag()
+	if print_mode:
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE * ui_scale())
+		_draw_north(Vector2(40, size.y / ui_scale() - 46))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	else:
+		_draw_north(Vector2(40, size.y - 46))
+		_draw_zoom_tag()
 
 # ---------------------------------------------------------------- regiones con nombre
 
@@ -273,7 +278,14 @@ func _free_spot(center: Vector2, tw: float, fs: int) -> Vector2:
 # ---------------------------------------------------------------- lugares
 
 ## Tamaño de símbolos y rótulos según el zoom: de lejos más pequeños (si no, tapan el mapa), de cerca algo más.
+## Para la lámina (la imagen del mapa para el visor de los escritos): escala fija de los rótulos y sin la etiqueta
+## del zoom.
+var label_scale_override: float = 0.0
+var print_mode: bool = false
+
 func ui_scale() -> float:
+	if label_scale_override > 0.0:
+		return label_scale_override
 	return clampf(0.5 + 0.5 * map_zoom, 0.6, 1.25)
 
 ## [lugar, posición en pantalla, ¿lleva nombre?]; deja en _taken los símbolos y nombres que se pintarán.

@@ -66,6 +66,8 @@ var map_name: String = "Mi mundo"
 ## La novela de Nova a la que pertenece el mapa (id de familia/obras; "" = ninguna) y su título.
 var map_obra: String = ""
 var map_obra_t: String = ""
+## Todos los escritos (obras de Cobalto) con los que está vinculado el mapa; map_obra es el primero (el de siempre).
+var map_obras: Array = []
 var _saving: bool = false
 var _save_again: bool = false
 
@@ -228,6 +230,7 @@ func create_world(size: Vector2i, seed: int, mode: int, inf: bool = false) -> vo
 	map_name = "Mundo nº %04d" % seed
 	map_obra = ""
 	map_obra_t = ""
+	map_obras = []
 	world_ready = true
 	layers_ready.emit(map_size)
 	_emit_history()
@@ -1003,6 +1006,7 @@ func save_map(extra: Dictionary = {}) -> void:
 	meta["name"] = map_name
 	meta["obra"] = map_obra
 	meta["obra_t"] = map_obra_t
+	meta["obras"] = map_obras.duplicate()
 	meta["size"] = map_size
 	meta["seed"] = world_seed
 	meta["sea_level"] = sea_level
@@ -1147,6 +1151,8 @@ func load_map(id: String) -> bool:
 	map_name = str(m.get("name", "Mi mundo"))
 	map_obra = str(m.get("obra", ""))
 	map_obra_t = str(m.get("obra_t", ""))
+	var obs: Array = m.get("obras", [map_obra] if map_obra != "" else [])
+	map_obras = obs.duplicate()
 	world_seed = int(m.get("seed", 42))
 	sea_level = float(m.get("sea_level", 0.5))
 	stroke_count = int(m.get("stroke_count", 0))
@@ -1194,7 +1200,8 @@ static func list_maps() -> Array:
 			continue
 		var m: Dictionary = meta
 		out.append({"id": id, "name": str(m.get("name", id)), "size": m.get("size", Vector2i.ZERO), "saved_at": float(m.get("saved_at", 0.0)),
-			"obra": str(m.get("obra", "")), "obra_t": str(m.get("obra_t", "")), "infinite": bool(m.get("infinite", false))})
+			"obra": str(m.get("obra", "")), "obra_t": str(m.get("obra_t", "")), "infinite": bool(m.get("infinite", false)),
+			"obras": m.get("obras", [])})
 	out.sort_custom(func(a, b): return float(a["saved_at"]) > float(b["saved_at"]))
 	return out
 
