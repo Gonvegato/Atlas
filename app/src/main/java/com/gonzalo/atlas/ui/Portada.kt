@@ -164,8 +164,8 @@ fun Miniatura(f: File, mod: Modifier, clave: Any? = null) {
 
 /** El tamaño del lienzo de un mapa nuevo (siempre en múltiplos de 256). */
 private val TAMANOS = listOf(
-    Triple("Grande", 4096, 4096), Triple("Apaisado", 6144, 4096), Triple("Vertical", 4096, 6144),
-    Triple("Enorme", 8192, 8192), Triple("Pequeño", 2048, 2048), Triple("Infinito", 0, 0),
+    Triple("Infinito", 0, 0), Triple("Grande", 4096, 4096), Triple("Apaisado", 6144, 4096), Triple("Vertical", 4096, 6144),
+    Triple("Enorme", 8192, 8192), Triple("Pequeño", 2048, 2048),
 )
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -301,7 +301,7 @@ object Uniones {
         a.territorios.forEach { m.territorios += com.gonzalo.atlas.motor.Territorio.de(it.json()).also { t -> if (!t.lx.isNaN()) { t.lx += ax; t.ly += ay } } }
         b.territorios.forEach { m.territorios += com.gonzalo.atlas.motor.Territorio.de(it.json()).also { t -> t.id = rem[t.id]; if (t.padre != 0) t.padre = rem[t.padre]; if (!t.lx.isNaN()) { t.lx += bx; t.ly += by } } }
         for ((src, dx, dy) in listOf(Triple(a, ax.toFloat(), ay.toFloat()), Triple(b, bx.toFloat(), by.toFloat()))) {
-            src.lugares.forEach { m.lugares += com.gonzalo.atlas.motor.Lugar(it.id, it.nombre, it.tipo, it.x + dx, it.y + dy, it.tamano, it.nota) }
+            src.lugares.forEach { m.lugares += com.gonzalo.atlas.motor.Lugar(it.id, it.nombre, it.tipo, it.x + dx, it.y + dy, it.tamano, it.nota, it.mapa) }
             src.rutas.forEach { m.rutas += it.desplazada(dx, dy) }
             src.rotulos.forEach { m.rotulos += com.gonzalo.atlas.motor.Rotulo(it.id, it.texto, it.x + dx, it.y + dy, it.tam, it.giro, it.estilo, it.espaciado, it.curva) }
             src.sellos.forEach { m.sellos += com.gonzalo.atlas.motor.Sello(it.id, it.recurso, it.x + dx, it.y + dy, it.escala, it.giro, it.espejo) }

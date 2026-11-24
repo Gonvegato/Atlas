@@ -80,6 +80,13 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
         Filete(1)
         Box(Modifier.fillMaxWidth().weight(1f)) {
             AndroidView({ mesa.also { (it.parent as? android.view.ViewGroup)?.removeView(it) } }, Modifier.fillMaxSize())
+            if (!taller) ed.alAbrirMapa = { id -> e.abreVinculado(id) }
+            if (!taller && e.pila.isNotEmpty()) {
+                val anterior = remember(e.pila.size) { e.bib.abre(e.pila.last())?.nombre ?: "el mapa anterior" }
+                Box(Modifier.align(Alignment.TopStart).padding(start = 70.dp, top = 10.dp).background(T.CABECERA).pulsable { e.vuelve() }.padding(horizontal = 14.dp, vertical = 9.dp)) {
+                    Etiqueta("← Volver a $anterior", tam = 12.sp, color = T.PAPEL)
+                }
+            }
             // La barra de la izquierda: tamaño, opacidad, deshacer
             Column(Modifier.align(Alignment.CenterStart).padding(start = 10.dp).background(T.PAPEL.copy(alpha = 0.92f)).border(1.dp, T.TINTA).padding(8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -110,7 +117,8 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
                     }
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         when (p) {
-                            "pinceles" -> PanelPinceles(ed)
+                            "pinceles" -> PanelPinceles(e, ed)
+                            "calco" -> PanelCalco(e, ed, mesa)
                             "color" -> PanelColor(ed)
                             "capas" -> PanelCapas(e, ed, mesa)
                             "territorios" -> PanelTerritorios(e, ed, mesa)
@@ -130,7 +138,7 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
 private val conPanel = setOf(Herramienta.TERRITORIO, Herramienta.LUGAR, Herramienta.RUTA, Herramienta.SELLO)
 
 private val titulos = mapOf("pinceles" to "Pinceles", "color" to "Color", "capas" to "Capas", "territorios" to "Territorios", "lugares" to "Lugares",
-    "rutas" to "Rutas", "dibujos" to "Tus dibujos", "mas" to "Más", "sel" to "Lo elegido")
+    "rutas" to "Rutas", "dibujos" to "Tus dibujos", "mas" to "Más", "sel" to "Lo elegido", "calco" to "Imagen para calcar")
 
 @Composable
 private fun BarraHerramientas(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean, panel: String?, abre: (String) -> Unit) {
@@ -162,6 +170,7 @@ private fun BarraHerramientas(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Bool
         }
         H(Herramienta.ELEGIR)
         Box(Modifier.width(1.dp).height(26.dp).background(T.GRIS_CLARO))
+        P("calco", "Calco")
         P("capas", "Capas")
         Box(Modifier.size(30.dp).background(Color(ed.color)).border(2.dp, if (panel == "color") T.ACENTO else T.TINTA).pulsable { abre("color") })
         P("mas", "Más")
@@ -171,9 +180,25 @@ private fun BarraHerramientas(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Bool
 // ==================================================================== paneles
 
 @Composable
-private fun PanelPinceles(ed: Editor) {
+private fun PanelPinceles(e: EstadoApp, ed: Editor) {
     val goma = ed.herramienta == Herramienta.GOMA
-    for (p in Pinceles.TODOS.filter { it.goma == goma }) {
+    val ctx = LocalContext.current
+    @Suppress("UNUSED_VARIABLE") val v = com.gonzalo.atlas.lienzo.Pinceles.version
+    var msg by remember { mutableStateOf("") }
+    val importar = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        msg = "Importando…"
+        Thread {
+            val r = runCatching { ctx.contentResolver.openInputStream(uri)!!.use { com.gonzalo.atlas.lienzo.Procreate.importa(it.readBytes(), e.bib.dirRecursos, ctx.resources) } }
+            android.os.Handler(android.os.Looper.getMainLooper()).post { msg = r.fold({ n -> if (n == 0) "No he encontrado pinceles en ese archivo" else "Importados: $n" }, { "No se pudo: ${it.message}" }) }
+        }.start()
+    }
+    Deslizador("Estabilización", ed.estabilizacion, 0f..1f, if (ed.estabilizacion < 0.01f) "No" else "${(ed.estabilizacion * 100).roundToInt()}%") { ed.estabilizacion = it }
+    Text("Cuanto más, más limpias salen las líneas (el pincel va detrás del lápiz, como la StreamLine de Procreate).", style = T.texto(11.sp, T.GRIS))
+    Boton("Importar pinceles de Procreate") { importar.launch(arrayOf("*/*")) }
+    if (msg.isNotBlank()) Text(msg, style = T.texto(12.sp, T.ACENTO))
+    Filete(1)
+    for (p in Pinceles.todos().filter { it.goma == goma }) {
         val sel = (if (goma) ed.goma else ed.pincel) == p.clave
         Column(Modifier.fillMaxWidth().background(if (sel) T.TINTA else Color.Transparent).border(1.dp, T.TINTA).pulsable {
             if (goma) { ed.goma = p.clave; ed.tamanoGoma = p.tamano } else { ed.pincel = p.clave; ed.tamano = p.tamano; ed.opacidad = p.opacidad }
@@ -379,6 +404,9 @@ private fun PanelMas(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         for ((n, c) in Catalogo.PAPELES) Ficha(n, m.papel == c) { m.papel = c; mesa.refresca(); m.avisaVector() }
     }
+    var otro by remember { mutableStateOf(false) }
+    Enlace(if (otro) "Cerrar el color" else "Otro color de fondo") { otro = !otro }
+    if (otro) SelectorColor(if (android.graphics.Color.alpha(m.papel) == 0) 0xFFFFFFFF.toInt() else m.papel) { m.papel = it; mesa.refresca(); ed.cambios++; m.avisaVector() }
     Interruptor("Grano del papel", m.granoPapel) { m.granoPapel = it; mesa.refresca(); m.avisaVector() }
     Filete(1)
     Boton("Guardar imagen (PNG)") { e.exporta(ed, mesa) }
@@ -434,6 +462,7 @@ private fun EditaTerritorio(e: EstadoApp, ed: Editor, t: Territorio) {
         Boton("Pintarlo", lleno = true) { ed.territorio = t.id; ed.herramienta = Herramienta.TERRITORIO; ed.seleccion = null }
         Boton("Su ficha") { e.fichaDe(m, "t", t.id.toString(), "reino", t.nombre) }
     }
+    MapaVinculado(e, ed, t.mapa, t.nombre) { t.mapa = it }
     Boton("Borrar territorio", color = T.ROJO) { ed.borraTerritorio(t) }
 }
 
@@ -448,6 +477,7 @@ private fun EditaLugar(e: EstadoApp, ed: Editor, l: Lugar) {
     CampoVector(ed, l.nota, "Nota", 3) { l.nota = it }
     val terr = ed.lienzo.territorioEn(l.x.toInt(), l.y.toInt()).takeIf { it != 0 }?.let { ed.mapa.territorio(it) }
     if (terr != null) Text("En: " + ed.mapa.linaje(terr.id).joinToString(" · ") { it.nombre }, style = T.texto(13.sp, T.GRIS))
+    MapaVinculado(e, ed, l.mapa, l.nombre) { l.mapa = it }
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Boton("Su ficha") { e.fichaDe(ed.mapa, "p", l.id, "lugar", l.nombre) }
         Boton("Borrar", color = T.ROJO) { ed.borraSeleccion() }
@@ -509,6 +539,65 @@ private fun Flecha(atras: Boolean, activa: Boolean, alPulsar: () -> Unit) {
                 moveTo(cx - k * s * 0.42f, s * 0.12f); lineTo(cx - k * s * 0.38f, s * 0.48f); lineTo(cx - k * s * 0.06f, s * 0.36f); close()
             }
             drawPath(punta, col)
+        }
+    }
+}
+
+@Composable
+private fun PanelCalco(e: EstadoApp, ed: Editor, mesa: Mesa) {
+    val m = ed.mapa
+    val ctx = LocalContext.current
+    val importar = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        val dir = m.dir ?: return@rememberLauncherForActivityResult
+        Thread {
+            val b = runCatching { ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } }.getOrNull() ?: return@Thread
+            // Como mucho 4.096 px de lado (más no se nota al calcar y gasta memoria)
+            val k = minOf(1f, 4096f / maxOf(b.width, b.height))
+            val r = if (k < 1f) android.graphics.Bitmap.createScaledBitmap(b, (b.width * k).toInt(), (b.height * k).toInt(), true) else b
+            java.io.File(dir, "calco.png").outputStream().use { r.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                val vis = mesa.vista.visible()
+                ed.cambiaVector("Calco") { m.calco = com.gonzalo.atlas.motor.Calco(true, vis.centerX(), vis.centerY(), vis.width() * 0.7f, -mesa.vista.giro, 0.5f) }
+                ed.herramienta = Herramienta.CALCO
+                mesa.refresca()
+            }
+        }.start()
+    }
+    Text("Pon detrás una imagen (una casa de internet, una foto, un boceto) y dibuja encima para darle tu estilo. No sale al exportar ni en la lámina.", style = T.texto(13.sp, T.GRIS))
+    Boton(if (m.calco == null) "Elegir imagen" else "Cambiar imagen", lleno = true) { importar.launch("image/*") }
+    val k = m.calco ?: return
+    Deslizador("Opacidad", k.opacidad, 0.05f..1f, "${(k.opacidad * 100).roundToInt()}%") { k.opacidad = it; mesa.refresca(); ed.cambios++ }
+    Interruptor("Se ve", k.visible) { k.visible = it; mesa.refresca(); m.avisaVector() }
+    Interruptor("Encima del dibujo (si no, detrás)", k.encima) { k.encima = it; mesa.refresca(); m.avisaVector() }
+    Boton(if (ed.herramienta == Herramienta.CALCO) "Moviendo el calco: arrastra, pellizca, gira" else "Mover, escalar y girar el calco", lleno = ed.herramienta == Herramienta.CALCO) {
+        ed.herramienta = if (ed.herramienta == Herramienta.CALCO) Herramienta.PINCEL else Herramienta.CALCO; mesa.refresca()
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Boton("Reflejar") { k.ancho = -k.ancho; mesa.refresca(); m.avisaVector() }
+        Boton("Quitar", color = T.ROJO) { ed.cambiaVector("Quitar calco") { m.calco = null }; ed.herramienta = Herramienta.PINCEL; m.dir?.let { java.io.File(it, "calco.png").delete() }; mesa.refresca() }
+    }
+    @Suppress("UNUSED_VARIABLE") val u = e.listas
+}
+
+/** El mapa que se abre al tocar algo (otro mapa del mismo mundo), o crear uno nuevo para eso. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MapaVinculado(e: EstadoApp, ed: Editor, actual: String, nombre: String, poner: (String) -> Unit) {
+    val otros = remember(e.listas) { e.bib.mapas().filter { it.mundo == ed.mapa.mundo && it.id != ed.mapa.id } }
+    Etiqueta("Su mapa (se abre al tocarlo con «Mover»)", tam = 10.sp, color = T.GRIS)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Ficha("Ninguno", actual.isBlank()) { ed.cambiaVector("Vincular") { poner("") } }
+        for (o in otros) Ficha(o.nombre, actual == o.id) { ed.cambiaVector("Vincular") { poner(o.id) } }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (actual.isNotBlank()) Boton("Abrir su mapa", lleno = true) { e.abreVinculado(actual) }
+        Boton("+ Dibujar su mapa") {
+            val m = e.bib.creaMapa(ed.mapa.mundo, nombre, 0, 0, ed.mapa.papel)
+            ed.cambiaVector("Vincular") { poner(m.id) }
+            ed.guardaYa()
+            e.listas++
+            e.abreVinculado(m.id)
         }
     }
 }

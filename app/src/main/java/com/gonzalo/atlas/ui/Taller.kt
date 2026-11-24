@@ -38,8 +38,7 @@ fun TallerSinDibujo(e: EstadoApp) {
         Text("Taller", style = T.titular(36.sp))
         Text("Dibuja aquí lo que vas a repetir en tus mapas: una montaña, un árbol, un castillo, una rosa de los vientos. Lo guardas en tu biblioteca y en el mapa lo pones con «Dibujos» tantas veces como quieras (y lo mueves, giras y escalas).", style = T.texto(15.sp, T.GRIS))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Boton("+ Dibujo pequeño (512)", lleno = true) { e.nuevoDibujo(512) }
-            Boton("+ Grande (1024)") { e.nuevoDibujo(1024) }
+            Boton("+ Dibujo nuevo", lleno = true) { e.nuevoDibujo() }
         }
         Seccion(1, "Tu biblioteca")
         val lista = e.recursos.lista()

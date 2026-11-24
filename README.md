@@ -4,6 +4,22 @@ App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma fir
 Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
 etiqueta `v0.15.0`.
 
+## 1.1.0
+
+- **Estabilización del trazo**, como la StreamLine de Procreate (en Pinceles, de 0 a 100 %): el pincel va detrás del lápiz
+  a una distancia que crece con la estabilización y solo avanza cuando el lápiz tira de él; al levantarlo, la línea llega
+  hasta donde lo levantaste. Con 0 %, el trazo directo de Ink con predicción (lo más inmediato).
+- **Calco**: una imagen detrás (o encima) del dibujo para calcarla y darle tu estilo, en el mapa y en el Taller. Se mueve
+  con un dedo y se escala y gira con dos (herramienta «Mover el calco»), con su opacidad, se puede reflejar y no sale al
+  exportar ni en la lámina.
+- **Lienzo infinito** por defecto en los mapas nuevos y siempre en el Taller (sigue creciendo hacia donde dibujes).
+- **Papel de cualquier color** (Más → Otro color de fondo), además de los de siempre.
+- **Mapas dentro de mapas**: un lugar o un territorio puede llevar su propio mapa (el plano de la iglesia, de la ciudad, de
+  la región). Con «Mover», tocarlo lo abre; arriba sale «← Volver a…». «+ Dibujar su mapa» lo crea ya vinculado.
+- **Pinceles de Procreate**: Pinceles → Importar (.brush o .brushset). Se usa su punta (Shape.png) como sello a lo largo
+  del trazo y su grano (Grain.png) como textura, con su nombre, espaciado, tamaño y escala del grano. Procreate no publica
+  su formato: el resto de ajustes (dinámicas, afilado, color…) no se traducen.
+
 ## 1.0.0 — la nueva ATLAS
 
 ATLAS no genera nada: **tú dibujas el mapa** y ATLAS te da las herramientas de dibujo y todo lo de un mapa encima.

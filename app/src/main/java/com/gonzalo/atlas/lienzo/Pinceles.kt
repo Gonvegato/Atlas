@@ -123,5 +123,33 @@ object Pinceles {
         },
     )
 
-    fun de(clave: String) = TODOS.firstOrNull { it.clave == clave } ?: TODOS[0]
+    /** Los pinceles importados (de Procreate), guardados en recursos/pinceles. */
+    private val importados = java.util.concurrent.CopyOnWriteArrayList<TipoPincel>()
+    private val versionEstado = androidx.compose.runtime.mutableIntStateOf(0)
+    var version: Int
+        get() = versionEstado.intValue
+        set(v) { versionEstado.intValue = v }
+
+    fun todos(): List<TipoPincel> = TODOS + importados
+    fun de(clave: String) = todos().firstOrNull { it.clave == clave } ?: TODOS[0]
+
+    /** Lee los pinceles importados y registra sus texturas. */
+    fun cargaImportados(recursos: java.io.File, res: Resources) {
+        val al = almacen(res)
+        val l = ArrayList<TipoPincel>()
+        Procreate.dir(recursos).listFiles()?.sortedBy { it.name }?.forEach { d ->
+            val j = runCatching { org.json.JSONObject(java.io.File(d, "pincel.json").readText()) }.getOrNull() ?: return@forEach
+            val id = d.name
+            android.graphics.BitmapFactory.decodeFile(java.io.File(d, "forma.png").path)?.let { al.addTexture("$id:forma", it) }
+            android.graphics.BitmapFactory.decodeFile(java.io.File(d, "grano.png").path)?.let { al.addTexture("$id:grano", it) }
+            val tam = (4.0 + j.optDouble("tam", 0.3) * 120.0).toFloat()
+            l += TipoPincel(id, j.optString("n", "Pincel"), "Importado de Procreate", tam, 1f) {
+                runCatching { Procreate.familia(id, j, true) }.getOrElse { Procreate.familia(id, j, false) }
+            }
+        }
+        importados.clear(); importados.addAll(l)
+        android.os.Handler(android.os.Looper.getMainLooper()).post { version++ }
+    }
+
+    fun borraImportado(recursos: java.io.File, id: String, res: Resources) { java.io.File(Procreate.dir(recursos), id).deleteRecursively(); cargaImportados(recursos, res) }
 }

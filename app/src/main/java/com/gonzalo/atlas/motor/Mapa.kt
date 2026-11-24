@@ -20,14 +20,16 @@ class Territorio(
     var lx: Float = Float.NaN, var ly: Float = Float.NaN,
     var tam: Float = 0f, var giro: Float = 0f, var curva: Float = 0f,
     var verNombre: Boolean = true,
+    /** El mapa que se abre al tocarlo (otro mapa del mundo: el de esa región). */
+    var mapa: String = "",
 ) {
     fun json() = JSONObject().put("id", id).put("n", nombre).put("t", tipo).put("c", color).put("p", padre).put("cap", capital)
         .put("lx", if (lx.isNaN()) JSONObject.NULL else lx.toDouble()).put("ly", if (ly.isNaN()) JSONObject.NULL else ly.toDouble())
-        .put("s", tam.toDouble()).put("g", giro.toDouble()).put("cv", curva.toDouble()).put("vn", verNombre)
+        .put("s", tam.toDouble()).put("g", giro.toDouble()).put("cv", curva.toDouble()).put("vn", verNombre).put("mp", mapa)
     companion object {
         fun de(o: JSONObject) = Territorio(o.optInt("id"), o.optString("n"), o.optString("t", "Reino"), o.optInt("c"), o.optInt("p"), o.optString("cap"),
             if (o.isNull("lx")) Float.NaN else o.optDouble("lx").toFloat(), if (o.isNull("ly")) Float.NaN else o.optDouble("ly").toFloat(),
-            o.optDouble("s").toFloat(), o.optDouble("g").toFloat(), o.optDouble("cv").toFloat(), o.optBoolean("vn", true))
+            o.optDouble("s").toFloat(), o.optDouble("g").toFloat(), o.optDouble("cv").toFloat(), o.optBoolean("vn", true), o.optString("mp"))
     }
 }
 
@@ -45,6 +47,14 @@ class CapaInfo(
 ) {
     fun json() = JSONObject().put("id", id).put("n", nombre).put("v", visible).put("o", opacidad.toDouble()).put("f", fusion).put("a", bloqueoAlfa).put("r", referencia)
     companion object { fun de(o: JSONObject) = CapaInfo(o.optString("id"), o.optString("n"), o.optBoolean("v", true), o.optDouble("o", 1.0).toFloat(), o.optString("f", "normal"), o.optBoolean("a"), o.optBoolean("r")) }
+}
+
+/** La imagen para calcar: detrás (o encima) del dibujo, que no sale al exportar. Mide [ancho] px del lienzo. */
+class Calco(var visible: Boolean = true, var x: Float = 0f, var y: Float = 0f, var ancho: Float = 1000f, var giro: Float = 0f, var opacidad: Float = 0.5f, var encima: Boolean = false) {
+    fun json() = JSONObject().put("v", visible).put("x", x.toDouble()).put("y", y.toDouble()).put("w", ancho.toDouble()).put("g", giro.toDouble()).put("o", opacidad.toDouble()).put("e", encima)
+    companion object {
+        fun de(o: JSONObject?) = o?.let { Calco(it.optBoolean("v", true), it.optDouble("x").toFloat(), it.optDouble("y").toFloat(), it.optDouble("w", 1000.0).toFloat(), it.optDouble("g").toFloat(), it.optDouble("o", 0.5).toFloat(), it.optBoolean("e")) }
+    }
 }
 
 /** La leyenda del mapa: un cuadro que se mueve y escala como un objeto más. */
@@ -73,10 +83,12 @@ class Lugar(
     /** 1 (un caserío) a 10 (una metrópoli). */
     var tamano: Int = Catalogo.lugar(tipo).tamano,
     var nota: String = "",
+    /** El mapa que se abre al tocarlo (el plano de esa ciudad, de esa iglesia…). */
+    var mapa: String = "",
 ) {
-    fun json() = JSONObject().put("id", id).put("n", nombre).put("k", tipo).put("x", x.toDouble()).put("y", y.toDouble()).put("s", tamano).put("nota", nota)
+    fun json() = JSONObject().put("id", id).put("n", nombre).put("k", tipo).put("x", x.toDouble()).put("y", y.toDouble()).put("s", tamano).put("nota", nota).put("mp", mapa)
     companion object {
-        fun de(o: JSONObject) = Lugar(o.optString("id"), o.optString("n"), o.optString("k", "punto"), o.optDouble("x").toFloat(), o.optDouble("y").toFloat(), o.optInt("s", 3), o.optString("nota"))
+        fun de(o: JSONObject) = Lugar(o.optString("id"), o.optString("n"), o.optString("k", "punto"), o.optDouble("x").toFloat(), o.optDouble("y").toFloat(), o.optInt("s", 3), o.optString("nota"), o.optString("mp"))
     }
 }
 
@@ -149,6 +161,8 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
     val rotulos = CopyOnWriteArrayList<Rotulo>()
     val sellos = CopyOnWriteArrayList<Sello>()
     var leyenda = Leyenda()
+    /** La imagen para calcar (su archivo, calco.png en la carpeta del mapa); null si no hay. */
+    var calco: Calco? = null
 
     @Volatile var vectorVersion = 0
     val alCambiarVector = CopyOnWriteArrayList<() -> Unit>()
@@ -181,6 +195,7 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         .put("rotulos", JSONArray().also { a -> rotulos.forEach { a.put(it.json()) } })
         .put("sellos", JSONArray().also { a -> sellos.forEach { a.put(it.json()) } })
         .put("leyenda", leyenda.json())
+        .put("calco", calco?.json() ?: JSONObject.NULL)
         .put("capas", JSONArray().also { a -> capas.forEach { a.put(it.json()) } })
 
     fun ponVector(o: JSONObject) {
@@ -192,6 +207,7 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         lista("territorios", territorios, Territorio::de); lista("lugares", lugares, Lugar::de); lista("rutas", rutas, Linea::de)
         lista("rotulos", rotulos, Rotulo::de); lista("sellos", sellos, Sello::de)
         leyenda = Leyenda.de(o.optJSONObject("leyenda"))
+        calco = Calco.de(o.optJSONObject("calco"))
         if (o.has("capas")) lista("capas", capas, CapaInfo::de)
     }
 

@@ -27,8 +27,13 @@ ATLAS también puede firmarse él mismo si en su repositorio hay un secreto `FIR
 `familia.keystore` y un `claves.properties` con la línea `familia.pass=...`), o los cuatro antiguos
 `ATLAS_KEYSTORE_BASE64`, `ATLAS_KEYSTORE_PASSWORD`, `ATLAS_KEY_ALIAS` y `ATLAS_KEY_PASSWORD`.
 
-## Entrar sin contraseña desde Polaris
+## Entrar sin contraseña y actualizarse sola (desde la 1.0.0)
 
-Con ATLAS en `LaFamilia.APPS` y la firma de la familia, Polaris ya podría pasarle la sesión, pero **ATLAS todavía no se
-la pide** (esa parte está pendiente en ATLAS). Mientras tanto se entra una vez con el usuario y la contraseña de la
-familia (Mundo → Cuenta de la familia).
+ATLAS es ya una app nativa con el mismo contrato que las hermanas:
+
+- **Entrar una vez.** Si no tiene sesión, pregunta a las hermanas instaladas (`content://<paquete>.familia.acceso/sesion`,
+  solo a las que llevan la firma de la familia) y entra con la cuenta de la primera que la tenga. Y da la suya por
+  `content://com.gonzalo.atlas.familia.acceso/sesion`, con las mismas comprobaciones.
+- **Actualizarse sola.** Mira la carpeta «versiones» de tu Google Drive (dentro de la carpeta de la familia: la de
+  `gdrive_carpeta` o «Familia»), coge el `Atlas-<versión>.apk` más nuevo, comprueba que es ATLAS y que lleva la misma
+  firma, y lo instala (sin preguntar cuando no la estás usando, si Android lo deja).

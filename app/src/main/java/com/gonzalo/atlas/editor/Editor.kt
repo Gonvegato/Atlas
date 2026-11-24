@@ -34,7 +34,7 @@ import kotlin.random.Random
 /** Qué hace el lápiz (o el dedo) sobre el mapa. */
 enum class Herramienta(val nombre: String) {
     PINCEL("Pincel"), GOMA("Goma"), RELLENO("Relleno"), CUENTAGOTAS("Cuentagotas"), TERRITORIO("Territorios"),
-    LUGAR("Lugares"), ROTULO("Rótulos"), RUTA("Rutas"), SELLO("Tus dibujos"), ELEGIR("Elegir"), REGLA("Regla"), MANO("Mover"),
+    LUGAR("Lugares"), ROTULO("Rótulos"), RUTA("Rutas"), SELLO("Tus dibujos"), ELEGIR("Elegir"), REGLA("Regla"), MANO("Mover"), CALCO("Calco"),
 }
 
 /** Cómo se marca un territorio: tocando dentro de tus líneas, pintándolo o quitándolo. */
@@ -45,7 +45,7 @@ enum class ModoTerritorio { ZONA, PINCEL, QUITAR }
  * deshacer y el guardado automático. Los píxeles los lleva el [Lienzo].
  */
 class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Unit = {}) {
-    val lienzo = Lienzo(mapa, res).also { it.carga() }
+    val lienzo = Lienzo(mapa, res).also { it.carga(enSegundoPlano = true) }
 
     var herramienta by mutableStateOf(Herramienta.PINCEL)
     var pincel by mutableStateOf("pluma")
@@ -53,6 +53,10 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     var tamano by mutableStateOf(6f)
     var tamanoGoma by mutableStateOf(30f)
     var opacidad by mutableStateOf(1f)
+    /** Estabilización del trazo (0: nada, 1: mucha), como la StreamLine de Procreate. */
+    var estabilizacion by mutableStateOf(0.25f)
+    /** Se llama al tocar un lugar o territorio con un mapa vinculado (con la herramienta Mover). */
+    var alAbrirMapa: (String) -> Unit = {}
     var color by mutableIntStateOf(0xFF2A2118.toInt())
     val recientes = mutableStateListOf(0xFF2A2118.toInt(), 0xFF5C7894.toInt(), 0xFF6E8B3D.toInt(), 0xFFB5523B.toInt(), 0xFFD9C38A.toInt(), 0xFF8DB4BE.toInt())
     var territorio by mutableIntStateOf(0)
@@ -141,7 +145,12 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
                 val r = recurso ?: run { aviso("Elige uno de tus dibujos (o guarda uno desde el Taller)"); return }
                 cambiaVector("Dibujo") { val s = Sello(mapa.nuevoId("s"), r, x, y, escalaSello); mapa.sellos += s; seleccion = s }
             }
-            Herramienta.ELEGIR, Herramienta.MANO -> seleccion = sel ?: lienzo.territorioEn(x.toInt(), y.toInt()).takeIf { it != 0 }?.let { mapa.territorio(it) }
+            Herramienta.ELEGIR, Herramienta.MANO -> {
+                val s = sel ?: lienzo.territorioEn(x.toInt(), y.toInt()).takeIf { it != 0 }?.let { mapa.territorio(it) }
+                val vinculado = when (s) { is Lugar -> s.mapa; is Territorio -> s.mapa; else -> "" }
+                if (herramienta == Herramienta.MANO && vinculado.isNotBlank()) { alAbrirMapa(vinculado); return }
+                seleccion = s
+            }
             else -> {}
         }
         alCambiarVista()

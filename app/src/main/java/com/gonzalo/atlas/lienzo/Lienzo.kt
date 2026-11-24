@@ -81,17 +81,20 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
 
     // ---------------------------------------------------------------- cargar y guardar
 
-    fun carga() {
+    /** Lee el mapa: las capas al momento y sus teselas en el hilo del lienzo si [enSegundoPlano] (avisa al terminar). */
+    fun carga(enSegundoPlano: Boolean = false) {
         capas.clear()
-        val dir = mapa.dir
-        for (ci in mapa.capas) {
-            val c = CapaPx(ci)
-            dir?.let { d -> File(d, "capas/${ci.id}").listFiles()?.forEach { f -> clave(f.name, ".png")?.let { k -> BitmapFactory.decodeFile(f.path, opcionesBmp)?.let { c.teselas[k] = it } } } }
-            capas += c
-        }
+        for (ci in mapa.capas) capas += CapaPx(ci)
         if (capas.isEmpty()) { capas += CapaPx(CapaInfo("c" + System.currentTimeMillis().toString(36), "Dibujo")); sincronizaInfo() }
-        dir?.let { d -> File(d, "terr").listFiles()?.forEach { f -> clave(f.name, ".bin")?.let { k -> runCatching { InflaterInputStream(f.inputStream()).use { it.readBytes() } }.getOrNull()?.takeIf { it.size == N }?.let { terr[k] = it } } } }
         activa = capas.lastOrNull { !it.info.referencia }?.info?.id ?: capas.last().info.id
+        if (enSegundoPlano) enHilo { leeTeselas(); avisaTodo() } else leeTeselas()
+    }
+
+    private fun leeTeselas() {
+        val dir = mapa.dir ?: return
+        for (c in capas) File(dir, "capas/${c.info.id}").listFiles()?.forEach { f -> clave(f.name, ".png")?.let { k -> if (!c.teselas.containsKey(k)) BitmapFactory.decodeFile(f.path, opcionesBmp)?.let { c.teselas.putIfAbsent(k, it) } } }
+        File(dir, "terr").listFiles()?.forEach { f -> clave(f.name, ".bin")?.let { k -> runCatching { InflaterInputStream(f.inputStream()).use { it.readBytes() } }.getOrNull()?.takeIf { it.size == N }?.let { terr.putIfAbsent(k, it) } } }
+        terrVersion++
     }
 
     private val opcionesBmp = BitmapFactory.Options().apply { inMutable = false; inPreferredConfig = Bitmap.Config.ARGB_8888; inPremultiplied = true }
@@ -285,11 +288,10 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         return bmp.getPixel(0, 0)
     }
 
-    private val pCapa = Paint(Paint.FILTER_BITMAP_FLAG)
-
     /** Dibuja las capas visibles de la zona [r] (píxeles del lienzo) en [c] (ya colocado en coordenadas del lienzo). */
     fun componeZona(c: Canvas, r: Rect, incluir: (CapaPx) -> Boolean = { it.info.visible }) {
         val x0 = Math.floorDiv(r.left, L); val y0 = Math.floorDiv(r.top, L); val x1 = Math.floorDiv(r.right - 1, L); val y1 = Math.floorDiv(r.bottom - 1, L)
+        val pCapa = Paint(Paint.FILTER_BITMAP_FLAG) // una por llamada: la usan varios hilos a la vez
         for (capa in capas) {
             if (!incluir(capa)) continue
             pCapa.alpha = (capa.info.opacidad * 255).toInt()

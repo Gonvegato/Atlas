@@ -63,6 +63,7 @@ class LienzoTest {
         val m = bib.creaMapa(w.id, "Uno", 1024, 768)
         val ed = Editor(m, ctx.resources)
         val lz = ed.lienzo
+        espera(lz)
         val lineas = m.capas.first { it.referencia }.id
         val color = m.capas.first { !it.referencia }.id
         // Una costa cerrada y una frontera que la parte en dos
@@ -125,6 +126,7 @@ class LienzoTest {
         assertTrue(kar != 0 && kar != 1)
         assertEquals("Kar", u.territorio(kar)!!.nombre)
         val edu = Editor(u, ctx.resources)
+        espera(edu.lienzo)
         png(Lamina.pinta(edu, 1200, Capas(ctx)), "unido.png")
     }
 }

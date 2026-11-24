@@ -107,6 +107,7 @@ class EstadoApp(val ctx: Context) {
     var fichaPedida by mutableStateOf<String?>(null)
 
     init {
+        Thread { runCatching { com.gonzalo.atlas.lienzo.Pinceles.cargaImportados(bib.dirRecursos, ctx.resources) } }.start()
         val ultimo = prefs.getString("ultimo", null)
         val m = ultimo?.let { bib.abre(it) } ?: bib.mapas().firstOrNull()?.let { bib.abre(it.id) }
         if (m != null) abreMapa(m, irAlMapa = false)
@@ -131,7 +132,18 @@ class EstadoApp(val ctx: Context) {
 
     private fun cierraEditor(ed: Editor) { mesas.remove(ed)?.cierra(); ed.cierra() }
 
-    fun abreMapa(id: String, irAlMapa: Boolean = true) { bib.abre(id)?.let { abreMapa(it, irAlMapa) } }
+    fun abreMapa(id: String, irAlMapa: Boolean = true) { bib.abre(id)?.let { pila.clear(); abreMapa(it, irAlMapa) } }
+
+    /** Los mapas por los que se ha ido entrando (la iglesia dentro de la ciudad dentro del reino…), para volver. */
+    val pila = androidx.compose.runtime.mutableStateListOf<String>()
+
+    fun abreVinculado(id: String) {
+        val m = bib.abre(id) ?: run { mensaje = "Ese mapa ya no existe"; return }
+        editor?.let { pila.add(it.mapa.id); it.guardaYa() }
+        abreMapa(m)
+    }
+
+    fun vuelve() { val id = pila.removeLastOrNull() ?: return; bib.abre(id)?.let { abreMapa(it) } }
 
     fun nuevoMapa(mundo: String?, nombre: String, ancho: Int, alto: Int, papel: Int) {
         val w = mundo ?: bib.creaMundo("").id
@@ -156,10 +168,10 @@ class EstadoApp(val ctx: Context) {
 
     private fun dirTaller(id: String) = File(bib.dirRecursos, "$id.capas")
 
-    fun nuevoDibujo(lado: Int) {
+    fun nuevoDibujo() {
         editorTaller?.let { cierraEditor(it) }
         val id = "d" + Biblioteca.id36()
-        val m = Mapa(id, "", "Dibujo", lado, lado, dirTaller(id))
+        val m = Mapa(id, "", "Dibujo", 0, 0, dirTaller(id))
         m.papel = 0; m.granoPapel = false; m.verTerritorios = false
         m.capas += CapaInfo("c" + Biblioteca.id36(), "Dibujo")
         m.guardaMeta()
@@ -196,7 +208,8 @@ class EstadoApp(val ctx: Context) {
         @Suppress("UNUSED_VARIABLE") val nada = 0
         mensaje = "Preparando la imagen…"
         ed.lienzo.enHilo {
-            val b = Lamina.pinta(ed, 6144, mesa.capas) { recursos.bitmap(it) }
+            val l = ed.lienzo.limites()
+            val b = Lamina.pinta(ed, minOf(4096, maxOf(l.width(), l.height())), mesa.capas) { recursos.bitmap(it) }
             val nombre = ed.mapa.nombre.replace(Regex("[^\\p{L}\\p{N} _-]"), "") + ".png"
             val r = runCatching {
                 val v = android.content.ContentValues().apply {
