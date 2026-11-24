@@ -4,6 +4,12 @@ App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma fir
 Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
 etiqueta `v0.15.0`.
 
+## 2.1.1
+
+- **Continentes**: se eligen los colores de la tierra y del mar (o el color que tengas puesto).
+- **Con el dedo**: Acciones → «afilar el principio y el final de los trazos» se puede quitar (así el trazo no cambia nada al
+  levantar el dedo; con él puesto, la punta final se afila al levantar, como en Procreate).
+
 ## 2.1.0
 
 - **Selección automática**: en Selección → Automática, toca dentro de una zona cerrada por tus líneas (un reino, una isla,

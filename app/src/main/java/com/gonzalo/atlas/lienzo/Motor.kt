@@ -85,7 +85,7 @@ class Caminante(
     init {
         var i = d.afiladoInicio; var f = d.afiladoFin
         // Con el dedo no hay presión: los pinceles que cambian de tamaño con ella se afilan solos al empezar y al acabar
-        if (!lapiz && d.presionTamano > 0.05f) { i = max(i, d.presionTamano * 2.5f); f = max(f, d.presionTamano * 4f) }
+        if (!lapiz && d.presionTamano > 0.05f) { i = max(i, d.presionTamano * 2f); f = max(f, d.presionTamano * 3f) }
         var li = i * tam; var lf = f * tam
         if (largoTotal >= 0f) { val tope = largoTotal * 0.45f; if (li > tope) li = tope; if (lf > tope) lf = tope }
         afIni = li; afFin = lf

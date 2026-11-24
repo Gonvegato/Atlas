@@ -468,13 +468,14 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         lapizTrazo = esLapiz(e, i)
         vista.actualiza(); vista.m.invert(inv)
         val v = lz.empiezaTrazo(def, editor.color, if (goma) editor.tamanoGoma else editor.tamano, if (goma) editor.opacidadGoma else editor.opacidad,
-            if (goma) TrazoDatos.BORRAR else TrazoDatos.PINTAR, vista.zoom / dens, lapizTrazo, Motor.nivel(vista.zoom), editor.espejos()) ?: return
+            if (goma) TrazoDatos.BORRAR else TrazoDatos.PINTAR, vista.zoom / dens, lapizTrazo || !editor.afilaDedo, Motor.nivel(vista.zoom), editor.espejos()) ?: return
         trazo = v; bajoTrazo = e.eventTime; camino.limpia(); forma = null; formaBase = null
         // Estabilizado: el pincel va detrás del lápiz, atado con una cuerda
         cuerda = if (editor.estabilizacion > 0.01f) floatArrayOf(e.getX(i), e.getY(i)) else null
         lote.limpia()
         punto(e.getX(i), e.getY(i), e.getPressure(i), e.getAxisValue(MotionEvent.AXIS_TILT, i), e.getOrientation(i), e.eventTime, true)
-        manda()
+        // Con el lápiz se pinta ya; con el dedo, al moverlo o levantarlo (por si era el primer dedo de un gesto de dos: que no parpadee un punto)
+        if (lapizTrazo) manda()
         quietoX = e.getX(i); quietoY = e.getY(i)
         runCatching { requestUnbufferedDispatch(e) }
         cursor(e.x, e.y)

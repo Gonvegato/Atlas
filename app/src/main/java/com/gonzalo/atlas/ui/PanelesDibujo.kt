@@ -183,6 +183,7 @@ internal fun GuiasDibujo(ed: Editor, mesa: Mesa) {
         BotonO("Centrar la guía en lo que se ve") { val v = mesa.vista.visible(); g.x = v.centerX(); g.y = v.centerY(); ed.mapa.avisaVector(); mesa.refresca() }
     }
     InterruptorO("Formas rápidas: deja el lápiz quieto al acabar un trazo y se vuelve una recta, un arco, una elipse o un polígono", ed.formasRapidas) { ed.formasRapidas = it }
+    InterruptorO("Con el dedo, afilar el principio y el final de los trazos (el final se afila al levantar)", ed.afilaDedo) { ed.afilaDedo = it }
 }
 
 /**
@@ -198,12 +199,12 @@ internal fun PanelContinente(ed: Editor, mesa: Mesa) {
     var semilla by remember { mutableStateOf((System.nanoTime() / 1000L) % 100000L) }
     var conTierra by remember { mutableStateOf(true) }; var conMar by remember { mutableStateOf(false) }; var seccion by remember { mutableStateOf(false) }
     var aqui by remember { mutableStateOf(0) }
-    val colTierra = 0xFFE6D8AE.toInt(); val colMar = 0xFFB9D3DB.toInt()
+    var colTierra by remember { mutableStateOf(0xFFE6D8AE.toInt()) }; var colMar by remember { mutableStateOf(0xFFB9D3DB.toInt()) }
     fun km(s: String) = s.replace(',', '.').replace(" ", "").toDoubleOrNull()?.takeIf { it > 0.0 }
     val kmA = km(ancho); val kmH = km(alto)
     DisposableEffect(Unit) { onDispose { ed.vistaPrevia = null } }
     fun forma() = FormaTierra(semilla, tipo, tierra, rug, islas)
-    val muestra by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, tipo, tierra, rug, islas, semilla, ancho + "x" + alto + aqui) {
+    val muestra by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, tipo, tierra, rug, islas, semilla, ancho + "x" + alto + aqui + "c" + colTierra + colMar) {
         if (kmA == null || kmH == null) { value = null; ed.vistaPrevia = null; return@produceState }
         kotlinx.coroutines.delay(120)
         val asp = (kmA / kmH).toFloat().coerceIn(0.2f, 5f)
@@ -236,7 +237,9 @@ internal fun PanelContinente(ed: Editor, mesa: Mesa) {
     DeslizadorO("Costa recortada", rug, 0f..1f, "${(rug * 100).roundToInt()}%") { rug = it }
     DeslizadorO("Islas", islas, 0f..1f, "${(islas * 100).roundToInt()}%") { islas = it }
     InterruptorO("Pintar la tierra de color", conTierra) { conTierra = it }
+    if (conTierra) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { for (c in listOf(0xFFE6D8AE, 0xFFF1E6C8, 0xFFD9C38A, 0xFFC9D0A0, 0xFFAFBB72, 0xFFD8C4A8, 0xFFE8E4DA).map { it.toInt() }) MuestraO(c, c == colTierra, 28) { colTierra = c }; MuestraO(ed.color, ed.color == colTierra, 28) { colTierra = ed.color } }
     InterruptorO("Pintar el mar", conMar) { conMar = it }
+    if (conMar) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { for (c in listOf(0xFFB9D3DB, 0xFF8DB4BE, 0xFFA9C4D8, 0xFF5C7894, 0xFFCFE0DC, 0xFFD6E3E8, 0xFF3E6A8A).map { it.toInt() }) MuestraO(c, c == colMar, 28) { colMar = c }; MuestraO(ed.color, ed.color == colMar, 28) { colMar = ed.color } }
     InterruptorO("Crear una sección con ese tamaño", seccion) { seccion = it }
     Text("La costa se dibuja con el color elegido (ahora ${"#%06X".format(ed.color and 0xFFFFFF)}), en la capa de líneas.", style = O.texto(12.sp, O.GRIS))
     BotonO("Poner en el mapa", lleno = true, color = O.ACENTO, activo = kmA != null && kmH != null) {

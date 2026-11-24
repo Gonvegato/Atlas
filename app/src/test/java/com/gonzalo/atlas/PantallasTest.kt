@@ -5,6 +5,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import com.github.takahirom.roborazzi.captureRoboImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
@@ -93,7 +94,7 @@ class PantallaMapaTest {
         compose.setContent { App(e) }
         compose.waitForIdle()
         capturas.mkdirs()
-        fun captura(n: String) { compose.waitForIdle(); Thread.sleep(300); org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); compose.waitForIdle(); compose.onRoot().captureRoboImage(File(capturas, n).path) }
+        fun captura(n: String) { compose.mainClock.advanceTimeBy(400); compose.waitForIdle(); Thread.sleep(300); org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); compose.waitForIdle(); compose.onRoot().captureRoboImage(File(capturas, n).path) }
         fun pulsa(desc: String) { compose.onNodeWithContentDescription(desc).performClick() }
         captura("mapa.png")
         pulsa("Pintar"); captura("mapa_pinceles.png")
@@ -103,6 +104,8 @@ class PantallaMapaTest {
         pulsa("Selección"); ed.ponMarco(com.gonzalo.atlas.lienzo.Seleccion.elipse(android.graphics.RectF(600f, 600f, 1400f, 1300f))); captura("mapa_seleccion.png")
         ed.ponMarco(null)
         pulsa("Mundo"); captura("mapa_mundo.png")
+        compose.onNodeWithText("Generar un continente").performClick(); repeat(3) { captura("mapa_continente.png") }
+        pulsa("Mundo")
         ed.herramienta = com.gonzalo.atlas.editor.Herramienta.TERRITORIO
         captura("mapa_territorios.png")
         // De cerca (4×): las teselas nítidas y un trazo a medio dibujar (aún sin soltar), con simetría
