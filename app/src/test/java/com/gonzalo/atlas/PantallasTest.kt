@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import com.github.takahirom.roborazzi.captureRoboImage
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -44,7 +45,7 @@ class PantallasTest {
         m.territorios += Territorio(1, "Imperio de Valdor", "Imperio", 0xFFB5523B.toInt())
         m.territorios += Territorio(2, "Reino de Kar", "Reino", 0xFF3E6A8A.toInt(), 1)
         m.territorios += Territorio(3, "Marca de Olm", "Provincia", 0xFF6E8B3D.toInt(), 2)
-        m.lugares += Lugar("p1", "Valdrín", "capital", 1000f, 900f, 7)
+        m.lugares += Lugar("p1", "Valdrín", "capital", 1000.0, 900.0, 7)
         m.territorios += Territorio(4, "Liga de Sarn", "Reino", 0xFF8A6A3E.toInt())
         m.tipo = "continente"; m.guardaMeta()
         e.bib.creaMapa(w.id, "Valdrín, la capital", 0, 0, tipo = "ciudad"); e.bib.creaMapa(w.id, "Ithria entera", 0, 0, tipo = "mundo")
@@ -120,6 +121,11 @@ class PantallaMapaTest {
         captura("mapa.png")
         pulsa("Pintar"); captura("mapa_pinceles.png")
         pulsa("Capas"); captura("mapa_capas.png")
+        // Una capa nueva aparece al momento en la lista (sin salir del panel y volver a entrar), y la papelera la borra
+        compose.onNodeWithText("+ Capa nueva").performClick(); espera(lz); captura("mapa_capas_nueva.png")
+        org.junit.Assert.assertEquals(3, lz.capas.size); compose.onNodeWithText("Capa 3").assertExists()
+        compose.onAllNodesWithContentDescription("Borrar la capa")[0].performClick(); espera(lz); captura("mapa_capas.png")
+        org.junit.Assert.assertEquals(2, lz.capas.size); compose.onNodeWithText("Capa 3").assertDoesNotExist()
         pulsa("Ajustes"); captura("mapa_ajustes.png")
         pulsa("Acciones"); captura("mapa_acciones.png")
         pulsa("Selección"); ed.ponMarco(com.gonzalo.atlas.lienzo.Seleccion.elipse(android.graphics.RectF(600f, 600f, 1400f, 1300f))); captura("mapa_seleccion.png")
@@ -139,14 +145,45 @@ class PantallaMapaTest {
         ed.herramienta = com.gonzalo.atlas.editor.Herramienta.PINCEL
         pulsa("Mundo")
         val mesa = e.mesaAbierta(ed)!!
-        compose.runOnUiThread { mesa.irA(1010f, 900f, 4f); ed.ponSimetria("vertical", 1010f, 900f) }
-        val vivo = lz.empiezaTrazo(com.gonzalo.atlas.lienzo.Pinceles.def("lapiz6b"), 0xFF7A1F1F.toInt(), 5f, 1f, 0, 0.5f, true, com.gonzalo.atlas.lienzo.Motor.nivel(4f), ed.espejos())!!
+        compose.runOnUiThread { mesa.irA(1010f, 900f, 4f); ed.ponSimetria("vertical", 1010.0, 900.0) }
+        val vivo = lz.empiezaTrazo(com.gonzalo.atlas.lienzo.Pinceles.def("lapiz6b"), 0xFF7A1F1F.toInt(), 5f, 1f, 0, 0.5f, true, com.gonzalo.atlas.lienzo.Motor.nivel(4f), 0.0, 0.0, ed.espejos())!!
         vivo.agrega(FloatArray(20 * 6) { i -> val k = i / 6; when (i % 6) { 0 -> 900f + k * 5f; 1 -> 860f + kotlin.math.sin(k * 0.5f) * 14f; 2 -> 0.3f + k * 0.03f; 5 -> k * 16f; else -> 0.3f } })
         espera(lz)
         repeat(4) { captura("mapa_cerca.png") }
         vivo.termina { ed2, _ -> ed2?.let { lz.apunta(it) } }; espera(lz)
         repeat(3) { captura("mapa_cerca2.png") }
         org.junit.Assert.assertTrue(lz.capaActiva()!!.trazos.any { it.datos.ramas.size == 2 })
+        // De muy cerca (200.000 aumentos; aquí un píxel del mapa son 2 km, así que la casilla baja a 2 m): una casa dibujada,
+        // rellenada con el bote, con su rótulo y un lugar, todo en su sitio
+        compose.runOnUiThread { ed.ponSimetria(null) }
+        val z = 200000f
+        val lineas = lz.capas.first { it.info.referencia }; val color = lz.capas.first { !it.info.referencia }
+        // (Un sitio donde no pase ya una línea: a esta escala una línea de las de antes tapa cien pantallas)
+        val (cx, cy) = listOf(1010.123456 to 930.654321, 1300.123456 to 700.654321, 600.123456 to 1500.654321, 1500.123456 to 1300.654321).first { (x, y) ->
+            (-3..3).all { dx -> (-3..3).all { dy -> (lz.colorCapa(lineas, (x + dx).toFloat(), (y + dy).toFloat()) ushr 24) == 0 } } }
+        compose.runOnUiThread { mesa.irA(cx, cy, z) }
+        org.junit.Assert.assertEquals(z, mesa.vista.zoom, 0f)
+        fun cerca(pincel: String, col: Int, tam: Float, vararg p: Float) {
+            val v = lz.empiezaTrazo(com.gonzalo.atlas.lienzo.Pinceles.def(pincel), col, tam / z, 1f, 0, z / 2f, true, com.gonzalo.atlas.lienzo.Motor.nivel(z), cx, cy)!!
+            val n = p.size / 2
+            v.agrega(FloatArray(n * 6) { i -> when (i % 6) { 0 -> p[i / 6 * 2] / z; 1 -> p[i / 6 * 2 + 1] / z; 2 -> 0.8f; 5 -> (i / 6) * 30f; else -> 0.2f } })
+            v.termina { ed2, _ -> ed2?.let { lz.apunta(it) } }; espera(lz)
+        }
+        lz.activa = lineas.info.id
+        cerca("rotulador", 0xFF2A2118.toInt(), 7f, -420f, -260f, 420f, -260f, 420f, 300f, -420f, 300f, -420f, -260f, -300f, -260f)
+        cerca("rotulador", 0xFF2A2118.toInt(), 7f, -470f, -250f, 0f, -520f, 470f, -250f)
+        cerca("pluma", 0xFF2A2118.toInt(), 5f, -80f, 300f, -80f, 80f, 80f, 80f, 80f, 300f)
+        lz.activa = color.info.id
+        val (rell, porque) = lz.rellena(cx + 200.0 / z, cy - 100.0 / z, 0xFFC98F5A.toInt(), 1f, z, mesa.vista.visibleD())
+        org.junit.Assert.assertNotNull(porque, rell); lz.apunta(rell!!)
+        ed.mapa.rotulos += com.gonzalo.atlas.motor.Rotulo("tz", "Casa del herrero", cx, cy - 610.0 / z, 44f / z, 0f, "cursiva")
+        ed.mapa.lugares += Lugar("pz", "Pozo", "aldea", cx + 700.0 / z, cy + 150.0 / z, 3)
+        compose.runOnUiThread { ed.mapa.avisaVector(); mesa.opciones.cuadricula = true; mesa.refresca() }
+        espera(lz)
+        repeat(5) { captura("mapa_muy_cerca.png") }
+        // Lo dibujado de cerca está guardado como datos (no cabe en un píxel del mapa) y el relleno, como forma
+        org.junit.Assert.assertTrue(lineas.let { lz.capa(it.info.id)!! }.trazos.count { it.datos.tam < 0.001f } >= 3)
+        org.junit.Assert.assertNotNull(lz.capa(color.info.id)!!.trazos.last().datos.relleno)
     }
 }
 

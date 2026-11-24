@@ -47,7 +47,8 @@ class Recurso(val id: String, var nombre: String, var categoria: String, val arc
 
 /** Tu biblioteca de dibujos: `recursos/<id>.png` y `recursos/recursos.json`. */
 class Recursos(private val dir: File) {
-    private val cache = LruCache<String, Bitmap>(48)
+    /** Los dibujos en memoria: hasta 96 MB (los grandes pesan varios megas cada uno). */
+    private val cache = object : LruCache<String, Bitmap>(96 shl 20) { override fun sizeOf(key: String, value: Bitmap) = value.byteCount }
     private val indice = File(dir, "recursos.json")
     var version by mutableIntStateOf(0)
 
@@ -81,6 +82,8 @@ class Recursos(private val dir: File) {
     fun dirCapas(id: String) = File(dir, "$id.capas")
 
     companion object {
+        /** El lado mayor con que se guarda un dibujo (px). */
+        const val LADO = 1536
         val CATEGORIAS = listOf("Montañas", "Colinas", "Árboles y bosques", "Ciudades", "Castillos", "Templos", "Ruinas", "Barcos", "Criaturas", "Rosas de los vientos", "Adornos", "Otros")
     }
 }
@@ -118,6 +121,7 @@ class EstadoApp(val ctx: Context) {
         val ultimo = prefs.getString("ultimo", null)
         val m = ultimo?.let { bib.abre(it) } ?: bib.mapas().firstOrNull()?.let { bib.abre(it.id) }
         if (m != null) abreMapa(m, irAlMapa = false)
+        mejoraDibujos()
     }
 
     val mapa: Mapa? get() = editor?.mapa
@@ -210,17 +214,43 @@ class EstadoApp(val ctx: Context) {
 
     fun cierraDibujo() { editorTaller?.let { cierraEditor(it) }; editorTaller = null; recursoTaller = null }
 
+    /**
+     * Los dibujos guardados con versiones anteriores quedaron con los pocos píxeles que ocupaban en el lienzo. Una sola vez,
+     * en segundo plano, se rehacen en alta resolución los que conservan sus trazos (solo si salen más grandes que como estaban).
+     */
+    fun mejoraDibujos() {
+        val prefs = ctx.getSharedPreferences("dibujo", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("dibujosHD", false)) return
+        Thread {
+            var hechos = 0
+            for (r in recursos.lista()) runCatching {
+                if (r.id == recursoTaller) return@runCatching
+                val m = Mapa.lee(dirTaller(r.id)) ?: return@runCatching
+                val lz = com.gonzalo.atlas.lienzo.Lienzo(m, ctx.resources)
+                try {
+                    lz.carga(false)
+                    if (!lz.tieneTrazos()) return@runCatching
+                    val viejo = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }.also { android.graphics.BitmapFactory.decodeFile(r.archivo.path, it) }
+                    val b = lz.imagenNitida(Recursos.LADO) ?: return@runCatching
+                    // (Se guarda en el hilo principal, que es el que lleva la lista de dibujos)
+                    if (maxOf(b.width, b.height) > maxOf(viejo.outWidth, viejo.outHeight) * 1.3f) { android.os.Handler(android.os.Looper.getMainLooper()).post { runCatching { recursos.guarda(r.id, r.nombre, r.categoria, b) } }; hechos++ }
+                } finally { lz.cierra() }
+            }
+            prefs.edit().putBoolean("dibujosHD", true).apply()
+            if (hechos > 0) android.os.Handler(android.os.Looper.getMainLooper()).post { listas++ }
+        }.apply { isDaemon = true; priority = Thread.MIN_PRIORITY; name = "atlas-dibujos" }.start()
+    }
+
     /** Guarda el dibujo del Taller en tu biblioteca (recortado a lo dibujado, con fondo transparente). */
     fun guardaDibujo(nombre: String, categoria: String) {
         val ed = editorTaller ?: return
         ed.lienzo.enHilo {
             ed.lienzo.guarda()
-            val r = ed.lienzo.contenido()
-            if (r == null) { mensaje = "El dibujo está vacío"; return@enHilo }
-            r.inset(-4, -4)
-            val b = ed.lienzo.recorta(r)
+            // En alta resolución: los trazos se rehacen hasta que el dibujo mide unos 1.536 px de lado, por pequeño que se haya dibujado
+            val b = ed.lienzo.imagenNitida(Recursos.LADO)
+            if (b == null) { mensaje = "El dibujo está vacío"; return@enHilo }
             val id = ed.mapa.id
-            android.os.Handler(android.os.Looper.getMainLooper()).post { recursos.guarda(id, nombre, categoria, b); recursoTaller = id; mensaje = "Guardado en tu biblioteca: «$nombre»"; listas++ }
+            android.os.Handler(android.os.Looper.getMainLooper()).post { recursos.guarda(id, nombre, categoria, b); recursoTaller = id; mensaje = "Guardado en tu biblioteca: «$nombre» (${b.width} × ${b.height} px)"; listas++ }
         }
     }
 

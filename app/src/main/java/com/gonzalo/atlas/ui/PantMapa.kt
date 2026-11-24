@@ -17,6 +17,7 @@ import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Colorize
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FormatColorFill
 import androidx.compose.material.icons.outlined.HighlightAlt
 import androidx.compose.material.icons.outlined.Layers
@@ -135,7 +136,7 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
                 .shadow(16.dp, RoundedCornerShape(14.dp)).clip(RoundedCornerShape(14.dp)).background(O.PAPEL)) {
                 Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(titulos[p] ?: p, Modifier.weight(1f), style = O.titular(20.sp))
-                    if (p == "capas") Text("+", Modifier.pulsableO { nuevaCapa(ed) }.padding(horizontal = 10.dp), style = O.titular(28.sp, O.ACENTO))
+                    if (p == "capas") BotonO("+ Capa nueva", lleno = true) { nuevaCapa(ed) }
                     Text("✕", Modifier.pulsableO { panel = null; if (p == "sel") ed.seleccion = null }.padding(8.dp), style = O.texto(16.sp, O.GRIS))
                 }
                 Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 14.dp, end = 14.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -173,7 +174,24 @@ private val titulos = mapOf("pinceles" to "Biblioteca de pinceles", "estudio" to
 
 private fun nuevaCapa(ed: Editor) {
     val lz = ed.lienzo
-    lz.cambiaCapas("Nueva capa") { val c = CapaPx(CapaInfo("c" + System.nanoTime().toString(36), "Capa ${lz.capas.size + 1}")); val i = lz.capas.indexOfFirst { it.info.id == lz.activa }; lz.capas.add(if (i < 0) lz.capas.size else i + 1, c); lz.activa = c.info.id }
+    lz.cambiaCapas("Nueva capa") {
+        // (Un nombre que no esté ya: «Capa 3», «Capa 4»…)
+        var n = lz.capas.size + 1; while (lz.capas.any { it.info.nombre == "Capa $n" }) n++
+        val c = CapaPx(CapaInfo("c" + System.nanoTime().toString(36), "Capa $n")); val i = lz.capas.indexOfFirst { it.info.id == lz.activa }; lz.capas.add(if (i < 0) lz.capas.size else i + 1, c); lz.activa = c.info.id
+        ed.avisa("Capa nueva: «Capa $n». Es la elegida: lo que pintes va en ella.")
+    }
+    ed.capaActiva = ""
+}
+
+private fun borraCapa(ed: Editor, c: CapaPx) {
+    val lz = ed.lienzo
+    if (lz.capas.size <= 1) { ed.avisa("Es la única capa: no se puede borrar (puedes vaciarla)"); return }
+    lz.cambiaCapas("Borrar capa") {
+        val i = lz.capas.indexOf(c); if (i < 0) return@cambiaCapas
+        lz.capas.remove(c)
+        if (lz.activa == c.info.id || lz.capa(lz.activa) == null) lz.activa = lz.capas[(i - 1).coerceIn(0, lz.capas.size - 1)].info.id
+        ed.avisa("Capa «${c.info.nombre}» borrada. Deshacer la recupera.")
+    }
     ed.capaActiva = ""
 }
 
@@ -209,6 +227,11 @@ private fun BarraSuperior(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean,
             Icono(Icons.Outlined.Brush, "Pintar", h == Herramienta.PINCEL) { herramienta(Herramienta.PINCEL, "pinceles") }
             Icono(Icons.Outlined.TouchApp, "Difuminar", h == Herramienta.DIFUMINAR) { herramienta(Herramienta.DIFUMINAR, "pinceles") }
             Box(Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).background(if (h == Herramienta.GOMA) O.CRUDO else Color.Transparent).pulsableO { herramienta(Herramienta.GOMA, "pinceles") }, contentAlignment = Alignment.Center) { IconoGoma(if (h == Herramienta.GOMA) O.ACENTO else O.TINTA) }
+            // El bote de pintura: se elige y se toca dentro de la zona que se quiere rellenar del color elegido
+            Icono(Icons.Outlined.FormatColorFill, "Rellenar", h == Herramienta.RELLENO) {
+                if (h == Herramienta.RELLENO) ed.herramienta = Herramienta.PINCEL
+                else { ed.herramienta = Herramienta.RELLENO; ed.seleccion = null; ed.avisa("Bote de pintura: toca dentro de una zona y se rellena del color elegido (sobre un color, lo cambia)") }
+            }
             Icono(Icons.Outlined.Layers, "Capas", panel == "capas") { abre("capas") }
             Spacer(Modifier.width(6.dp))
             Box(Modifier.size(32.dp).clip(CircleShape).background(Color(ed.color)).border(2.dp, if (panel == "color") O.ACENTO else O.TINTA, CircleShape).pulsableO { abre("color") })
@@ -410,6 +433,7 @@ private fun EstudioPincel(ed: Editor, volver: () -> Unit) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PanelColor(ed: Editor) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     var modo by remember { mutableStateOf("disco") }
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         for ((k, n) in listOf("disco" to "Disco", "clasico" to "Clásico", "valores" to "Valores", "paletas" to "Paletas")) FichaO(n, modo == k) { modo = k }
@@ -481,6 +505,7 @@ private fun ValoresColor(color: Int, alCambiar: (Int) -> Unit) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PanelCapas(e: EstadoApp, ed: Editor, mesa: Mesa) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     val lz = ed.lienzo
     val ctx = LocalContext.current
     @Suppress("UNUSED_VARIABLE") val ver = lz.version
@@ -491,6 +516,7 @@ private fun PanelCapas(e: EstadoApp, ed: Editor, mesa: Mesa) {
         val vis = mesa.vista.visible()
         lz.enHilo { lz.importaImagen(b, "Imagen", vis.left + vis.width() * 0.1f, vis.top + vis.height() * 0.1f, vis.width() * 0.8f) }
     }
+    Text("${lz.capas.size} ${if (lz.capas.size == 1) "capa" else "capas"}. La de arriba tapa a las de abajo. Toca una para pintar en ella; «⋯» abre sus opciones y la papelera la borra.", style = O.texto(12.sp, O.GRIS))
     for (c in lz.capas.reversed()) {
         val activa = c.info.id == lz.activa
         val mini by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, c.teselas.size, lz.version / 4) {
@@ -507,7 +533,10 @@ private fun PanelCapas(e: EstadoApp, ed: Editor, mesa: Mesa) {
                     val extra = listOfNotNull("↳ Recortada a la de abajo".takeIf { c.info.recorte }, "Referencia".takeIf { c.info.referencia }, "Transparencia bloqueada".takeIf { c.info.bloqueoAlfa })
                     if (extra.isNotEmpty()) Text(extra.joinToString(" · "), style = O.texto(11.sp, if (activa) O.TINTA else O.GRIS))
                 }
-                Text(letraFusion(c.info.fusion), Modifier.padding(horizontal = 8.dp), style = O.titular(14.sp))
+                Text(letraFusion(c.info.fusion), Modifier.padding(horizontal = 6.dp), style = O.titular(14.sp))
+                // Las opciones de la capa y borrarla, a la vista (sin tener que saber que se abren tocándola otra vez)
+                Text("⋯", Modifier.pulsableO { ed.ponCapa(c.info.id); abierta = if (abierta == c.info.id) null else c.info.id }.padding(horizontal = 8.dp, vertical = 4.dp), style = O.titular(20.sp, O.TINTA))
+                if (lz.capas.size > 1) androidx.compose.material3.Icon(Icons.Outlined.Delete, "Borrar la capa", Modifier.padding(end = 8.dp).size(22.dp).pulsableO { borraCapa(ed, c) }, tint = if (activa) O.TINTA else O.GRIS)
                 Box(Modifier.size(24.dp).clip(RoundedCornerShape(5.dp)).border(2.dp, O.TINTA, RoundedCornerShape(5.dp)).background(if (c.info.visible) O.TINTA else Color.Transparent)
                     .pulsableO { lz.cambiaCapas("Ver capa") { c.info.visible = !c.info.visible } }, contentAlignment = Alignment.Center) {
                     if (c.info.visible) Text("✓", style = O.texto(13.sp, if (activa) O.ACENTO else O.PAPEL))
@@ -530,7 +559,7 @@ private fun PanelCapas(e: EstadoApp, ed: Editor, mesa: Mesa) {
                     BotonO("Combinar abajo") { combinaAbajo(lz, c) }
                     BotonO("Rellenar capa") { lz.cambiaCapas("Rellenar capa") { c.soloPixeles(); rellenaCapa(lz, c, ed.color) } }
                     BotonO("Vaciar") { lz.cambiaCapas("Vaciar capa") { c.soloPixeles(); c.teselas.clear() } }
-                    if (lz.capas.size > 1) BotonO("Borrar", color = O.ROJO) { lz.cambiaCapas("Borrar capa") { lz.capas.remove(c); lz.activa = lz.capas.last().info.id } }
+                    if (lz.capas.size > 1) BotonO("Borrar", color = O.ROJO) { borraCapa(ed, c) }
                 }
             }
         }
@@ -564,10 +593,11 @@ private fun rellenaCapa(lz: Lienzo, c: CapaPx, color: Int) {
 
 @Composable
 private fun PanelAcciones(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     val m = ed.mapa
     EtiquetaO("Lienzo", tam = 11.sp, color = O.ACENTO)
     if (!taller) {
-        InterruptorO("Cuadrícula (casillas en km)", mesa.opciones.cuadricula) { mesa.opciones.cuadricula = it; mesa.refresca(); ed.cambios++ }
+        InterruptorO("Cuadrícula (casillas en km; de cerca, en metros)", mesa.opciones.cuadricula) { mesa.opciones.cuadricula = it; mesa.refresca(); ed.cambios++ }
         Text("Mide en km: fija cuántos km es un píxel en Mundo → Escala (ahora ${m.kmPorPx.toString().replace('.', ',')} km por píxel${if (m.escalaPuesta) "" else ", sin fijar"}).", style = O.texto(12.sp, O.GRIS))
     }
     GuiasDibujo(ed, mesa)
@@ -598,6 +628,7 @@ private fun PanelAcciones(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean)
 
 @Composable
 private fun PanelTransformar(ed: Editor, mesa: Mesa) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     Text("Arrastra para mover la capa; con dos dedos, escala y gira.", style = O.texto(13.sp, O.GRIS))
     fun cambia(f: (android.graphics.Matrix, Float, Float) -> Unit) {
         val m = ed.transformacion ?: android.graphics.Matrix(); val v = mesa.vista.visible()
@@ -617,6 +648,7 @@ private fun PanelTransformar(ed: Editor, mesa: Mesa) {
 /** Las herramientas del mundo (lo que hace de esta app de dibujo una de mapas). */
 @Composable
 private fun PanelMundo(ed: Editor, abre: (String) -> Unit) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     @Composable fun F(h: Herramienta, t: String, d: String, panel: String?) {
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (ed.herramienta == h) O.ACENTO else O.CRUDO)
             .pulsableO { ed.herramienta = h; ed.seleccion = null; if (h != Herramienta.REGLA) ed.regla = null; if (panel != null) abre(panel) else abre("mundo") }.padding(12.dp)) {
@@ -657,6 +689,7 @@ private fun combinaAbajo(lz: Lienzo, c: CapaPx) {
 
 @Composable
 private fun PanelTerritorios(e: EstadoApp, ed: Editor, mesa: Mesa) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     val m = ed.mapa
     Text("Dibuja las fronteras con el pincel (mejor en la capa «Líneas») y luego toca dentro de cada zona para decir de quién es.", style = O.texto(12.sp, O.GRIS))
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -695,6 +728,7 @@ private fun PanelTerritorios(e: EstadoApp, ed: Editor, mesa: Mesa) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PanelLugares(ed: Editor) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     Text("Toca el mapa para poner un lugar del tipo elegido. Tócalo otra vez para editarlo.", style = O.texto(12.sp, O.GRIS))
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         for (t in Catalogo.LUGARES) FichaO(t.nombre, ed.tipoLugar == t.clave) { ed.tipoLugar = t.clave; ed.herramienta = Herramienta.LUGAR }
@@ -704,6 +738,7 @@ private fun PanelLugares(ed: Editor) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PanelRutas(ed: Editor) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     Text("Dibuja la ruta arrastrando. Se puede elegir después para cambiarla o medirla.", style = O.texto(12.sp, O.GRIS))
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         for (t in Catalogo.RUTAS) FichaO(t.nombre, ed.tipoRuta == t.clave) { ed.tipoRuta = t.clave; ed.herramienta = Herramienta.RUTA }
@@ -713,6 +748,7 @@ private fun PanelRutas(ed: Editor) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PanelDibujos(e: EstadoApp, ed: Editor) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     @Suppress("UNUSED_VARIABLE") val v = e.recursos.version
     val lista = e.recursos.lista()
     if (lista.isEmpty()) Text("Aún no tienes dibujos sueltos. Dibuja uno en el Taller (montañas, bosques, ciudades…) y guárdalo: luego lo pones aquí tantas veces como quieras.", style = O.texto(13.sp, O.GRIS))
@@ -733,6 +769,7 @@ private fun PanelDibujos(e: EstadoApp, ed: Editor) {
 
 @Composable
 private fun PanelSeleccion(e: EstadoApp, ed: Editor, mesa: Mesa) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     when (val s = ed.seleccion) {
         is Territorio -> EditaTerritorio(e, ed, s)
         is Lugar -> EditaLugar(e, ed, s)
@@ -809,7 +846,8 @@ private fun EditaRotulo(ed: Editor, r: Rotulo) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         for ((k, n) in listOf("serif" to "Serif", "cursiva" to "Cursiva", "negrita" to "Negrita", "grotesca" to "Grotesca")) FichaO(n, r.estilo == k) { ed.cambiaVector("Letra") { r.estilo = k } }
     }
-    DeslizadorO("Tamaño", r.tam, 6f..600f, "${r.tam.roundToInt()}") { r.tam = it; ed.mapa.avisaVector() }
+    val k = 1f / ed.enMapa(1f)
+    DeslizadorO("Tamaño", (r.tam * k).coerceIn(6f, 600f), 6f..600f, "${(r.tam * k).roundToInt()}") { r.tam = it / k; ed.mapa.avisaVector() }
     DeslizadorO("Espaciado", r.espaciado, 0f..1f, "%.2f".format(r.espaciado)) { r.espaciado = it; ed.mapa.avisaVector() }
     DeslizadorO("Giro", r.giro, -180f..180f, "${r.giro.roundToInt()}°") { r.giro = it; ed.mapa.avisaVector() }
     DeslizadorO("Curva", r.curva, -0.5f..0.5f, "%.2f".format(r.curva)) { r.curva = it; ed.mapa.avisaVector() }
@@ -830,7 +868,9 @@ private fun EditaRuta(ed: Editor, l: Linea) {
 
 @Composable
 private fun EditaSello(ed: Editor, s: Sello) {
-    DeslizadorO("Tamaño", s.escala, 0.1f..10f, "×%.1f".format(s.escala)) { s.escala = it; ed.mapa.avisaVector() }
+    // (De cerca, el tamaño se mide como se ve en la pantalla: la barra da para afinarlo a cualquier acercamiento)
+    val k = 1f / ed.enMapa(1f)
+    DeslizadorO("Tamaño", (s.escala * k).coerceIn(0.1f, 10f), 0.1f..10f, "×%.1f".format(s.escala * k)) { s.escala = it / k; ed.mapa.avisaVector() }
     DeslizadorO("Giro", s.giro, -180f..180f, "${s.giro.roundToInt()}°") { s.giro = it; ed.mapa.avisaVector() }
     InterruptorO("Espejo", s.espejo) { v -> ed.cambiaVector("Espejo") { s.espejo = v } }
     BotonO("Borrar", color = O.ROJO) { ed.borraSeleccion() }
@@ -863,6 +903,7 @@ private fun Flecha(atras: Boolean, activa: Boolean, alPulsar: () -> Unit) {
 
 @Composable
 private fun PanelCalco(e: EstadoApp, ed: Editor, mesa: Mesa) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     val m = ed.mapa
     val ctx = LocalContext.current
     val importar = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -923,6 +964,7 @@ private fun MapaVinculado(e: EstadoApp, ed: Editor, actual: String, nombre: Stri
 /** Las secciones del terreno: marcos con su tamaño real; con una activa, lo que dibujas no se sale de ella. */
 @Composable
 private fun PanelSecciones(ed: Editor, mesa: Mesa) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     val m = ed.mapa
     Text("Arrastra en el lienzo para hacer una sección (verás sus km mientras), o escribe su tamaño. Con una activa, lo que dibujes y rellenes se queda dentro: sabes que mide eso como mucho.", style = O.texto(12.sp, O.GRIS))
     if (!m.escalaPuesta) Text("Antes, fija la escala en Mundo → Escala (ahora 1 px = ${m.kmPorPx.toString().replace('.', ',')} km).", style = O.texto(12.sp, O.ACENTO))

@@ -49,7 +49,7 @@ class Sellos(cap: Int = 256) {
     fun caja(): RectF? {
         if (n == 0) return null
         val r = RectF(Float.MAX_VALUE, Float.MAX_VALUE, -Float.MAX_VALUE, -Float.MAX_VALUE)
-        for (i in 0 until n) { val o = i * P; val e = f[o + 2] * 0.75f + 1.5f; r.union(f[o] - e, f[o + 1] - e, f[o] + e, f[o + 1] + e) }
+        for (i in 0 until n) { val o = i * P; val e = f[o + 2] * 0.8f; r.union(f[o] - e, f[o + 1] - e, f[o] + e, f[o + 1] + e) }
         return r
     }
 
@@ -95,7 +95,7 @@ class Caminante(
         val pr = if (lapiz) p.coerceIn(0f, 1f) else 1f
         if (n == 0) { ax = x; ay = y; ap = pr; ai = inc; aa = aci; at = t; n = 1; return }
         val dist = hypot(x - ax, y - ay)
-        if (dist < 1e-4f) return
+        if (dist < tam * 0.002f) return
         val dt = max(1L, t - at).toFloat()
         val inst = dist * u / dt
         vel = if (n == 1) inst else vel * 0.65f + inst * 0.35f
@@ -120,7 +120,7 @@ class Caminante(
     private fun curva(x1: Float, y1: Float, p1: Float, i1: Float, a1: Float, v1: Float) {
         val x0 = mx; val y0 = my
         val aprox = hypot(ax - x0, ay - y0) + hypot(x1 - ax, y1 - ay)
-        val piezas = (aprox / max(0.05f, tam * 0.15f)).toInt().coerceIn(1, 16)
+        val piezas = (aprox / (tam * 0.15f).coerceAtLeast(1e-12f)).toInt().coerceIn(1, 16)
         var px = x0; var py = y0; var k0 = 0f
         for (i in 1..piezas) {
             val t = i / piezas.toFloat(); val q = 1f - t
@@ -134,7 +134,7 @@ class Caminante(
     private fun recta(x0: Float, y0: Float, p0: Float, i0: Float, a0: Float, v0: Float, x1: Float, y1: Float, p1: Float, i1: Float, a1: Float, v1: Float) {
         val dx = x1 - x0; val dy = y1 - y0
         val len = hypot(dx, dy)
-        if (len < 1e-6f) return
+        if (len < tam * 1e-5f) return
         if (sal == null) { recorrido += len; return }
         val dir = atan2(dy, dx)
         var s = falta
@@ -165,7 +165,7 @@ class Caminante(
         if (abs(d.velocidadOpacidad) > 0.01f) fO *= (1f + d.velocidadOpacidad * vn).coerceIn(0.05f, 1f)
         if (afIni > 0f && s < afIni) fT *= 0.06f + 0.94f * suave(s / afIni)
         if (afFin > 0f && largoTotal >= 0f && largoTotal - s < afFin) fT *= 0.06f + 0.94f * suave(((largoTotal - s) / afFin).coerceAtLeast(0f))
-        val base = (tam * fT).coerceAtLeast(min(tam, 0.12f))
+        val base = (tam * fT).coerceAtLeast(tam * 0.02f)
         val nx = -sin(dir); val ny = cos(dir)
         for (j in 0 until d.numero) {
             var dd = base
@@ -192,9 +192,9 @@ class Caminante(
             }
             if (muestra != null && d.mezcla > 0.001f) col = mezcla(col, muestra.invoke(sx, sy))
             val bits = Ruido.hash(idx, j, semilla + 77) and (if (d.volteo) -1 else -2)
-            if (dd >= 0.05f && al > 0.0005f && tope > 0.0005f) sal.pon(sx, sy, dd, al.coerceAtMost(1f), ang, d.achatado.coerceIn(0.05f, 1f), col, bits, tope.coerceAtMost(1f))
+            if (dd >= tam * 0.008f && al > 0.0005f && tope > 0.0005f) sal.pon(sx, sy, dd, al.coerceAtMost(1f), ang, d.achatado.coerceIn(0.05f, 1f), col, bits, tope.coerceAtMost(1f))
         }
-        return max(0.02f, esp * base)
+        return max(tam * 0.004f, esp * base)
     }
 
     /** Mezcla húmeda: el pincel se va cargando del color que pisa y lo arrastra. */
@@ -235,7 +235,8 @@ class Caminante(
  * Un trozo de lienzo donde se estampa: la transparencia acumulada con 16 bits por píxel y, si el pincel cambia de color de
  * un sello a otro, el color de cada píxel. Ocupa [w] × [h] píxeles desde ([ox], [oy]) (en píxeles ya escalados).
  */
-class Lona(val ox: Int, val oy: Int, val w: Int, val h: Int, conColor: Boolean) {
+class Lona(val ox: Long, val oy: Long, val w: Int, val h: Int, conColor: Boolean) {
+    constructor(ox: Int, oy: Int, w: Int, h: Int, conColor: Boolean) : this(ox.toLong(), oy.toLong(), w, h, conColor)
     val a = CharArray(w * h)
     val rgb: IntArray? = if (conColor) IntArray(w * h) else null
     private var x0 = w; private var y0 = h; private var x1 = -1; private var y1 = -1
@@ -296,14 +297,15 @@ class Lona(val ox: Int, val oy: Int, val w: Int, val h: Int, conColor: Boolean) 
 }
 
 /** Estampa los sellos de un pincel en una [Lona], a una escala (1: los píxeles del lienzo; 4: cuatro veces más fino). */
-class Raster(val def: DefPincel, val escala: Float) {
+class Raster(val def: DefPincel, val escala: Float, uGrano: Float = 1f) {
     private val tex: Textura? = if (def.forma == "redonda" || def.forma == "plana") null else Texturas.de(def.forma)
     private val plana = def.forma == "plana"
     private val grano: Textura?
     private val pasoG: Float
     init {
         // El grano, a la reducción que toca (para que al verse pequeño no haga aguas)
-        var g = Texturas.de(def.grano); var paso = if (g != null) (g.lado / def.escalaGrano.coerceAtLeast(4f)) / escala else 0f
+        // El grano mide lo que mide en la pantalla al acercamiento al que se dibujó (de cerca, un grano más fino en el lienzo)
+        var g = Texturas.de(def.grano); var paso = if (g != null) (g.lado / (def.escalaGrano.coerceAtLeast(4f) / uGrano.coerceAtLeast(1e-6f))) / escala else 0f
         while (g != null && paso > 1.3f) { val m = g.mitad ?: break; g = m; paso /= 2f }
         grano = g; pasoG = paso
     }
@@ -317,10 +319,14 @@ class Raster(val def: DefPincel, val escala: Float) {
     /** Cuánto se sale un sello de su centro, en píxeles escalados. */
     fun alcance(s: Sellos, i: Int): Float { val r = s.f[i * Sellos.P + 2] * escala / 2f; return (if (tex != null) r * 1.4143f else r).coerceAtLeast(0.5f) + 1.5f }
 
-    /** Estampa el sello [i] en la lona (solo la parte que le cae dentro). */
-    fun sella(l: Lona, s: Sellos, i: Int) {
+    /**
+     * Estampa el sello [i] en la lona (solo la parte que le cae dentro). Los sellos van medidos desde el origen de su trazo;
+     * ([dx], [dy]) es dónde cae ese origen en la lona (en píxeles escalados), calculado con doble precisión por quien llama:
+     * así un trazo dibujado a 2000 aumentos y lejos del centro del lienzo no pierde finura.
+     */
+    fun sella(l: Lona, s: Sellos, i: Int, dx0: Double, dy0: Double, gx0: Float = 0f, gy0: Float = 0f) {
         val o = i * Sellos.P
-        val cx = s.f[o] * escala - l.ox; val cy = s.f[o + 1] * escala - l.oy
+        val cx = (s.f[o].toDouble() * escala + dx0).toFloat(); val cy = (s.f[o + 1].toDouble() * escala + dy0).toFloat()
         var rad = s.f[o + 2] * escala / 2f
         var alfa = s.f[o + 3]
         // Las líneas más finas que un píxel: de un píxel, pero más transparentes
@@ -341,7 +347,7 @@ class Raster(val def: DefPincel, val escala: Float) {
         // El grano: en coordenadas del lienzo (o movido con cada sello)
         val g = grano
         var gox = 0f; var goy = 0f
-        if (g != null) { gox = l.ox * pasoG; goy = l.oy * pasoG; if (def.granoMovil) { gox += ((bits ushr 4) and 255) * g.lado / 256f; goy += ((bits ushr 12) and 255) * g.lado / 256f } }
+        if (g != null) { gox = gx0; goy = gy0; if (def.granoMovil) { gox += ((bits ushr 4) and 255) * g.lado / 256f; goy += ((bits ushr 12) and 255) * g.lado / 256f } }
         val gm = if (g != null) g.lado - 1 else 0
         val gSuave = pasoG < 0.99f
         val umbral = 0.3f + (1f - alfa.coerceIn(0f, 1f)) * 0.6f
@@ -437,6 +443,9 @@ class Raster(val def: DefPincel, val escala: Float) {
         if (tocado) l.ensucia(xi0, yi0, xi1, yi1)
     }
 
+    /** Dónde cae el grano en el origen de una lona (en puntos del grano, ya reducido a una vuelta de la textura). */
+    fun granoEn(origen: Long): Float { val g = grano ?: return 0f; return ((origen.toDouble() * pasoG) % g.lado).toFloat() }
+
     /** El color que queda al poner [nuevo] con cobertura [c] encima de [viejo] con transparencia [av]. */
     private fun mezclaColor(viejo: Int, nuevo: Int, c: Float, av: Float): Int {
         val wv = av * (1f - c); val t = c / (c + wv)
@@ -451,18 +460,20 @@ class Raster(val def: DefPincel, val escala: Float) {
  * La pintura «húmeda» de un trazo: se estampa aquí, aparte de la capa, y se funde con ella con la opacidad del pincel (así
  * un trazo no se oscurece donde se cruza consigo mismo). En teselas de 256, a la [escala] a la que se está mirando.
  */
-class Humedo(val escala: Float, val conColor: Boolean) {
+class Humedo(val escala: Float, val conColor: Boolean, val ox: Double = 0.0, val oy: Double = 0.0) {
     val lonas = ConcurrentHashMap<Long, Lona>()
 
-    fun lona(tx: Int, ty: Int): Lona = lonas.getOrPut(Lienzo.clave(tx, ty)) { Lona(tx * L, ty * L, L, L, conColor) }
+    fun lona(tx: Int, ty: Int): Lona = lonas.getOrPut(Lienzo.clave(tx, ty)) { Lona(tx.toLong() * L, ty.toLong() * L, L, L, conColor) }
+
+    private fun estampa(r: Raster, l: Lona, s: Sellos, i: Int) = r.sella(l, s, i, ox * escala - l.ox, oy * escala - l.oy, r.granoEn(l.ox), r.granoEn(l.oy))
 
     /** Estampa los sellos [desde]..[hasta] (sin llegar a él). */
     fun sella(r: Raster, s: Sellos, desde: Int = 0, hasta: Int = s.n) {
         for (i in desde until hasta) {
             val o = i * Sellos.P
-            val cx = s.f[o] * escala; val cy = s.f[o + 1] * escala; val e = r.alcance(s, i)
-            for (ty in Math.floorDiv(floor(cy - e).toInt(), L)..Math.floorDiv(ceil(cy + e).toInt(), L)) for (tx in Math.floorDiv(floor(cx - e).toInt(), L)..Math.floorDiv(ceil(cx + e).toInt(), L))
-                r.sella(lona(tx, ty), s, i)
+            val cx = (s.f[o] + ox) * escala; val cy = (s.f[o + 1] + oy) * escala; val e = r.alcance(s, i)
+            for (ty in Math.floorDiv(floor(cy - e).toLong(), L.toLong()).toInt()..Math.floorDiv(ceil(cy + e).toLong(), L.toLong()).toInt()) for (tx in Math.floorDiv(floor(cx - e).toLong(), L.toLong()).toInt()..Math.floorDiv(ceil(cx + e).toLong(), L.toLong()).toInt())
+                estampa(r, lona(tx, ty), s, i)
         }
     }
 
@@ -472,18 +483,22 @@ class Humedo(val escala: Float, val conColor: Boolean) {
         val porLona = HashMap<Long, IntLista>()
         for (i in 0 until s.n) {
             val o = i * Sellos.P
-            val cx = s.f[o] * escala; val cy = s.f[o + 1] * escala; val e = r.alcance(s, i)
-            for (ty in Math.floorDiv(floor(cy - e).toInt(), L)..Math.floorDiv(ceil(cy + e).toInt(), L)) for (tx in Math.floorDiv(floor(cx - e).toInt(), L)..Math.floorDiv(ceil(cx + e).toInt(), L))
+            val cx = (s.f[o] + ox) * escala; val cy = (s.f[o + 1] + oy) * escala; val e = r.alcance(s, i)
+            for (ty in Math.floorDiv(floor(cy - e).toLong(), L.toLong()).toInt()..Math.floorDiv(ceil(cy + e).toLong(), L.toLong()).toInt()) for (tx in Math.floorDiv(floor(cx - e).toLong(), L.toLong()).toInt()..Math.floorDiv(ceil(cx + e).toLong(), L.toLong()).toInt())
                 porLona.getOrPut(Lienzo.clave(tx, ty)) { IntLista() }.pon(i)
         }
-        val tareas = porLona.map { (k, lista) -> Callable { val l = lona(Lienzo.tx(k), Lienzo.ty(k)); for (j in 0 until lista.n) r.sella(l, s, lista.v[j]) } }
+        val tareas = porLona.map { (k, lista) -> Callable { val l = lona(Lienzo.tx(k), Lienzo.ty(k)); for (j in 0 until lista.n) estampa(r, l, s, lista.v[j]) } }
         if (tareas.size < 3) tareas.forEach { it.call() } else Motor.reparto.invokeAll(tareas).forEach { it.get() }
     }
 
-    /** La caja de lo pintado, en píxeles del lienzo. */
-    fun caja(): RectF? {
-        var r: RectF? = null
-        for (l in lonas.values) if (l.tocada) { val q = RectF(l.ox / escala, l.oy / escala, (l.ox + l.w) / escala, (l.oy + l.h) / escala); if (r == null) r = q else r.union(q) }
+    /** Las teselas del lienzo (de 256 px a tamaño real) que toca lo pintado. */
+    fun teselasBase(): Set<Long> {
+        val r = HashSet<Long>()
+        for (l in lonas.values) if (l.tocada) {
+            val x0 = Math.floorDiv(floor(l.ox / escala.toDouble()).toLong(), L.toLong()).toInt(); val x1 = Math.floorDiv(ceil((l.ox + l.w) / escala.toDouble()).toLong() - 1, L.toLong()).toInt()
+            val y0 = Math.floorDiv(floor(l.oy / escala.toDouble()).toLong(), L.toLong()).toInt(); val y1 = Math.floorDiv(ceil((l.oy + l.h) / escala.toDouble()).toLong() - 1, L.toLong()).toInt()
+            for (ty in y0..max(y0, y1)) for (tx in x0..max(x0, x1)) r += Lienzo.clave(tx, ty)
+        }
         return r
     }
 
@@ -501,6 +516,15 @@ object Motor {
      * A qué escala se pinta según el acercamiento (píxeles de pantalla por píxel del lienzo): de lejos, a la de las vistas
      * resumidas (½, ¼…); a tamaño real, 1; de cerca, 2, 4, 8… para que el trazo salga nítido. [nivel] > 0: de lejos.
      */
-    fun nivel(zoom: Float): Int = if (zoom >= 0.7f) -Math.round(kotlin.math.ln(zoom) / kotlin.math.ln(2f)).coerceIn(0, 5) else floor(kotlin.math.ln(1f / zoom) / kotlin.math.ln(2f)).toInt().coerceIn(1, 7)
+    fun nivel(zoom: Float): Int = if (zoom >= 0.7f) -Math.round(kotlin.math.ln(zoom) / kotlin.math.ln(2f)).coerceIn(0, MAS_CERCA) else floor(kotlin.math.ln(1f / zoom) / kotlin.math.ln(2f)).toInt().coerceIn(1, 7)
     fun escala(nivel: Int): Float = if (nivel >= 0) 1f / (1 shl nivel) else (1 shl -nivel).toFloat()
+    /**
+     * Hasta dónde se puede acercar: 2^18 = 262.144 aumentos. Con un píxel del lienzo de 1 km, un metro mide entonces 262
+     * píxeles de la pantalla; con uno de 5 km, 52.
+     */
+    const val MAS_CERCA = 18
+    const val ZOOM_MAX = 262144f
+
+    /** El acercamiento máximo para un mapa con esa escala: hasta que un metro mida unos 400 píxeles (y nunca menos de 64 aumentos). */
+    fun zoomMaximo(kmPorPx: Float): Float = (400_000f * kmPorPx).coerceIn(64f, ZOOM_MAX)
 }

@@ -94,9 +94,9 @@ class LienzoTest {
         lz.rehacer(); espera(lz)
         assertEquals(2, lz.territorioEn(700, 400))
         // Lugares y rótulos, y la imagen entera con todo
-        m.lugares += Lugar("p1", "Valdrín", "capital", 320f, 380f, 7)
-        m.lugares += Lugar("p2", "Puerto Olmar", "puerto", 760f, 560f, 4)
-        m.rotulos += Rotulo("t1", "Mar de las Nieblas", 520f, 60f, 34f, 0f, "cursiva", 0.2f)
+        m.lugares += Lugar("p1", "Valdrín", "capital", 320.0, 380.0, 7)
+        m.lugares += Lugar("p2", "Puerto Olmar", "puerto", 760.0, 560.0, 4)
+        m.rotulos += Rotulo("t1", "Mar de las Nieblas", 520.0, 60.0, 34f, 0f, "cursiva", 0.2f)
         m.leyenda.visible = true; m.leyenda.x = 640f; m.leyenda.y = 560f; m.leyenda.escala = 0.6f
         ed.programaCentros(0); shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1)); espera(lz); shadowOf(Looper.getMainLooper()).idle()
         assertEquals(2, ed.centros.count { it.nivel == 1 } + ed.centros.count { it.nivel == 0 } - 1)

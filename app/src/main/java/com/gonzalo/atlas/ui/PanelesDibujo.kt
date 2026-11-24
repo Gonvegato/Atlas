@@ -46,6 +46,7 @@ import kotlin.math.roundToInt
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PanelMarco(ed: Editor) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     Text("Rodea una zona del lienzo: desde entonces solo se pinta, se borra, se rellena y se ajusta dentro de ella.", style = O.texto(13.sp, O.GRIS))
     EtiquetaO("Forma", tam = 11.sp, color = O.ACENTO)
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -81,6 +82,7 @@ private val DEGRADADOS = listOf(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PanelAjustes(ed: Editor, abre: (String) -> Unit) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     var cual by remember { mutableStateOf("") }
     DisposableEffect(Unit) { onDispose { ed.vistaAjuste = null } }
     Text("Sobre la capa «${ed.lienzo.capaActiva()?.info?.nombre}»" + if (ed.marco != null) ", dentro de la selección." else ".", style = O.texto(13.sp, O.GRIS))
@@ -159,6 +161,7 @@ internal fun PanelAjustes(ed: Editor, abre: (String) -> Unit) {
 
 @Composable
 internal fun PanelLicuar(ed: Editor) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     Text("Arrastra sobre el lienzo. Para los remolinos, pellizcar e hinchar, deja el dedo y muévelo despacio.", style = O.texto(13.sp, O.GRIS))
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { for ((k, n) in listOf("empujar" to "Empujar", "remolino" to "Remolino ↻", "remolino2" to "Remolino ↺")) FichaO(n, ed.modoLicuar == k) { ed.modoLicuar = k; ed.herramienta = Herramienta.LICUAR } }
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { for ((k, n) in listOf("pellizcar" to "Pellizcar", "hinchar" to "Hinchar")) FichaO(n, ed.modoLicuar == k) { ed.modoLicuar = k; ed.herramienta = Herramienta.LICUAR } }
@@ -171,18 +174,20 @@ internal fun PanelLicuar(ed: Editor) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun GuiasDibujo(ed: Editor, mesa: Mesa) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     val g = ed.mapa.simetria
     EtiquetaO("Simetría", tam = 11.sp, color = O.ACENTO)
-    fun pon(t: String?) { val v = mesa.vista.visible(); ed.ponSimetria(t, g?.x ?: v.centerX(), g?.y ?: v.centerY(), g?.n ?: 6); mesa.refresca() }
+    fun pon(t: String?) { ed.ponSimetria(t, g?.x ?: mesa.vista.cx, g?.y ?: mesa.vista.cy, g?.n ?: 6); mesa.refresca() }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         FichaO("Sin simetría", g == null) { pon(null) }
         for ((k, n) in listOf("vertical" to "Espejo ↔", "horizontal" to "Espejo ↕", "cuadrante" to "Cuatro", "radial" to "Radial")) FichaO(n, g?.tipo == k) { pon(k) }
     }
     if (g != null) {
         if (g.tipo == "radial") DeslizadorO("Gajos", g.n.toFloat(), 3f..16f, "${g.n}") { g.n = it.roundToInt(); ed.mapa.avisaVector(); mesa.refresca() }
-        BotonO("Centrar la guía en lo que se ve") { val v = mesa.vista.visible(); g.x = v.centerX(); g.y = v.centerY(); ed.mapa.avisaVector(); mesa.refresca() }
+        BotonO("Centrar la guía en lo que se ve") { g.x = mesa.vista.cx; g.y = mesa.vista.cy; ed.mapa.avisaVector(); mesa.refresca() }
     }
     InterruptorO("Formas rápidas: deja el lápiz quieto al acabar un trazo y se vuelve una recta, un arco, una elipse o un polígono", ed.formasRapidas) { ed.formasRapidas = it }
+    InterruptorO("Tamaño del pincel fijo en el mapa (si no, al acercarte se mide en la pantalla: cuanto más cerca, más fino el trazo)", ed.tamanoFijoMapa) { ed.tamanoFijoMapa = it }
     InterruptorO("Con el dedo, afilar el principio y el final de los trazos (el final se afila al levantar)", ed.afilaDedo) { ed.afilaDedo = it }
 }
 
@@ -193,6 +198,7 @@ internal fun GuiasDibujo(ed: Editor, mesa: Mesa) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PanelContinente(ed: Editor, mesa: Mesa) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     var ancho by remember { mutableStateOf("4000") }; var alto by remember { mutableStateOf("3000") }
     var tipo by remember { mutableStateOf("continente") }
     var tierra by remember { mutableStateOf(0.36f) }; var rug by remember { mutableStateOf(0.5f) }; var islas by remember { mutableStateOf(0.35f) }
@@ -241,9 +247,12 @@ internal fun PanelContinente(ed: Editor, mesa: Mesa) {
     InterruptorO("Pintar el mar", conMar) { conMar = it }
     if (conMar) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { for (c in listOf(0xFFB9D3DB, 0xFF8DB4BE, 0xFFA9C4D8, 0xFF5C7894, 0xFFCFE0DC, 0xFFD6E3E8, 0xFF3E6A8A).map { it.toInt() }) MuestraO(c, c == colMar, 28) { colMar = c }; MuestraO(ed.color, ed.color == colMar, 28) { colMar = ed.color } }
     InterruptorO("Crear una sección con ese tamaño", seccion) { seccion = it }
+    var unir by remember { mutableStateOf(true) }
+    val toca = ed.vistaPrevia?.second?.let { ed.hayTierraEn(it) } == true
+    if (toca) InterruptorO("Unir con la tierra que ya hay ahí: si se tocan, quedan como una sola (se borra la costa que queda tierra adentro)", unir) { unir = it }
     Text("La costa se dibuja con el color elegido (ahora ${"#%06X".format(ed.color and 0xFFFFFF)}), en la capa de líneas.", style = O.texto(12.sp, O.GRIS))
     BotonO("Poner en el mapa", lleno = true, color = O.ACENTO, activo = kmA != null && kmH != null) {
         val r = ed.vistaPrevia?.second ?: mesa.recuadro(kmA ?: return@BotonO, kmH ?: return@BotonO)
-        ed.ponContinente(forma(), r, kmA ?: 0.0, ed.color, if (conTierra) colTierra else null, if (conMar) colMar else null, seccion)
+        ed.ponContinente(forma(), r, kmA ?: 0.0, ed.color, if (conTierra) colTierra else null, if (conMar) colMar else null, seccion, unir)
     }
 }

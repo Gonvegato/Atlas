@@ -56,9 +56,7 @@ class MotorTest {
     private fun pinta(c: Canvas, d: TrazoDatos, escala: Float = 1f) {
         val h = Humedo(escala, d.def.colorVariable)
         h.sellaTodo(Raster(d.def, escala), d.sellos())
-        c.save(); c.scale(escala, escala)
-        for (l in h.lonas.values) if (l.tocada) d.funde(c, l, escala)
-        c.restore()
+        for (l in h.lonas.values) if (l.tocada) d.funde(c, l, escala, 0.0, 0.0)
     }
 
     @Test fun laminaDePinceles() {
@@ -106,6 +104,135 @@ class MotorTest {
         }
     }
 
+    private fun opacos(b: Bitmap): Int { val px = IntArray(b.width * b.height); b.getPixels(px, 0, b.width, 0, 0, b.width, b.height); return px.count { (it ushr 24) > 128 } }
+
+    /** A 65.536 aumentos y lejos de la esquina del lienzo: el trazo queda guardado como datos, nítido, y se abre igual. */
+    @Test fun deMuyCerca() {
+        val bib = Biblioteca(Files.createTempDirectory("atlas").toFile())
+        val m = bib.creaMapa(bib.creaMundo("Prueba").id, "Ciudad", 0, 0)
+        val ed = Editor(m, ctx.resources); val lz = ed.lienzo
+        espera(lz)
+        val capa = lz.capaActiva()!!
+        val e = 16; val z = (1 shl e).toFloat()
+        val ox = 4321.123456789; val oy = 2987.654321
+        // Un trazo de 360 px de pantalla de largo y 5 de grueso: en el lienzo, 5 milésimas de píxel de largo
+        val v = lz.empiezaTrazo(Pinceles.def("rotulador"), 0xFF203040.toInt(), 5f / z, 1f, TrazoDatos.PINTAR, z, true, -e, ox, oy)!!
+        val pts = onda(0f, 360f, 0f, 24f)
+        for (i in 0 until pts.size / Caminante.P) { pts[i * Caminante.P] /= z; pts[i * Caminante.P + 1] /= z }
+        for (i in 0 until 70 step 7) v.agrega(pts.copyOfRange(i * Caminante.P, (i + 7) * Caminante.P))
+        var hecho = false
+        v.termina { ed2, err -> assertNotNull(ed2); assertTrue(err == null); lz.apunta(ed2!!); hecho = true }
+        espera(lz)
+        assertTrue(hecho)
+        // A tamaño real no deja nada (es mil veces más fino que un píxel), pero queda guardado como datos en su tesela
+        assertEquals(1, capa.trazos.size); assertTrue(capa.fondo.isNotEmpty()); assertTrue(capa.teselas.isEmpty())
+        val d = capa.trazos[0].datos
+        assertTrue(d.seVe(z)); assertTrue(!d.seVe(z / 4096f))
+        // De cerca: las teselas nítidas que lo contienen, juntas en una imagen
+        val tx = Math.floor(ox * z / 256).toInt(); val ty = Math.floor(oy * z / 256).toInt()
+        fun vista(l: Lienzo, c: com.gonzalo.atlas.lienzo.CapaPx): Bitmap {
+            val b = Bitmap.createBitmap(768, 512, Bitmap.Config.ARGB_8888); val cv = Canvas(b); cv.drawColor(0xFFF1E6C8.toInt())
+            for (dy in 0..1) for (dx in 0..2) cv.drawBitmap(l.nitidez.construye(c, e, tx + dx, ty - 1 + dy), dx * 256f, dy * 256f, null)
+            return b
+        }
+        val cerca = vista(lz, capa)
+        png(cerca, "muy_cerca.png")
+        val tinta = IntArray(768 * 512).also { cerca.getPixels(it, 0, 768, 0, 0, 768, 512) }.count { it == 0xFF203040.toInt() }
+        assertTrue("tinta: $tinta", tinta in 1200..2600)
+        // Lo que se veía mientras se dibujaba es lo que queda: la pintura húmeda y la tesela rehecha tienen la misma tinta
+        for ((k, l) in v.humedo.lonas) if (l.tocada) {
+            val a = opacos(l.imagen(0x203040)); val b = opacos(lz.nitidez.construye(capa, e, Lienzo.tx(k), Lienzo.ty(k)))
+            assertTrue("húmedo $a, tesela $b", Math.abs(a - b) <= 2 + a / 100)
+        }
+        // Deshacer y rehacer
+        lz.deshacer(); espera(lz); assertEquals(0, capa.trazos.size)
+        lz.rehacer(); espera(lz); assertEquals(1, capa.trazos.size)
+        // Guardar y volver a abrir: el trazo sigue ahí, en su sitio exacto
+        val l = java.util.concurrent.CountDownLatch(1); lz.enHilo { lz.guarda(); l.countDown() }; l.await()
+        assertTrue(File(m.dir, "capas/${capa.info.id}/trazos/0.bin").exists())
+        val ed3 = Editor(bib.abre(m.id)!!, ctx.resources); espera(ed3.lienzo)
+        val capa3 = ed3.lienzo.capaActiva()!!
+        assertEquals(1, capa3.trazos.size)
+        assertEquals(ox, capa3.trazos[0].datos.ox, 0.0)
+        assertTrue(cerca.sameAs(vista(ed3.lienzo, capa3)))
+    }
+
+    /** El bote de pintura de cerca: rellena el círculo dibujado a 4.096 aumentos, ceñido a su línea, y queda como forma. */
+    @Test fun rellenoDeCerca() {
+        val bib = Biblioteca(Files.createTempDirectory("atlas").toFile())
+        val m = bib.creaMapa(bib.creaMundo("Prueba").id, "Ciudad", 0, 0)
+        val ed = Editor(m, ctx.resources); val lz = ed.lienzo
+        espera(lz)
+        val capa = lz.capaActiva()!!
+        val e = 12; val z = (1 shl e).toFloat()
+        val ox = 1234.56789; val oy = -876.54321
+        // Un círculo de 120 px de pantalla de radio alrededor de (ox, oy)
+        val n = 90; val pts = FloatArray((n + 1) * Caminante.P)
+        for (i in 0..n) { val a = i * 2.3 * PI / n; val o = i * Caminante.P; pts[o] = (cos(a) * 120 / z).toFloat(); pts[o + 1] = (sin(a) * 120 / z).toFloat(); pts[o + 2] = 0.8f; pts[o + 3] = 0.3f; pts[o + 5] = i * 8f }
+        val v = lz.empiezaTrazo(Pinceles.def("rotulador"), 0xFF1B1712.toInt(), 6f / z, 1f, TrazoDatos.PINTAR, z, true, -e, ox, oy)!!
+        v.agrega(pts); v.termina { ed2, _ -> lz.apunta(ed2!!) }; espera(lz)
+        val vis = doubleArrayOf(ox - 500 / z, oy - 350 / z, ox + 500 / z, oy + 350 / z)
+        // Dentro: se rellena
+        val (hecho, porque) = lz.rellena(ox, oy, 0xFF3E7CB1.toInt(), 1f, z, vis)
+        assertNotNull(porque, hecho); lz.apunta(hecho!!)
+        assertEquals(2, capa.trazos.size); assertNotNull(capa.trazos[1].datos.relleno)
+        fun vista(): Bitmap {
+            val tx = Math.floor(ox * z / 256).toInt(); val ty = Math.floor(oy * z / 256).toInt()
+            val b = Bitmap.createBitmap(768, 768, Bitmap.Config.ARGB_8888); val cv = Canvas(b); cv.drawColor(0xFFF1E6C8.toInt())
+            for (dy in -1..1) for (dx in -1..1) cv.drawBitmap(lz.nitidez.construye(capa, e, tx + dx, ty + dy), (dx + 1) * 256f, (dy + 1) * 256f, null)
+            return b
+        }
+        val img = vista(); png(img, "relleno_cerca.png")
+        val px = IntArray(768 * 768).also { img.getPixels(it, 0, 768, 0, 0, 768, 768) }
+        val azul = px.count { it == 0xFF3E7CB1.toInt() }
+        // (El círculo mide π·120² ≈ 45.000 px; la línea se come unos 3 px de su borde)
+        assertTrue("azul: $azul", azul in 40000..46000)
+        assertEquals(0xFFF1E6C8.toInt(), px[4 * 768 + 4])
+        // Fuera: la zona se sale de lo que se ve, así que no se rellena y se dice por qué
+        val (nada, aviso) = lz.rellena(ox + 300 / z, oy, 0xFF3E7CB1.toInt(), 1f, z, vis)
+        assertTrue(nada == null && aviso != null)
+        // Tocando otra vez dentro, sobre el azul: se cambia de color (y la línea sigue en su sitio)
+        val (otra, _) = lz.rellena(ox + 30.0 / z, oy - 20.0 / z, 0xFFB5523A.toInt(), 1f, z, vis)
+        assertNotNull(otra); lz.apunta(otra!!)
+        val img2 = vista(); png(img2, "relleno_cerca2.png")
+        val px2 = IntArray(768 * 768).also { img2.getPixels(it, 0, 768, 0, 0, 768, 768) }
+        val rojo = px2.count { it == 0xFFB5523A.toInt() }; val queda = px2.count { it == 0xFF3E7CB1.toInt() }; val linea = px2.count { it == 0xFF1B1712.toInt() }
+        assertTrue("rojo $rojo, azul $queda, línea $linea", rojo in 40000..46000 && queda == 0 && linea > 1500)
+        lz.deshacer(); espera(lz)
+        // Deshacer quita el relleno; rehacer lo devuelve
+        lz.deshacer(); espera(lz); assertEquals(1, capa.trazos.size)
+        lz.rehacer(); espera(lz); assertEquals(2, capa.trazos.size)
+        // Guardado y abierto de nuevo, se ve igual
+        val l = java.util.concurrent.CountDownLatch(1); lz.enHilo { lz.guarda(); l.countDown() }; l.await()
+        val ed3 = Editor(bib.abre(m.id)!!, ctx.resources); espera(ed3.lienzo)
+        assertNotNull(ed3.lienzo.capaActiva()!!.trazos[1].datos.relleno)
+    }
+
+    /** Un dibujo pequeño del Taller se guarda grande y nítido (rehecho desde sus trazos), no con los pocos píxeles que ocupa. */
+    @Test fun dibujoDelTallerEnAlta() {
+        val bib = Biblioteca(Files.createTempDirectory("atlas").toFile())
+        val m = bib.creaMapa(bib.creaMundo("Prueba").id, "Dibujo", 0, 0)
+        val ed = Editor(m, ctx.resources); val lz = ed.lienzo
+        espera(lz)
+        // Una montañita de unos 70 px de ancho, a tamaño real
+        fun trazo(vararg p: Float) {
+            val n = p.size / 2; val pts = FloatArray(n * Caminante.P)
+            for (i in 0 until n) { val o = i * Caminante.P; pts[o] = p[i * 2]; pts[o + 1] = p[i * 2 + 1]; pts[o + 2] = 0.8f; pts[o + 3] = 0.3f; pts[o + 5] = i * 30f }
+            val v = lz.empiezaTrazo(Pinceles.def("pluma"), 0xFF2A2118.toInt(), 2.2f, 1f, TrazoDatos.PINTAR, 1f, true, 0)!!
+            v.agrega(pts); v.termina { e, _ -> lz.apunta(e!!) }; espera(lz)
+        }
+        trazo(100f, 160f, 118f, 128f, 130f, 112f, 141f, 126f, 150f, 118f, 170f, 160f)
+        trazo(126f, 124f, 123f, 140f); trazo(131f, 122f, 129f, 146f); trazo(137f, 128f, 136f, 150f)
+        val antes = lz.recorta(lz.contenido()!!)
+        val alta = lz.imagenNitida(1536)!!
+        png(antes, "taller_antes.png"); png(alta, "taller_alta.png")
+        assertTrue("antes ${antes.width}", antes.width in 60..90)
+        assertTrue("ahora ${alta.width} × ${alta.height}", alta.width in 900..1536 && alta.height in 500..1536)
+        // La misma forma: la proporción no cambia (salvo los márgenes)
+        assertEquals(antes.width.toFloat() / antes.height, alta.width.toFloat() / alta.height, 0.2f)
+        assertTrue(lz.tieneTrazos())
+    }
+
     @Test fun trazoVivoQuedaIgualAlSoltarYSeGuarda() {
         val bib = Biblioteca(Files.createTempDirectory("atlas").toFile())
         val m = bib.creaMapa(bib.creaMundo("Prueba").id, "Uno", 0, 0)
@@ -146,9 +273,12 @@ class MotorTest {
         assertEquals(2, capa2.trazos.size)
         assertTrue(antes.sameAs(ed2.lienzo.recorta(android.graphics.Rect(0, 0, 512, 256))))
         assertTrue(cerca.sameAs(ed2.lienzo.nitidez.construye(capa2, 2, 2, 2)))
-        // Rellenar encima deja esas teselas solo como píxeles
+        // Rellenar encima no estropea los trazos: el relleno se guarda como una forma más y las teselas siguen rehaciéndose de cerca
         ed2.lienzo.rellena(200, 200, 0xFF88AA55.toInt(), 1f)?.let { ed2.lienzo.apunta(it) }
-        assertTrue(capa2.fondo.size < capa.fondo.size)
+        assertEquals(3, capa2.trazos.size); assertNotNull(capa2.trazos[2].datos.relleno)
+        assertTrue(capa2.fondo.size >= capa.fondo.size)
+        assertEquals(0xFF88AA55.toInt(), ed2.lienzo.recorta(android.graphics.Rect(200, 200, 201, 201)).getPixel(0, 0))
+        png(ed2.lienzo.nitidez.construye(capa2, 2, 2, 2), "trazos_cerca_relleno.png")
     }
 
     @Test fun formasRapidas() {

@@ -4,6 +4,44 @@ App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma fir
 Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
 etiqueta `v0.15.0`.
 
+## 2.3.0 — hasta el metro
+
+- **Acercarse hasta 262.144 aumentos.** Antes, 32. Con un mapa a 1 km por píxel, un metro mide entonces 262 px de pantalla;
+  a 5 km por píxel, 52. El tope se ajusta a la escala del mapa (hasta que un metro mide unos 400 px). La cuadrícula y la
+  barra de escala bajan a metros y centímetros («CASILLA 2 M · 4 M²»).
+  - Cómo: un trazo guarda su origen con doble precisión y sus puntos medidos desde él; la vista lleva el centro con doble
+    precisión y dibuja en un «marco local» cercano a lo que se ve (las cuentas de dibujo de Android van con decimales
+    cortos: a 200.000 aumentos, medir desde la esquina del mapa descoloca todo decenas de píxeles).
+  - Lo dibujado de cerca no cabe en un píxel del mapa: queda **guardado como datos** y se rehace al tamaño de la pantalla.
+    De lejos deja de verse (un trazo cien veces más fino que un píxel no se pinta).
+  - **El tamaño del pincel se mide en la pantalla al acercarse**: el pincel no engorda con el acercamiento, así que cuanto
+    más cerca, más fino sale el trazo en el mapa. A tamaño real o de lejos, como antes. Se puede dejar fijo en el mapa en
+    Acciones («Tamaño del pincel fijo en el mapa»).
+  - Lugares, rótulos y tus dibujos se colocan y se mueven con doble precisión; los nuevos nacen del tamaño que se ve.
+  - Caben hasta 24.000 trazos por capa como datos (antes 4.000) y se guardan en trozos de 256: al guardar solo se
+    reescribe el trozo que cambia.
+  - Límites: difuminar, licuar y transformar trabajan con los píxeles del mapa (no se dejan usar a más de 32 aumentos, y
+    usados sobre una zona con detalle fino lo dejan como píxeles: la app avisa). La selección, las rutas, las secciones, la
+    regla y los territorios van con medidas cortas: hasta 2.000 aumentos. «Unir mapas» sigue uniendo solo los píxeles.
+- **Bote de pintura.** Ahora también en la barra de arriba. Rellena **por color**: todo lo que es igual a donde tocas,
+  hasta donde cambia (una línea, otro color). En vacío rellena la zona cerrada; sobre un color, lo cambia por el nuevo.
+  - Antes solo miraba la capa de referencia («Líneas»): si las líneas estaban en la capa «Color» (la elegida al empezar),
+    el relleno las ignoraba y se desbordaba. Ahora mira las capas de referencia que tengan dibujo **y la capa en la que
+    pintas**.
+  - Rellena a la escala a la que se mira (de cerca se ciñe a las líneas con toda su finura) y la zona se guarda como
+    **forma**, no como píxeles: nítida a cualquier acercamiento y sin estropear lo dibujado de cerca en esa parte.
+  - De cerca, la zona tiene que caber en lo que se ve: si se sale (o no está cerrada), no rellena y lo dice.
+- **Dibujos del Taller en alta resolución.** Se guardaban con los píxeles que ocupaban en el lienzo (un dibujo pequeño,
+  70 px). Ahora se rehacen desde sus trazos hasta unos 1.536 px de lado. Además, al pintarlos pequeños en el mapa se
+  reducen promediando bien (antes se deshacían). Los dibujos ya guardados que conservan sus trazos se rehacen solos, una
+  vez, al abrir la app.
+- **Capas.** Una capa nueva aparece al momento en la lista (antes había que salir del panel y volver a entrar); el botón
+  es «+ Capa nueva» y un aviso dice cuál se ha creado. Cada capa tiene a la vista «⋯» (sus opciones) y una papelera para
+  borrarla (deshacer la recupera). Lo mismo valía para los demás paneles: ahora se ponen al día solos.
+- **Continentes que se unen.** Si generas una tierra donde ya hay otra generada, se funden en una sola: se borra la costa
+  que queda tierra adentro, la nueva no se dibuja donde ya era tierra y el mar no tapa la tierra que había. Se puede
+  desactivar al generarla. Solo con tierras generadas desde esta versión (el mapa las recuerda desde ahora).
+
 ## 2.2.0 — la app, por mundos
 
 - **Fuera y dentro.** Fuera: Portada, **Mundos**, Taller y Ajustes. Al entrar en un mundo cambia la interfaz (misma

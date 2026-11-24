@@ -26,6 +26,9 @@ object Formas {
             return Forma(nombre, FloatArray(pts.size) { i -> val j = i - i % 2; val dx = (pts[j] - cx) * k; val dy = (pts[j + 1] - cy) * k; if (i % 2 == 0) cx + dx * c - dy * s else cy + dx * s + dy * c }, cerrada)
         }
 
+        /** La misma forma con todas sus medidas multiplicadas por [k] (desde el origen). */
+        fun escalada(k: Float) = Forma(nombre, FloatArray(pts.size) { pts[it] * k }, cerrada)
+
         /** La forma como puntos de un trazo (x, y, presión, inclinación, acimut, tiempo), uno cada [paso] px (las esquinas, exactas). */
         fun trazo(paso: Float, presion: Float = 0.8f): FloatArray {
             val out = FloatLista()

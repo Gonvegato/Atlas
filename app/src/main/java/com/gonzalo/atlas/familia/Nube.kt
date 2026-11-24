@@ -61,7 +61,7 @@ object Nube {
         campos["nube"] = JSONObject().put("gd", gd).put("n", nombre).put("s", datos.size)
         // Los lugares, con su posición sobre la lámina (0..1), para el BUSCAR del visor de los escritos
         campos["lug"] = JSONArray().also { a ->
-            m.lugares.forEach { p -> a.put(JSONObject().put("n", p.nombre).put("k", p.tipo).put("x", r4((p.x - l.left) / w)).put("y", r4((p.y - l.top) / h))) }
+            m.lugares.forEach { p -> a.put(JSONObject().put("n", p.nombre).put("k", p.tipo).put("x", r4(((p.x - l.left) / w).toFloat())).put("y", r4(((p.y - l.top) / h).toFloat()))) }
         }.toString()
         val ahora = System.currentTimeMillis()
         if (manual || ahora - (ultimaLamina[m.id] ?: 0L) > 10 * 60_000L) {

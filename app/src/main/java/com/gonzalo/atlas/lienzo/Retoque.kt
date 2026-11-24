@@ -34,7 +34,7 @@ object MuestrasPincel {
             val datos = TrazoDatos(d, color, tam, d.opacidad.coerceAtLeast(0.35f), TrazoDatos.PINTAR, false, listOf(pts), 7, 1f, true, null, null)
             val hm = Humedo(1f, d.colorVariable); hm.sella(Raster(d, 1f), datos.sellos())
             val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); val c = Canvas(b)
-            for (l in hm.lonas.values) if (l.tocada) datos.funde(c, l, 1f)
+            for (l in hm.lonas.values) if (l.tocada) datos.funde(c, l, 1f, 0.0, 0.0)
             b
         }.getOrNull()?.also { if (cache.size > 300) cache.clear(); cache[clave] = it }
     }

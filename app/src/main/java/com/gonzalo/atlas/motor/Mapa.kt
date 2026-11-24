@@ -72,19 +72,23 @@ class Seccion(val id: String, var nombre: String, var x: Float, var y: Float, va
  * Guía de simetría: lo que dibujas se repite reflejado. [tipo]: "vertical" (un eje vertical: izquierda y derecha),
  * "horizontal", "cuadrante" (los dos ejes) o "radial" ([n] gajos girados alrededor del centro).
  */
-class Simetria(var tipo: String = "vertical", var x: Float = 0f, var y: Float = 0f, var n: Int = 6) {
-    fun json() = JSONObject().put("t", tipo).put("x", x.toDouble()).put("y", y.toDouble()).put("n", n)
-    /** Las transformaciones de cada copia (la primera, el trazo tal cual). */
-    fun espejos(): List<android.graphics.Matrix> {
-        fun m(f: android.graphics.Matrix.() -> Unit) = android.graphics.Matrix().apply(f)
+class Simetria(var tipo: String = "vertical", var x: Double = 0.0, var y: Double = 0.0, var n: Int = 6) {
+    fun json() = JSONObject().put("t", tipo).put("x", x).put("y", y).put("n", n)
+    /**
+     * Las transformaciones de cada copia (la primera, el trazo tal cual), como (a, b, c, d, e, f):
+     * x' = a·x + b·y + e, y' = c·x + d·y + f. Con doble precisión, para que el reflejo caiga en su sitio también de muy cerca.
+     */
+    fun espejos(): List<DoubleArray> {
+        val igual = doubleArrayOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+        val h = doubleArrayOf(-1.0, 0.0, 0.0, 1.0, 2 * x, 0.0); val v = doubleArrayOf(1.0, 0.0, 0.0, -1.0, 0.0, 2 * y)
         return when (tipo) {
-            "horizontal" -> listOf(m {}, m { setScale(1f, -1f, x, y) })
-            "cuadrante" -> listOf(m {}, m { setScale(-1f, 1f, x, y) }, m { setScale(1f, -1f, x, y) }, m { setScale(-1f, -1f, x, y) })
-            "radial" -> List(n.coerceIn(2, 24)) { k -> m { setRotate(k * 360f / n.coerceIn(2, 24), x, y) } }
-            else -> listOf(m {}, m { setScale(-1f, 1f, x, y) })
+            "horizontal" -> listOf(igual, v)
+            "cuadrante" -> listOf(igual, h, v, doubleArrayOf(-1.0, 0.0, 0.0, -1.0, 2 * x, 2 * y))
+            "radial" -> { val k = n.coerceIn(2, 24); List(k) { i -> val a = i * 2.0 * Math.PI / k; val c = Math.cos(a); val s = Math.sin(a); doubleArrayOf(c, -s, s, c, x - c * x + s * y, y - s * x - c * y) } }
+            else -> listOf(igual, h)
         }
     }
-    companion object { fun de(o: JSONObject?) = o?.let { Simetria(it.optString("t", "vertical"), it.optDouble("x").toFloat(), it.optDouble("y").toFloat(), it.optInt("n", 6)) } }
+    companion object { fun de(o: JSONObject?) = o?.let { Simetria(it.optString("t", "vertical"), it.optDouble("x"), it.optDouble("y"), it.optInt("n", 6)) } }
 }
 
 /** La leyenda del mapa: un cuadro que se mueve y escala como un objeto más. */
@@ -108,17 +112,18 @@ class Lugar(
     val id: String,
     var nombre: String,
     var tipo: String,
-    var x: Float,
-    var y: Float,
+    /** Dónde está, en píxeles del mapa (con doble precisión: se puede colocar al metro en un mapa de miles de km). */
+    var x: Double,
+    var y: Double,
     /** 1 (un caserío) a 10 (una metrópoli). */
     var tamano: Int = Catalogo.lugar(tipo).tamano,
     var nota: String = "",
     /** El mapa que se abre al tocarlo (el plano de esa ciudad, de esa iglesia…). */
     var mapa: String = "",
 ) {
-    fun json() = JSONObject().put("id", id).put("n", nombre).put("k", tipo).put("x", x.toDouble()).put("y", y.toDouble()).put("s", tamano).put("nota", nota).put("mp", mapa)
+    fun json() = JSONObject().put("id", id).put("n", nombre).put("k", tipo).put("x", x).put("y", y).put("s", tamano).put("nota", nota).put("mp", mapa)
     companion object {
-        fun de(o: JSONObject) = Lugar(o.optString("id"), o.optString("n"), o.optString("k", "punto"), o.optDouble("x").toFloat(), o.optDouble("y").toFloat(), o.optInt("s", 3), o.optString("nota"), o.optString("mp"))
+        fun de(o: JSONObject) = Lugar(o.optString("id"), o.optString("n"), o.optString("k", "punto"), o.optDouble("x"), o.optDouble("y"), o.optInt("s", 3), o.optString("nota"), o.optString("mp"))
     }
 }
 
@@ -144,20 +149,34 @@ class Linea(val id: String, var tipo: String, val xs: FloatArray, val ys: FloatA
 }
 
 /** Un rótulo de texto libre (el nombre de un mar, de una cordillera…). */
-class Rotulo(val id: String, var texto: String, var x: Float, var y: Float, var tam: Float = 28f, var giro: Float = 0f, var estilo: String = "serif", var espaciado: Float = 0.15f, var curva: Float = 0f) {
-    fun json() = JSONObject().put("id", id).put("t", texto).put("x", x.toDouble()).put("y", y.toDouble()).put("s", tam.toDouble()).put("g", giro.toDouble())
+class Rotulo(val id: String, var texto: String, var x: Double, var y: Double, var tam: Float = 28f, var giro: Float = 0f, var estilo: String = "serif", var espaciado: Float = 0.15f, var curva: Float = 0f) {
+    fun json() = JSONObject().put("id", id).put("t", texto).put("x", x).put("y", y).put("s", tam.toDouble()).put("g", giro.toDouble())
         .put("e", estilo).put("sp", espaciado.toDouble()).put("cv", curva.toDouble())
     companion object {
-        fun de(o: JSONObject) = Rotulo(o.optString("id"), o.optString("t"), o.optDouble("x").toFloat(), o.optDouble("y").toFloat(), o.optDouble("s", 28.0).toFloat(),
+        fun de(o: JSONObject) = Rotulo(o.optString("id"), o.optString("t"), o.optDouble("x"), o.optDouble("y"), o.optDouble("s", 28.0).toFloat(),
             o.optDouble("g").toFloat(), o.optString("e", "serif"), o.optDouble("sp", 0.15).toFloat(), o.optDouble("cv").toFloat())
     }
 }
 
 /** Uno de tus dibujos puesto en el mapa. [recurso] es el id del dibujo en la biblioteca. */
-class Sello(val id: String, var recurso: String, var x: Float, var y: Float, var escala: Float = 1f, var giro: Float = 0f, var espejo: Boolean = false) {
-    fun json() = JSONObject().put("id", id).put("r", recurso).put("x", x.toDouble()).put("y", y.toDouble()).put("s", escala.toDouble()).put("g", giro.toDouble()).put("f", espejo)
+class Sello(val id: String, var recurso: String, var x: Double, var y: Double, var escala: Float = 1f, var giro: Float = 0f, var espejo: Boolean = false) {
+    fun json() = JSONObject().put("id", id).put("r", recurso).put("x", x).put("y", y).put("s", escala.toDouble()).put("g", giro.toDouble()).put("f", espejo)
     companion object {
-        fun de(o: JSONObject) = Sello(o.optString("id"), o.optString("r"), o.optDouble("x").toFloat(), o.optDouble("y").toFloat(), o.optDouble("s", 1.0).toFloat(), o.optDouble("g").toFloat(), o.optBoolean("f"))
+        fun de(o: JSONObject) = Sello(o.optString("id"), o.optString("r"), o.optDouble("x"), o.optDouble("y"), o.optDouble("s", 1.0).toFloat(), o.optDouble("g").toFloat(), o.optBoolean("f"))
+    }
+}
+
+/**
+ * Una tierra generada (un continente, un archipiélago…) y dónde se puso: el recuadro en el lienzo, con cuántas muestras se
+ * calculó ([gw] × [gh]) y su forma. Con esto, al generar otra que la toque, las dos se pueden unir en una sola.
+ */
+class Tierra(val x: Float, val y: Float, val w: Float, val h: Float, val gw: Int, val gh: Int, val forma: FormaTierra) {
+    val rect get() = android.graphics.RectF(x, y, x + w, y + h)
+    fun json() = JSONObject().put("x", x.toDouble()).put("y", y.toDouble()).put("w", w.toDouble()).put("h", h.toDouble()).put("gw", gw).put("gh", gh)
+        .put("s", forma.semilla).put("t", forma.tipo).put("ti", forma.tierra.toDouble()).put("r", forma.rugosidad.toDouble()).put("i", forma.islas.toDouble())
+    companion object {
+        fun de(o: JSONObject) = Tierra(o.optDouble("x").toFloat(), o.optDouble("y").toFloat(), o.optDouble("w").toFloat(), o.optDouble("h").toFloat(), o.optInt("gw"), o.optInt("gh"),
+            FormaTierra(o.optLong("s"), o.optString("t", "continente"), o.optDouble("ti", 0.36).toFloat(), o.optDouble("r", 0.5).toFloat(), o.optDouble("i", 0.35).toFloat()))
     }
 }
 
@@ -176,7 +195,8 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
     val obras = CopyOnWriteArrayList<String>()
     var creado = System.currentTimeMillis()
     var modificado = creado
-    var vista = floatArrayOf(Float.NaN, Float.NaN, 1f, 0f)
+    /** Dónde se quedó mirando: centro (x, y), acercamiento y giro. */
+    var vista = doubleArrayOf(Double.NaN, Double.NaN, 1.0, 0.0)
     /** El papel de fondo. */
     var papel: Int = 0xFFF1E6C8.toInt()
     var granoPapel = true
@@ -194,6 +214,8 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
     val sellos = CopyOnWriteArrayList<Sello>()
     var leyenda = Leyenda()
     val secciones = CopyOnWriteArrayList<Seccion>()
+    /** Las tierras generadas en este mapa (para poder unirlas con las siguientes). */
+    val tierras = CopyOnWriteArrayList<Tierra>()
     /** La sección en la que se dibuja (lo de fuera no se pinta); "" ninguna. */
     var seccionActiva = ""
     fun seccionActivaRect(): android.graphics.RectF? = secciones.firstOrNull { it.id == seccionActiva }?.let { android.graphics.RectF(it.x, it.y, it.x + it.w, it.y + it.h) }
@@ -236,6 +258,7 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         .put("calco", calco?.json() ?: JSONObject.NULL).put("simetria", simetria?.json() ?: JSONObject.NULL)
         .put("secciones", JSONArray().also { a -> secciones.forEach { a.put(it.json()) } }).put("seccionActiva", seccionActiva)
         .put("capas", JSONArray().also { a -> capas.forEach { a.put(it.json()) } })
+        .put("tierras", JSONArray().also { a -> tierras.forEach { a.put(it.json()) } })
 
     fun ponVector(o: JSONObject) {
         fun <T> lista(n: String, dst: MutableList<T>, f: (JSONObject) -> T) {
@@ -251,12 +274,13 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         lista("secciones", secciones, Seccion::de)
         seccionActiva = o.optString("seccionActiva")
         if (o.has("capas")) lista("capas", capas, CapaInfo::de)
+        lista("tierras", tierras, Tierra::de)
     }
 
     fun metaJson(): JSONObject = JSONObject().put("v", 2).put("id", id).put("mundo", mundo).put("nombre", nombre).put("tipo", tipo).put("w", ancho).put("h", alto)
         .put("km", kmPorPx.toDouble()).put("kmPuesta", escalaPuesta).put("obras", JSONArray(obras.toList())).put("creado", creado).put("modificado", modificado)
         .put("papel", papel).put("grano", granoPapel).put("verT", verTerritorios).put("tinte", tinteTerritorios.toDouble()).put("nivel", colorPorNivel)
-        .put("vista", JSONArray().also { a -> vista.forEach { a.put(if (it.isNaN()) JSONObject.NULL else it.toDouble()) } })
+        .put("vista", JSONArray().also { a -> vista.forEach { a.put(if (it.isNaN()) JSONObject.NULL else it) } })
 
     fun guardaMeta() {
         val d = dir ?: return
@@ -276,7 +300,7 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
             m.creado = o.optLong("creado", m.creado); m.modificado = o.optLong("modificado", m.modificado)
             m.papel = o.optInt("papel", m.papel); m.granoPapel = o.optBoolean("grano", true); m.verTerritorios = o.optBoolean("verT", true)
             m.tinteTerritorios = o.optDouble("tinte", 0.28).toFloat(); m.colorPorNivel = o.optInt("nivel", 2)
-            o.optJSONArray("vista")?.let { a -> for (i in 0 until minOf(4, a.length())) m.vista[i] = if (a.isNull(i)) Float.NaN else a.optDouble(i).toFloat() }
+            o.optJSONArray("vista")?.let { a -> for (i in 0 until minOf(4, a.length())) m.vista[i] = if (a.isNull(i)) Double.NaN else a.optDouble(i) }
             o.optJSONObject("vector")?.let { m.ponVector(it) }
             m
         }.getOrNull()

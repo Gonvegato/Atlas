@@ -25,6 +25,7 @@ import com.gonzalo.atlas.lienzo.TrazoVivo
 import com.gonzalo.atlas.lienzo.VeloTerritorios
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
@@ -73,25 +74,29 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
 
     fun encuadra(usarGuardada: Boolean = true) {
         val g = mapa.vista
-        if (usarGuardada && !g[0].isNaN()) { vista.cx = g[0]; vista.cy = g[1]; vista.zoom = g[2]; vista.giro = if (g[3].isNaN()) 0f else g[3] }
+        if (usarGuardada && !g[0].isNaN()) { vista.cx = g[0]; vista.cy = g[1]; vista.zoom = g[2].toFloat(); vista.giro = if (g[3].isNaN()) 0f else g[3].toFloat() }
         else if (usarGuardada && mapa.infinito && lz.capas.all { it.teselas.isEmpty() } && lz.terr.isEmpty()) {
             // Un lienzo infinito recién hecho: a tamaño real (un píxel del lienzo, un píxel de la pantalla), que es como mejor se dibuja
-            vista.cx = 0f; vista.cy = 0f; vista.giro = 0f; vista.zoom = 1f
+            vista.cx = 0.0; vista.cy = 0.0; vista.giro = 0f; vista.zoom = 1f
         } else {
             val l = lz.limites()
-            vista.cx = l.exactCenterX(); vista.cy = l.exactCenterY(); vista.giro = 0f
+            vista.cx = l.exactCenterX().toDouble(); vista.cy = l.exactCenterY().toDouble(); vista.giro = 0f
             vista.zoom = min(width / l.width().toFloat(), height / l.height().toFloat()) * 0.9f
         }
         limita(); vista.actualiza(); dibujo.invalidate(); alMoverse()
     }
 
-    fun recuerdaVista() { mapa.vista[0] = vista.cx; mapa.vista[1] = vista.cy; mapa.vista[2] = vista.zoom; mapa.vista[3] = vista.giro }
+    fun recuerdaVista() { mapa.vista[0] = vista.cx; mapa.vista[1] = vista.cy; mapa.vista[2] = vista.zoom.toDouble(); mapa.vista[3] = vista.giro.toDouble() }
+
+    /** Hasta dónde se puede acercar en este mapa (hasta que un metro mida unos 400 px de pantalla; ver [Motor.zoomMaximo]). */
+    fun zoomMaximo(): Float = Motor.zoomMaximo(mapa.kmPorPx)
 
     private fun limita() {
         val l = lz.limites()
         val zmin = if (mapa.infinito) 0.03f else min(width / l.width().toFloat(), height / l.height().toFloat()) * 0.4f
-        vista.zoom = vista.zoom.coerceIn(max(0.01f, zmin), 32f)
-        if (!mapa.infinito) { vista.cx = vista.cx.coerceIn(0f, mapa.ancho.toFloat()); vista.cy = vista.cy.coerceIn(0f, mapa.alto.toFloat()) }
+        vista.zoom = vista.zoom.coerceIn(max(0.01f, zmin), zoomMaximo())
+        if (!mapa.infinito) { vista.cx = vista.cx.coerceIn(0.0, mapa.ancho.toDouble()); vista.cy = vista.cy.coerceIn(0.0, mapa.alto.toDouble()) }
+        editor.zoomVista = vista.zoom
     }
 
     fun refresca() { dibujo.invalidate() }
@@ -118,7 +123,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         val b = calco() ?: return
         pCalco.alpha = (k.opacidad * 255).toInt()
         c.save()
-        c.translate(k.x, k.y); c.rotate(k.giro)
+        c.translate(vista.lx(k.x), vista.ly(k.y)); c.rotate(k.giro)
         val s = k.ancho / b.width
         c.scale(s, abs(s))
         c.drawBitmap(b, -b.width / 2f, -b.height / 2f, pCalco)
@@ -132,19 +137,22 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     private fun pinta(c: Canvas) {
         c.drawColor(0xFFE4DABB.toInt())
         vista.actualiza()
-        val vis = vista.visible()
-        val papel = if (mapa.infinito) RectF(vis) else RectF(0f, 0f, mapa.ancho.toFloat(), mapa.alto.toFloat()).also { if (!it.intersect(vis)) it.setEmpty() }
+        editor.zoomVista = vista.zoom
+        // Lo que se ve del lienzo (con doble precisión) y, para dibujar, en el marco local de la vista
+        val vd = vista.visibleD()
+        val pd = if (mapa.infinito) vd.copyOf() else doubleArrayOf(max(vd[0], 0.0), max(vd[1], 0.0), min(vd[2], mapa.ancho.toDouble()), min(vd[3], mapa.alto.toDouble()))
         c.save()
         c.concat(vista.m)
-        if (!papel.isEmpty) {
-            Papel.pinta(c, mapa, papel)
+        if (pd[2] > pd[0] && pd[3] > pd[1]) {
+            val papel = vista.local(pd)
+            Papel.pinta(c, mapa, papel, vista.zoom, vista.cerca)
             if (mapa.calco?.encima != true) pintaCalco(c)
             val nivel = Motor.nivel(vista.zoom).let { if (editor.transformacion != null) min(0, it) else it }
-            if (nivel <= 0) capasDirectas(c, papel, nivel) else desdePiramide(c, papel, nivel)
+            if (nivel <= 0) capasDirectas(c, pd, papel, nivel) else desdePiramide(c, papel, nivel)
             if (mapa.calco?.encima == true) pintaCalco(c)
-            pintaGuias(c, vis)
+            pintaGuias(c, vista.local(vd))
             // Borde del lienzo
-            if (!mapa.infinito) { pCapa.alpha = 255; pCapa.blendMode = null; val p = Paint().apply { style = Paint.Style.STROKE; color = 0x55000000; strokeWidth = 1f / vista.zoom }; c.drawRect(0f, 0f, mapa.ancho.toFloat(), mapa.alto.toFloat(), p) }
+            if (!mapa.infinito) { pCapa.alpha = 255; pCapa.blendMode = null; val p = Paint().apply { style = Paint.Style.STROKE; color = 0x55000000; strokeWidth = 1f / vista.zoom }; c.drawRect(vista.lx(0f), vista.ly(0f), vista.lx(mapa.ancho.toFloat()), vista.ly(mapa.alto.toFloat()), p) }
         }
         c.restore()
         opciones.borrador = editor.borrador
@@ -156,7 +164,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         // El tamaño del pincel, en el centro, mientras se mueve su barra
         val falta = editor.muestraTam - System.currentTimeMillis()
         if (falta > 0) {
-            val rad = max(editor.tamanoActual() / 2f * vista.zoom, 1f)
+            val rad = max(editor.enMapa(editor.tamanoActual()) / 2f * vista.zoom, 1f)
             pGuia.pathEffect = null; pGuia.style = Paint.Style.STROKE; pGuia.strokeWidth = 3f * dens; pGuia.color = 0x99000000.toInt()
             c.drawCircle(width / 2f, height / 2f, rad, pGuia)
             pGuia.strokeWidth = 1.5f * dens; pGuia.color = 0xFFFFFFFF.toInt()
@@ -171,16 +179,22 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     private var veloFuera: android.graphics.Path? = null
     private var veloBorde: android.graphics.Path? = null
 
-    /** Lo que guía el dibujo (en coordenadas del lienzo): la forma que se va a poner, la selección y los ejes de simetría. */
+    /** El camino de una selección en el marco local de la vista ([fuera]: lo que no está seleccionado). */
+    private fun caminoLocal(s: com.gonzalo.atlas.lienzo.Seleccion, vis: RectF, fuera: Boolean): android.graphics.Path =
+        if (!vista.cerca) (if (fuera) s.fuera else s.path)
+        else s.local(1.0, 0.0, 0.0, vista.ox, vista.oy, vis.left.toDouble(), vis.top.toDouble(), vis.right.toDouble(), vis.bottom.toDouble(), fuera, vis.width().toDouble() + vis.height())
+
+    /** Lo que guía el dibujo: la forma que se va a poner, la selección y los ejes de simetría. [vis]: lo que se ve, en el marco local. */
     private fun pintaGuias(c: Canvas, vis: RectF) {
         val z = vista.zoom
-        editor.vistaPrevia?.let { (b, r) ->
+        editor.vistaPrevia?.let { (b, r0) ->
+            val r = vista.local(r0)
             pCalco.alpha = 215; c.drawBitmap(b, null, r, pCalco)
             pGuia.pathEffect = null; pGuia.style = Paint.Style.STROKE; pGuia.strokeWidth = 2f * dens / z; pGuia.color = 0xFF3D8BFF.toInt()
             c.drawRect(r, pGuia)
         }
         editor.marco?.let { s ->
-            if (veloDe !== s) { veloDe = s; veloFuera = s.fuera; veloBorde = android.graphics.Path(s.path).apply { fillType = android.graphics.Path.FillType.EVEN_ODD } }
+            if (veloDe !== s || vista.cerca) { veloDe = s; veloFuera = caminoLocal(s, vis, true); veloBorde = android.graphics.Path(caminoLocal(s, vis, false)).apply { fillType = android.graphics.Path.FillType.EVEN_ODD } }
             // Lo de fuera, velado; el borde, en blanco y negro para que se vea sobre cualquier color
             pVelo.style = Paint.Style.FILL; pVelo.color = 0x59101418
             c.save(); c.clipRect(vis); c.drawPath(veloFuera!!, pVelo); c.restore()
@@ -189,7 +203,8 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
             pGuia.pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f * dens / z, 6f * dens / z), 0f); pGuia.color = 0xFFFFFFFF.toInt(); c.drawPath(veloBorde!!, pGuia)
             pGuia.pathEffect = null
         }
-        editor.marcoBorrador?.let { (forma, p) ->
+        editor.marcoBorrador?.let { (forma, p0) ->
+            val p = FloatArray(p0.size) { if (it % 2 == 0) vista.lx(p0[it]) else vista.ly(p0[it]) }
             pGuia.style = Paint.Style.STROKE; pGuia.strokeWidth = 1.5f * dens / z; pGuia.color = 0xFF3D8BFF.toInt(); pGuia.pathEffect = null
             when (forma) {
                 "rect" -> c.drawRect(min(p[0], p[2]), min(p[1], p[3]), max(p[0], p[2]), max(p[1], p[3]), pGuia)
@@ -199,14 +214,24 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         }
         mapa.simetria?.let { g ->
             pGuia.style = Paint.Style.STROKE; pGuia.strokeWidth = 1.2f * dens / z; pGuia.color = 0xCC3D8BFF.toInt(); pGuia.pathEffect = null
-            val largo = max(vis.width(), vis.height()) * 2f + hypot(g.x - vis.centerX(), g.y - vis.centerY())
-            when (g.tipo) {
-                "horizontal" -> c.drawLine(g.x - largo, g.y, g.x + largo, g.y, pGuia)
-                "cuadrante" -> { c.drawLine(g.x - largo, g.y, g.x + largo, g.y, pGuia); c.drawLine(g.x, g.y - largo, g.x, g.y + largo, pGuia) }
-                "radial" -> { val n = g.n.coerceIn(2, 24); for (k in 0 until n) { val a = k * 2.0 * Math.PI / n - Math.PI / 2; c.drawLine(g.x, g.y, g.x + (Math.cos(a) * largo).toFloat(), g.y + (Math.sin(a) * largo).toFloat(), pGuia) } }
-                else -> c.drawLine(g.x, g.y - largo, g.x, g.y + largo, pGuia)
+            // Los ejes, recortados a lo que se ve (de muy cerca el centro puede caer a millones de píxeles de la pantalla)
+            val gx = vista.lx(g.x); val gy = vista.ly(g.y)
+            val largo = vis.width() + vis.height()
+            fun eje(dx: Double, dy: Double, media: Boolean) {
+                // El punto del eje más cercano al centro de lo que se ve, y desde ahí lo que quepa
+                val t = ((vis.centerX() - gx) * dx + (vis.centerY() - gy) * dy).toFloat().let { if (media) max(it, 0f) else it }
+                val bx = gx + (t * dx).toFloat(); val by = gy + (t * dy).toFloat()
+                if (hypot(bx - vis.centerX(), by - vis.centerY()) > largo) return
+                val t0 = if (media) max(t - largo, 0f) else t - largo
+                c.drawLine(gx + (t0 * dx).toFloat(), gy + (t0 * dy).toFloat(), bx + (largo * dx).toFloat(), by + (largo * dy).toFloat(), pGuia)
             }
-            c.drawCircle(g.x, g.y, 4f * dens / z, pGuia)
+            when (g.tipo) {
+                "horizontal" -> eje(1.0, 0.0, false)
+                "cuadrante" -> { eje(1.0, 0.0, false); eje(0.0, 1.0, false) }
+                "radial" -> { val n = g.n.coerceIn(2, 24); for (k in 0 until n) { val a = k * 2.0 * Math.PI / n - Math.PI / 2; eje(Math.cos(a), Math.sin(a), true) } }
+                else -> eje(0.0, 1.0, false)
+            }
+            if (hypot(gx - vis.centerX(), gy - vis.centerY()) < largo) c.drawCircle(gx, gy, 4f * dens / z, pGuia)
         }
     }
 
@@ -220,19 +245,25 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     private val pDentroF = Paint(Paint.FILTER_BITMAP_FLAG).apply { xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN) }
     private val pNada = Paint().apply { xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR) }
 
-    /** Las capas tal cual (a tamaño real) o, de cerca ([nivel] < 0), con sus teselas nítidas donde hay trazos guardados. */
-    private fun capasDirectas(c: Canvas, r: RectF, nivel: Int) {
-        val L = Lienzo.L.toFloat()
-        val t = rango(r, L)
+    /**
+     * Las capas tal cual (a tamaño real) o, de cerca ([nivel] < 0), con sus teselas nítidas donde hay trazos guardados.
+     * [pd]: lo que se ve del lienzo (izquierda, arriba, derecha, abajo); [r]: lo mismo en el marco local, que es donde se dibuja.
+     */
+    private fun capasDirectas(c: Canvas, pd: DoubleArray, r: RectF, nivel: Int) {
+        val L = Lienzo.L
+        fun rango(lado: Double) = intArrayOf(floor(pd[0] / lado).toInt(), floor(pd[1] / lado).toInt(), max(floor(pd[0] / lado), ceil(pd[2] / lado) - 1).toInt(), max(floor(pd[1] / lado), ceil(pd[3] / lado) - 1).toInt())
+        val t = rango(L.toDouble())
         val tm = editor.transformacion
-        val e = -nivel; val s = 1 shl e; val lado = L / s
-        val th = if (e > 0) rango(r, lado) else t
+        val e = -nivel; val s = 1 shl e; val lado = L.toDouble() / s
+        val th = if (e > 0) rango(lado) else t
+        fun x(tx: Int) = vista.lx(tx * L.toDouble())
+        fun y(ty: Int) = vista.ly(ty * L.toDouble())
         lz.vivos.removeAll { it.estado >= TrazoVivo.ASENTADO }
         synchronized(lz.cierre) {
             val lista = lz.capas.toList()
             for ((ci, capa) in lista.withIndex()) {
                 val vivos = lz.vivos.filter { it.capa === capa && it.estado < TrazoVivo.ASENTADO }
-                if (!capa.info.visible || (capa.teselas.isEmpty() && vivos.isEmpty())) continue
+                if (!capa.info.visible || (capa.teselas.isEmpty() && capa.fondo.isEmpty() && vivos.isEmpty())) continue
                 val base = lz.baseDe(lista, ci)
                 if (base != null && !base.info.visible) continue
                 pCapa.alpha = (capa.info.opacidad * 255).toInt()
@@ -243,7 +274,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                     // La capa que se transforma: una imagen suya movida con la matriz
                     if (vistaTransfCapa != capa.info.id || vistaTransf == null) { vistaTransf = com.gonzalo.atlas.lienzo.Ajustes.vistaCapa(capa); vistaTransfCapa = capa.info.id }
                     vistaTransf?.let { (b, caja) ->
-                        val g = c.saveLayer(null, pCapa); c.save(); c.concat(tm); c.drawBitmap(b, null, caja, pFiltro)
+                        val g = c.saveLayer(null, pCapa); c.save(); c.translate(vista.lx(0f), vista.ly(0f)); c.concat(tm); c.drawBitmap(b, null, caja, pFiltro)
                         val borde = Paint().apply { style = Paint.Style.STROKE; color = 0xFF3D8BFF.toInt(); strokeWidth = 2f / vista.zoom }
                         c.drawRect(caja, borde); c.restore(); c.restoreToCount(g)
                     }
@@ -255,27 +286,37 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                     val k = Lienzo.clave(tx, ty)
                     val b = capa.teselas[k]
                     if (cerca && capa.fondo.containsKey(k)) {
-                        // De cerca: sus teselas nítidas (y, mientras se hacen, la normal ampliada)
-                        for (hy in max(th[1], ty * s)..min(th[3], ty * s + s - 1)) for (hx in max(th[0], tx * s)..min(th[2], tx * s + s - 1)) {
-                            rDst.set(hx * lado, hy * lado, (hx + 1) * lado, (hy + 1) * lado)
+                        // De cerca: sus teselas nítidas; mientras se hacen, la de un nivel menos fino que ya esté o la normal ampliada
+                        val hx0 = max(th[0].toLong(), tx.toLong() * s).toInt(); val hx1 = min(th[2].toLong(), tx.toLong() * s + s - 1).toInt()
+                        val hy0 = max(th[1].toLong(), ty.toLong() * s).toInt(); val hy1 = min(th[3].toLong(), ty.toLong() * s + s - 1).toInt()
+                        for (hy in hy0..hy1) for (hx in hx0..hx1) {
+                            rDst.set(vista.lx(hx * lado), vista.ly(hy * lado), vista.lx((hx + 1) * lado), vista.ly((hy + 1) * lado))
                             val hb = lz.nitidez.tesela(capa, e, hx, hy)
-                            if (hb != null) c.drawBitmap(hb, null, rDst, pFiltro)
-                            else if (b != null) { val px = ((hx - tx * s) * lado).toInt(); val py = ((hy - ty * s) * lado).toInt(); rSrc.set(px, py, px + lado.toInt(), py + lado.toInt()); c.drawBitmap(b, rSrc, rDst, pFiltro) }
+                            if (hb != null) { c.drawBitmap(hb, null, rDst, pFiltro); continue }
+                            c.save(); c.clipRect(rDst)
+                            var puesta = false
+                            for (sube in 1..min(4, e - 1)) {
+                                val pb = lz.nitidez.hecha(capa, e - sube, hx shr sube, hy shr sube) ?: continue
+                                val pl = lado * (1 shl sube); val px = (hx shr sube) * pl; val py = (hy shr sube) * pl
+                                rDst.set(vista.lx(px), vista.ly(py), vista.lx(px + pl), vista.ly(py + pl)); c.drawBitmap(pb, null, rDst, pFiltro); puesta = true; break
+                            }
+                            if (!puesta && b != null) c.drawBitmap(b, x(tx), y(ty), pFiltro)
+                            c.restore()
                         }
-                    } else if (b != null) c.drawBitmap(b, tx * L, ty * L, pFiltro)
+                    } else if (b != null) c.drawBitmap(b, x(tx), y(ty), pFiltro)
                 }
                 for (v in vivos) pintaVivo(c, v, r)
                 // Máscara de recorte: solo queda donde la capa de debajo tiene algo
                 if (base != null) for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) {
                     val m = base.teselas[Lienzo.clave(tx, ty)]
-                    if (m != null) c.drawBitmap(m, tx * L, ty * L, pDentroF) else c.drawRect(tx * L, ty * L, (tx + 1) * L, (ty + 1) * L, pNada)
+                    if (m != null) c.drawBitmap(m, x(tx), y(ty), pDentroF) else c.drawRect(x(tx), y(ty), x(tx + 1), y(ty + 1), pNada)
                 }
                 c.restoreToCount(g)
             }
             pCapa.colorFilter = null
         }
         if (tm == null) vistaTransf = null
-        if (mapa.verTerritorios) for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) velo.tesela(Lienzo.clave(tx, ty))?.let { c.drawBitmap(it, tx * L, ty * L, pFiltro) }
+        if (mapa.verTerritorios) for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) velo.tesela(Lienzo.clave(tx, ty))?.let { c.drawBitmap(it, x(tx), y(ty), pFiltro) }
     }
 
     /** La imagen de una tesela de la pintura húmeda, al día. */
@@ -285,17 +326,19 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         return b
     }
 
+    private val rLona = RectF()
+    /** Dónde cae una tesela de la pintura húmeda (estampada a [s] píxeles por píxel del lienzo), en el marco local. */
+    private fun sitio(l: Lona, s: Float): RectF { val d = s.toDouble(); rLona.set(vista.lx(l.ox / d), vista.ly(l.oy / d), vista.lx((l.ox + l.w) / d), vista.ly((l.oy + l.h) / d)); return rLona }
+
     /** El trazo que se está dibujando, fundido con su capa (con su opacidad; borrando; solo dentro de la selección o la sección). */
     private fun pintaVivo(c: Canvas, v: TrazoVivo, r: RectF) {
         val h = v.humedo; val s = h.escala
         val g = c.save()
-        v.recorte?.let { c.clipRect(it) }
+        v.recorte?.let { c.clipRect(vista.local(it)) }
         val sel = v.seleccion
         if (sel != null) c.saveLayer(r, v.pintura)
-        c.save(); c.scale(1f / s, 1f / s)
-        for (l in h.lonas.values) if (l.tocada) c.drawBitmap(imagenDe(l, v.color, v.def.bordes), l.ox.toFloat(), l.oy.toFloat(), if (sel != null) pFiltro else v.pintura)
-        c.restore()
-        if (sel != null) c.drawPath(sel.fuera, pFuera)
+        for (l in h.lonas.values) if (l.tocada) c.drawBitmap(imagenDe(l, v.color, v.def.bordes), null, sitio(l, s), if (sel != null) pFiltro else v.pintura)
+        if (sel != null) c.drawPath(caminoLocal(sel, r, true), pFuera)
         c.restoreToCount(g)
     }
 
@@ -331,12 +374,11 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
             pLejos.alpha = ((if (borra) 0.75f else 1f) * v.opacidad * 255).toInt()
             var queda = false
             c.save(); v.recorte?.let { c.clipRect(it) }; v.seleccion?.let { c.clipPath(it.path) }
-            c.scale(1f / h.escala, 1f / h.escala)
             for (l in h.lonas.values) {
                 if (!l.tocada) continue
-                if (asentado && piramide.limpia(nivel, l.ox / Lienzo.L, l.oy / Lienzo.L)) continue
+                if (asentado && piramide.limpia(nivel, (l.ox / Lienzo.L).toInt(), (l.oy / Lienzo.L).toInt())) continue
                 queda = true
-                c.drawBitmap(imagenDe(l, if (borra) mapa.papel else v.color, v.def.bordes), l.ox.toFloat(), l.oy.toFloat(), pLejos)
+                c.drawBitmap(imagenDe(l, if (borra) mapa.papel else v.color, v.def.bordes), null, sitio(l, h.escala), pLejos)
             }
             c.restore()
             if (asentado && !queda) lz.vivos.remove(v)
@@ -370,7 +412,13 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 val goma = e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER || (esLapiz(e, 0) && (e.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0)
                 maxDedos = 1; bajoMulti = e.eventTime; multiMovido = false
                 if (!esLapiz(e, 0)) programaCuentagotas(e.x, e.y)
+                // Las herramientas que trabajan con los píxeles del mapa (o con medidas cortas) no sirven de muy cerca: se avisa y se mueve la vista
+                val soloPixeles = h == Herramienta.DIFUMINAR || h == Herramienta.LICUAR || h == Herramienta.TRANSFORMAR
+                val soloMapa = h == Herramienta.SELECCION || h == Herramienta.RUTA || h == Herramienta.SECCION || h == Herramienta.REGLA || h == Herramienta.TERRITORIO
+                val lejos = (soloPixeles && vista.zoom > 32f) || (soloMapa && vista.zoom > 2048f)
+                if (lejos && puedeDibujar(e, 0)) editor.avisa("${h.nombre} trabaja a la escala del mapa: desde tan cerca no se puede. Aléjate (a menos de ${if (soloPixeles) "32" else "2.000"} aumentos).")
                 gesto = when {
+                    lejos -> Gesto.MOVER
                     h == Herramienta.TRANSFORMAR -> { if (editor.transformacion == null) editor.transformacion = Matrix(); Gesto.TRANSFORMAR }
                     h == Herramienta.CALCO && mapa.calco != null -> Gesto.CALCO
                     h == Herramienta.DIFUMINAR && puedeDibujar(e, 0) -> { punteroTrazo = e.getPointerId(0); editor.empiezaDifuminar(); difumina(e); Gesto.DIFUMINAR }
@@ -400,8 +448,8 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 Gesto.TINTA -> mueveTinta(e)
                 Gesto.ARRASTRE -> {
                     val i = e.findPointerIndex(punteroTrazo).takeIf { it >= 0 } ?: 0
-                    for (hh in 0 until e.historySize) { val m = vista.aMapa(e.getHistoricalX(i, hh), e.getHistoricalY(i, hh)); editor.mueve(m[0], m[1]) }
-                    val m = vista.aMapa(e.getX(i), e.getY(i)); editor.mueve(m[0], m[1])
+                    for (hh in 0 until e.historySize) { val m = vista.aMapaD(e.getHistoricalX(i, hh), e.getHistoricalY(i, hh)); editor.mueve(m[0].toFloat(), m[1].toFloat(), m[0], m[1]) }
+                    val m = vista.aMapaD(e.getX(i), e.getY(i)); editor.mueve(m[0].toFloat(), m[1].toFloat(), m[0], m[1])
                     dibujo.invalidate()
                 }
                 Gesto.MOVER -> { if (hypot(e.x - bajoX, e.y - bajoY) > 8 * dens || e.pointerCount > 1) movido = true; mueveVista(e) }
@@ -444,7 +492,8 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
 
     // ---------------------------------------------------------------- el trazo
 
-    private val inv = Matrix()
+    /** El origen del trazo en el lienzo: sus puntos se miden desde ahí (con doble precisión hasta aquí, y cortos después). */
+    private var oTrazoX = 0.0; private var oTrazoY = 0.0
     private var cuerda: FloatArray? = null
     private var bajoTrazo = 0L
     private var lapizTrazo = false
@@ -466,9 +515,10 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         val i = e.actionIndex
         punteroTrazo = e.getPointerId(i)
         lapizTrazo = esLapiz(e, i)
-        vista.actualiza(); vista.m.invert(inv)
-        val v = lz.empiezaTrazo(def, editor.color, if (goma) editor.tamanoGoma else editor.tamano, if (goma) editor.opacidadGoma else editor.opacidad,
-            if (goma) TrazoDatos.BORRAR else TrazoDatos.PINTAR, vista.zoom / dens, lapizTrazo || !editor.afilaDedo, Motor.nivel(vista.zoom), editor.espejos()) ?: return
+        vista.actualiza()
+        val o = vista.aMapaD(e.getX(i), e.getY(i)); oTrazoX = o[0]; oTrazoY = o[1]
+        val v = lz.empiezaTrazo(def, editor.color, editor.enMapa(if (goma) editor.tamanoGoma else editor.tamano), if (goma) editor.opacidadGoma else editor.opacidad,
+            if (goma) TrazoDatos.BORRAR else TrazoDatos.PINTAR, vista.zoom / dens, lapizTrazo || !editor.afilaDedo, Motor.nivel(vista.zoom), oTrazoX, oTrazoY, editor.espejos()) ?: return
         trazo = v; bajoTrazo = e.eventTime; camino.limpia(); forma = null; formaBase = null
         // Estabilizado: el pincel va detrás del lápiz, atado con una cuerda
         cuerda = if (editor.estabilizacion > 0.01f) floatArrayOf(e.getX(i), e.getY(i)) else null
@@ -499,7 +549,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 cu[0] += dx * k; cu[1] += dy * k; x = cu[0]; y = cu[1]
             }
         }
-        pt[0] = x; pt[1] = y; inv.mapPoints(pt)
+        aTrazo(x, y)
         lote.pon(pt[0]); lote.pon(pt[1])
         lote.pon(if (lapizTrazo) p.coerceIn(0f, 1f) else 1f)
         lote.pon(if (lapizTrazo) inc.coerceIn(0f, 1.5707f) else 0f)
@@ -507,6 +557,9 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         lote.pon((t - bajoTrazo).coerceAtLeast(0L).toFloat())
         camino.pon(pt[0]); camino.pon(pt[1])
     }
+
+    /** Un punto de la pantalla, en el lienzo y medido desde el origen del trazo (queda en [pt]). */
+    private fun aTrazo(sx: Float, sy: Float) { val d = vista.aMapaD(sx, sy); pt[0] = (d[0] - oTrazoX).toFloat(); pt[1] = (d[1] - oTrazoY).toFloat() }
 
     private fun manda() { if (lote.n > 0) { trazo?.agrega(lote.copia()); lote.limpia() } }
 
@@ -526,10 +579,12 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         val v = trazo
         if (v != null && gesto == Gesto.TINTA && forma == null) {
             val n = camino.n / 2
-            val xs = FloatArray(n) { camino.v[it * 2] }; val ys = FloatArray(n) { camino.v[it * 2 + 1] }
+            // (La forma se reconoce con las medidas de la pantalla: da igual lo cerca que se esté dibujando)
+            val z = vista.zoom
+            val xs = FloatArray(n) { camino.v[it * 2] * z }; val ys = FloatArray(n) { camino.v[it * 2 + 1] * z }
             var largo = 0f; for (k in 1 until n) largo += hypot(xs[k] - xs[k - 1], ys[k] - ys[k - 1])
-            if (largo * vista.zoom > 36 * dens) Formas.reconoce(xs, ys, n)?.let { f ->
-                forma = f; formaBase = f; anclaX = xs[n - 1]; anclaY = ys[n - 1]
+            if (largo > 36 * dens) Formas.reconoce(xs, ys, n)?.escalada(1f / z)?.let { f ->
+                forma = f; formaBase = f; anclaX = xs[n - 1] / z; anclaY = ys[n - 1] / z
                 v.sustituye(f.trazo(1.5f / vista.zoom))
                 editor.aviso = f.nombre + " · arrastra para ajustarla"
             }
@@ -539,11 +594,11 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     /** Con la forma ya hecha y el lápiz aún apoyado: una recta se alarga hasta él; las demás se escalan y giran con él. */
     private fun ajustaForma(sx: Float, sy: Float) {
         val base = formaBase ?: return
-        pt[0] = sx; pt[1] = sy; inv.mapPoints(pt)
+        aTrazo(sx, sy)
         forma = if (!base.cerrada && base.pts.size == 4) Formas.recta(base.pts[0], base.pts[1], pt[0], pt[1]) else {
             val ax = anclaX - base.cx; val ay = anclaY - base.cy; val bx = pt[0] - base.cx; val by = pt[1] - base.cy
             val la = hypot(ax, ay)
-            if (la < 1e-3f) base else base.movida(hypot(bx, by) / la, atan2(by, bx) - atan2(ay, ax))
+            if (la < 1e-3f / vista.zoom) base else base.movida(hypot(bx, by) / la, atan2(by, bx) - atan2(ay, ax))
         }
         if (!formaPendiente) { formaPendiente = true; post { formaPendiente = false; val f = forma; val v = trazo; if (f != null && v != null) v.sustituye(f.trazo(1.5f / vista.zoom)) } }
     }
@@ -567,25 +622,27 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
 
     private fun empiezaArrastre(e: MotionEvent) {
         punteroTrazo = e.getPointerId(0)
-        val m = vista.aMapa(e.x, e.y)
-        editor.empieza(m[0], m[1])
+        val m = vista.aMapaD(e.x, e.y)
+        editor.empieza(m[0].toFloat(), m[1].toFloat(), m[0], m[1])
     }
 
     private fun toque(sx: Float, sy: Float) {
-        val m = vista.aMapa(sx, sy)
-        editor.toque(m[0], m[1], capas.queHay(mapa, vista, sx, sy, editor.centros, editor.superficies))
+        val h = editor.herramienta
+        if (vista.zoom > 2048f && (h == Herramienta.SELECCION || h == Herramienta.TERRITORIO || h == Herramienta.RUTA || h == Herramienta.SECCION || h == Herramienta.REGLA)) return
+        val d = vista.aMapaD(sx, sy)
+        editor.toque(d[0].toFloat(), d[1].toFloat(), capas.queHay(mapa, vista, sx, sy, editor.centros, editor.superficies), d[0], d[1], vista.visibleD())
         dibujo.invalidate()
     }
 
     private fun cursor(sx: Float, sy: Float) {
-        opciones.cursor = if (editor.herramienta == Herramienta.GOMA) floatArrayOf(sx, sy, editor.tamanoGoma / 2 * vista.zoom) else null
+        opciones.cursor = if (editor.herramienta == Herramienta.GOMA) floatArrayOf(sx, sy, editor.enMapa(editor.tamanoGoma) / 2 * vista.zoom) else null
     }
 
     override fun onGenericMotionEvent(e: MotionEvent): Boolean {
         // El lápiz sin tocar la pantalla: se enseña el tamaño del pincel
         if (e.actionMasked == MotionEvent.ACTION_HOVER_MOVE && esLapiz(e, 0)) {
             lapizVisto = true
-            val r = editor.tamanoActual() / 2 * vista.zoom
+            val r = editor.enMapa(editor.tamanoActual()) / 2 * vista.zoom
             opciones.cursor = if (editor.herramienta == Herramienta.PINCEL || editor.herramienta == Herramienta.GOMA) floatArrayOf(e.x, e.y, max(r, 2 * dens)) else null
             dibujo.invalidate(); return true
         }
@@ -602,13 +659,13 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         val a = if (n == 2) Math.toDegrees(atan2((e.getY(1) - e.getY(0)).toDouble(), (e.getX(1) - e.getX(0)).toDouble())).toFloat() else 0f
         val p = previo
         if (p != null && p[3] == n.toFloat()) {
-            val antes = vista.aMapa(p[0], p[1])
+            val antes = vista.aMapaD(p[0], p[1])
             if (n == 2 && p[2] > 0f) {
                 vista.zoom *= d / p[2]
                 if (girar) { var dg = a - p[4]; if (dg > 180) dg -= 360; if (dg < -180) dg += 360; vista.giro += dg }
             }
             limita(); vista.actualiza()
-            val ahora = vista.aMapa(mx, my)
+            val ahora = vista.aMapaD(mx, my)
             vista.cx += antes[0] - ahora[0]; vista.cy += antes[1] - ahora[1]
             limita(); vista.actualiza()
             alMoverse(); dibujo.invalidate()
@@ -638,7 +695,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         for (h in 0 until e.historySize) { val m = vista.aMapa(e.getHistoricalX(i, h), e.getHistoricalY(i, h)); xs[h] = m[0]; ys[h] = m[1]; ps[h] = if (esLapiz(e, i)) e.getHistoricalPressure(i, h) else 1f }
         val m = vista.aMapa(e.getX(i), e.getY(i)); xs[n - 1] = m[0]; ys[n - 1] = m[1]; ps[n - 1] = if (esLapiz(e, i)) e.getPressure(i) else 1f
         if (licuar) editor.licua(xs, ys, ps) { r -> piramide.ensucia(r); dibujo.invalidate() } else editor.difumina(xs, ys, ps) { r -> piramide.ensucia(r); dibujo.invalidate() }
-        opciones.cursor = floatArrayOf(e.getX(i), e.getY(i), (if (licuar) editor.tamanoLicuar else editor.tamanoDifuminar) / 2 * vista.zoom)
+        opciones.cursor = floatArrayOf(e.getX(i), e.getY(i), editor.enMapa(if (licuar) editor.tamanoLicuar else editor.tamanoDifuminar) / 2 * vista.zoom)
     }
 
     /** Transformar la capa activa: un dedo la mueve; dos la escalan y giran. */
@@ -707,7 +764,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         else { w = min(vis.width() * 0.8f, vis.height() * 0.8f * asp); h = w / asp }
         if (!mapa.infinito) { val k = min(1f, min(mapa.ancho / w, mapa.alto / h)); w *= k; h *= k }
         w = w.coerceIn(64f, 16000f); h = h.coerceIn(64f, 16000f)
-        var cx = vis.centerX(); var cy = vis.centerY()
+        var cx = vista.cx.toFloat(); var cy = vista.cy.toFloat()
         if (!mapa.infinito) { cx = cx.coerceIn(w / 2f, mapa.ancho - w / 2f); cy = cy.coerceIn(h / 2f, mapa.alto - h / 2f) }
         return RectF(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f)
     }
@@ -717,7 +774,8 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         vista.giro = 0f; vista.actualiza(); recuerdaVista(); dibujo.invalidate()
     }
 
-    fun irA(x: Float, y: Float, zoom: Float = max(vista.zoom, 0.8f)) { vista.cx = x; vista.cy = y; vista.zoom = zoom; limita(); vista.actualiza(); recuerdaVista(); dibujo.invalidate(); alMoverse() }
+    fun irA(x: Float, y: Float, zoom: Float = max(vista.zoom, 0.8f)) = irA(x.toDouble(), y.toDouble(), zoom)
+    fun irA(x: Double, y: Double, zoom: Float = max(vista.zoom, 0.8f)) { vista.cx = x; vista.cy = y; vista.zoom = zoom; limita(); vista.actualiza(); recuerdaVista(); dibujo.invalidate(); alMoverse() }
 
     fun cierra() { recuerdaVista(); piramide.cierra(); lz.nitidez.alListo -= alListo }
 }

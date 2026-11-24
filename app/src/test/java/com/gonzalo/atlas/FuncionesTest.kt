@@ -82,6 +82,41 @@ class FuncionesTest {
         assertTrue(lz.capa(lineas.info.id)!!.trazos.isEmpty()); assertTrue(lz.capa(color.info.id)!!.teselas.isEmpty())
     }
 
+    /** Dos continentes que se pisan, unidos: uno solo, sin costa tierra adentro y sin que el mar del segundo tape la tierra del primero. */
+    @Test fun continentesUnidos() {
+        val tierra = 0xFFE4D4A8.toInt(); val mar = 0xFFB9D3DB.toInt(); val tinta = 0xFF2A2118.toInt()
+        val ed = editor(); val lz = ed.lienzo
+        val ra = RectF(-900f, -600f, 300f, 400f); val rb = RectF(-200f, -300f, 1000f, 700f)
+        val pa = FormaTierra(7L, "continente", 0.5f, 0.4f, 0.2f); val pb = FormaTierra(19L, "continente", 0.5f, 0.4f, 0.2f)
+        ed.ponContinente(pa, ra, 2400.0, tinta, tierra, mar, false); espera(lz)
+        png(Lamina.pinta(ed, 1400, null), "continentes_unidos_antes.png")
+        ed.ponContinente(pb, rb, 2400.0, tinta, tierra, mar, false, true); espera(lz)
+        assertEquals(2, ed.mapa.tierras.size)
+        png(Lamina.pinta(ed, 1400, null), "continentes_unidos.png")
+        val lineas = lz.capas.first { it.info.referencia }; val color = lz.capas.first { !it.info.referencia }
+        // (Las mismas muestras con las que se generan: 480 × 400 para un recuadro de 1.200 × 1.000)
+        val fa = Continente.campo(pa, 480, 400); val fb = Continente.campo(pb, 480, 400)
+        fun en(f: FloatArray, r: RectF, x: Int, y: Int): Float { if (!r.contains(x.toFloat(), y.toFloat())) return -1f; return f[((y - r.top) * 0.4f).toInt().coerceIn(0, 399) * 480 + ((x - r.left) * 0.4f).toInt().coerceIn(0, 479)] }
+        fun adentro(f: FloatArray, r: RectF, x: Int, y: Int) = en(f, r, x, y) > 0f && en(f, r, x - 14, y) > 0f && en(f, r, x + 14, y) > 0f && en(f, r, x, y - 14) > 0f && en(f, r, x, y + 14) > 0f
+        var dentro = 0; var conTinta = 0; var sinTierra = 0
+        for (y in -600 until 700 step 3) for (x in -900 until 1000 step 3) {
+            if (!adentro(fa, ra, x, y) && !adentro(fb, rb, x, y)) continue
+            dentro++
+            if ((lz.colorCapa(lineas, x.toFloat(), y.toFloat()) ushr 24) > 80) conTinta++
+            if (lz.colorCapa(color, x.toFloat(), y.toFloat()) != tierra) sinTierra++
+        }
+        assertTrue("puntos tierra adentro: $dentro", dentro > 20000)
+        // Tierra adentro de cualquiera de las dos no queda costa (salvo algún resto donde se juntan) ni mar
+        assertTrue("con tinta: $conTinta de $dentro", conTinta < dentro / 400)
+        assertTrue("sin tierra: $sinTierra de $dentro", sinTierra < dentro / 1000)
+        // Las dos tierras se tocan de verdad en esta prueba (si no, no se prueba nada)
+        var comun = 0; for (y in -300 until 400 step 5) for (x in -200 until 300 step 5) if (en(fa, ra, x, y) > 0f && en(fb, rb, x, y) > 0f) comun++
+        assertTrue("en común: $comun", comun > 300)
+        // Deshacer quita la segunda y devuelve la costa de la primera
+        lz.deshacer(); espera(lz)
+        assertEquals(1, ed.mapa.tierras.size)
+    }
+
     private fun rellena(lz: Lienzo, c: CapaPx, r: RectF, color: Int) { lz.cambia(c, "x", HashMap<Long, Bitmap?>().also { m ->
         for (ty in Math.floorDiv(r.top.toInt(), 256)..Math.floorDiv(r.bottom.toInt() - 1, 256)) for (tx in Math.floorDiv(r.left.toInt(), 256)..Math.floorDiv(r.right.toInt() - 1, 256)) {
             val b = c.teselas[Lienzo.clave(tx, ty)]?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)

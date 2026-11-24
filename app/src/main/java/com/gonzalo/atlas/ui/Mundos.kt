@@ -401,6 +401,7 @@ fun PantGuerras(e: EstadoApp) {
  */
 @Composable
 internal fun PanelConsulta(e: EstadoApp, ed: Editor) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     val w = ed.mapa.mundo
     val cr = remember(w, e.listas, ed.cambios) { e.cronica(w) }
     val m = ed.mapa

@@ -26,6 +26,7 @@ import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.hypot
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -45,32 +46,70 @@ object Letras {
     }
 }
 
-/** Dónde se mira: el centro (en píxeles del mapa), el acercamiento (px de pantalla por px del mapa) y el giro. */
-class Vista(var cx: Float = 0f, var cy: Float = 0f, var zoom: Float = 0.5f, var giro: Float = 0f, var ancho: Int = 1, var alto: Int = 1) {
+/**
+ * Dónde se mira: el centro (en píxeles del mapa, con doble precisión), el acercamiento (px de pantalla por px del mapa) y
+ * el giro.
+ *
+ * De muy cerca (a 200.000 aumentos un píxel del mapa mide más que cien pantallas) las cuentas de dibujo, que van con
+ * decimales cortos, no dan para colocar nada si se mide desde la esquina del mapa. Por eso todo se dibuja en un «marco
+ * local»: medido desde un punto cercano al centro de lo que se ve ([ox], [oy]). [m] lleva del marco local a la pantalla, y
+ * lo que se dibuja se pasa antes al marco local con [lx] y [ly]. De lejos el marco es el propio mapa (origen 0).
+ */
+class Vista(var cx: Double = 0.0, var cy: Double = 0.0, var zoom: Float = 0.5f, var giro: Float = 0f, var ancho: Int = 1, var alto: Int = 1) {
+    constructor(cx: Float, cy: Float, zoom: Float, giro: Float, ancho: Int, alto: Int) : this(cx.toDouble(), cy.toDouble(), zoom, giro, ancho, alto)
+    /** Del marco local a la pantalla. */
     val m = Matrix()
-    private val inv = Matrix()
-    private val p = FloatArray(2)
+    /** El origen del marco local, en el mapa. */
+    var ox = 0.0; private set
+    var oy = 0.0; private set
+    /** Si se está tan cerca que el marco local ya no es el mapa. */
+    val cerca get() = ox != 0.0 || oy != 0.0
+    private var co = 1.0; private var si = 0.0
 
     fun actualiza() {
+        // (El origen cae en múltiplos de 1/256 de píxel: al mover la vista, lo dibujado se desplaza justo eso, sin temblar)
+        if (zoom > 48f) { ox = Math.rint(cx * 256.0) / 256.0; oy = Math.rint(cy * 256.0) / 256.0 } else { ox = 0.0; oy = 0.0 }
+        val g = Math.toRadians(giro.toDouble()); co = Math.cos(g); si = Math.sin(g)
         m.reset()
-        m.postTranslate(-cx, -cy)
+        m.postTranslate((ox - cx).toFloat(), (oy - cy).toFloat())
         m.postRotate(giro)
         m.postScale(zoom, zoom)
         m.postTranslate(ancho / 2f, alto / 2f)
-        m.invert(inv)
     }
 
-    fun aMapa(sx: Float, sy: Float): FloatArray { p[0] = sx; p[1] = sy; inv.mapPoints(p); return floatArrayOf(p[0], p[1]) }
-    fun aPantalla(mx: Float, my: Float): FloatArray { p[0] = mx; p[1] = my; m.mapPoints(p); return floatArrayOf(p[0], p[1]) }
+    /** Del mapa al marco local. */
+    fun lx(x: Float): Float = (x - ox).toFloat()
+    fun ly(y: Float): Float = (y - oy).toFloat()
+    fun lx(x: Double): Float = (x - ox).toFloat()
+    fun ly(y: Double): Float = (y - oy).toFloat()
+    fun local(r: RectF) = RectF(lx(r.left), ly(r.top), lx(r.right), ly(r.bottom))
+    /** (izquierda, arriba, derecha, abajo) en el mapa → en el marco local. */
+    fun local(d: DoubleArray) = RectF(lx(d[0]), ly(d[1]), lx(d[2]), ly(d[3]))
 
-    /** El rectángulo del mapa que se ve (contando el giro). */
-    fun visible(): RectF {
-        val r = RectF(Float.MAX_VALUE, Float.MAX_VALUE, -Float.MAX_VALUE, -Float.MAX_VALUE)
-        for ((x, y) in listOf(0f to 0f, ancho.toFloat() to 0f, 0f to alto.toFloat(), ancho.toFloat() to alto.toFloat())) {
-            val q = aMapa(x, y); r.left = min(r.left, q[0]); r.top = min(r.top, q[1]); r.right = max(r.right, q[0]); r.bottom = max(r.bottom, q[1])
+    fun aMapaD(sx: Float, sy: Float): DoubleArray {
+        val dx = (sx - ancho / 2.0) / zoom; val dy = (sy - alto / 2.0) / zoom
+        return doubleArrayOf(dx * co + dy * si + cx, -dx * si + dy * co + cy)
+    }
+    fun aPantallaD(mx: Double, my: Double): DoubleArray {
+        val dx = (mx - cx) * zoom; val dy = (my - cy) * zoom
+        return doubleArrayOf(dx * co - dy * si + ancho / 2.0, dx * si + dy * co + alto / 2.0)
+    }
+    fun aMapa(sx: Float, sy: Float): FloatArray { val d = aMapaD(sx, sy); return floatArrayOf(d[0].toFloat(), d[1].toFloat()) }
+    fun aPantalla(mx: Float, my: Float): FloatArray { val d = aPantallaD(mx.toDouble(), my.toDouble()); return floatArrayOf(d[0].toFloat(), d[1].toFloat()) }
+    fun aPantalla(mx: Double, my: Double): FloatArray { val d = aPantallaD(mx, my); return floatArrayOf(d[0].toFloat(), d[1].toFloat()) }
+
+    /** El rectángulo del mapa que se ve (contando el giro): izquierda, arriba, derecha, abajo. */
+    fun visibleD(): DoubleArray {
+        val r = doubleArrayOf(Double.MAX_VALUE, Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE)
+        for (i in 0 until 4) {
+            val q = aMapaD(if (i % 2 == 0) 0f else ancho.toFloat(), if (i < 2) 0f else alto.toFloat())
+            r[0] = min(r[0], q[0]); r[1] = min(r[1], q[1]); r[2] = max(r[2], q[0]); r[3] = max(r[3], q[1])
         }
         return r
     }
+
+    /** Lo mismo, con decimales cortos (de muy cerca, solo orientativo). */
+    fun visible(): RectF { val d = visibleD(); return RectF(d[0].toFloat(), d[1].toFloat(), d[2].toFloat(), d[3].toFloat()) }
 }
 
 /** Lo que va encima del mapa pintado: ríos, caminos, lugares, rótulos, nombres de reinos, tus dibujos, cuadrícula y escala. */
@@ -109,14 +148,15 @@ class Capas(private val ctx: Context) {
         cuadriculaVisible = op.cuadricula
         if (op.cuadricula) cuadricula(c, mapa, v)
         secciones(c, mapa, v, op)
-        for (k in mapa.rutas) camino(c, k, z, op.seleccion === k)
+        val vis = v.visibleD()
+        for (k in mapa.rutas) camino(c, k, v, vis, op.seleccion === k)
         op.borrador?.let { b ->
             if (b.tipo == "territorio") {
                 pLinea.pathEffect = null; pLinea.color = 0x66000000; pLinea.strokeWidth = op.radioBorrador * 2
-                path.reset(); path.moveTo(b.xs[0], b.ys[0]); for (i in 1 until b.n) path.lineTo(b.xs[i], b.ys[i]); c.drawPath(path, pLinea)
-            } else camino(c, b, z, false)
+                path.reset(); path.moveTo(v.lx(b.xs[0]), v.ly(b.ys[0])); for (i in 1 until b.n) path.lineTo(v.lx(b.xs[i]), v.ly(b.ys[i])); c.drawPath(path, pLinea)
+            } else camino(c, b, v, vis, false)
         }
-        for (s in mapa.sellos) sello(c, s, recurso(s.recurso), op.seleccion === s)
+        for (s in mapa.sellos) sello(c, v, vis, s, recurso(s.recurso), op.seleccion === s)
         c.restore()
         // Lo que se escribe va derecho en pantalla (aunque el mapa esté girado)
         if (op.nombresReinos && mapa.verTerritorios) {
@@ -146,13 +186,21 @@ class Capas(private val ctx: Context) {
 
     // ---------------------------------------------------------------- líneas
 
-    private fun camino(c: Canvas, k: Linea, z: Float, sel: Boolean) {
+    private fun camino(c: Canvas, k: Linea, v: Vista, vis: DoubleArray, sel: Boolean) {
         if (k.n < 2) return
+        val z = v.zoom
         val tipo = com.gonzalo.atlas.motor.Catalogo.ruta(k.tipo)
-        path.reset(); path.moveTo(k.xs[0], k.ys[0])
-        for (i in 1 until k.n) path.lineTo(k.xs[i], k.ys[i])
         val u = dens / z
         val w = max(tipo.ancho, 1.3f * u)
+        if (v.cerca) {
+            // De muy cerca: si pasa lejos de lo que se ve, ni se intenta
+            var x0 = Float.MAX_VALUE; var y0 = Float.MAX_VALUE; var x1 = -Float.MAX_VALUE; var y1 = -Float.MAX_VALUE
+            for (i in 0 until k.n) { x0 = min(x0, k.xs[i]); y0 = min(y0, k.ys[i]); x1 = max(x1, k.xs[i]); y1 = max(y1, k.ys[i]) }
+            val mg = w * 6.0 + 12.0 * u
+            if (x1 + mg < vis[0] || x0 - mg > vis[2] || y1 + mg < vis[1] || y0 - mg > vis[3]) return
+        }
+        path.reset(); path.moveTo(v.lx(k.xs[0]), v.ly(k.ys[0]))
+        for (i in 1 until k.n) path.lineTo(v.lx(k.xs[i]), v.ly(k.ys[i]))
         pLinea.strokeCap = Paint.Cap.ROUND
         if (sel) { pLinea.pathEffect = null; pLinea.color = (ACENTO and 0xFFFFFF) or 0x88000000.toInt(); pLinea.strokeWidth = w + 8 * u; c.drawPath(path, pLinea) }
         when (k.tipo) {
@@ -167,20 +215,39 @@ class Capas(private val ctx: Context) {
         pLinea.pathEffect = null
         if (k.tipo == "viaje") {
             // Punta de flecha al final
-            val n = k.n - 1; val dx = k.xs[n] - k.xs[n - 1]; val dy = k.ys[n] - k.ys[n - 1]; val d = max(0.01f, hypot(dx, dy))
-            val ux = dx / d; val uy = dy / d; val a = w * 4f
-            path.reset(); path.moveTo(k.xs[n] + ux * a * 0.4f, k.ys[n] + uy * a * 0.4f)
-            path.lineTo(k.xs[n] - ux * a - uy * a * 0.6f, k.ys[n] - uy * a + ux * a * 0.6f); path.lineTo(k.xs[n] - ux * a + uy * a * 0.6f, k.ys[n] - uy * a - ux * a * 0.6f); path.close()
+            val n = k.n - 1; val dx = k.xs[n] - k.xs[n - 1]; val dy = k.ys[n] - k.ys[n - 1]; val d = max(1e-9f, hypot(dx, dy))
+            val ux = dx / d; val uy = dy / d; val a = w * 4f; val fx = v.lx(k.xs[n]); val fy = v.ly(k.ys[n])
+            path.reset(); path.moveTo(fx + ux * a * 0.4f, fy + uy * a * 0.4f)
+            path.lineTo(fx - ux * a - uy * a * 0.6f, fy - uy * a + ux * a * 0.6f); path.lineTo(fx - ux * a + uy * a * 0.6f, fy - uy * a - ux * a * 0.6f); path.close()
             pRelleno.color = 0xFFA23B2A.toInt(); c.drawPath(path, pRelleno)
         }
     }
 
-    private fun sello(c: Canvas, s: Sello, b: Bitmap?, sel: Boolean) {
-        if (b == null) return
+    private val reducidos = java.util.WeakHashMap<Bitmap, ArrayList<Bitmap>>()
+
+    /**
+     * El dibujo reducido a la mitad [n] veces, promediando bien cada vez. Un dibujo grande pintado muy pequeño de una sola
+     * vez se deshace (se queda con un píxel de cada tantos); así se pinta siempre desde un tamaño parecido al de la pantalla.
+     */
+    private fun reducido(b: Bitmap, n: Int): Bitmap {
+        if (n <= 0) return b
+        val l = reducidos.getOrPut(b) { ArrayList() }
+        while (l.size < n) { val a = l.lastOrNull() ?: b; if (a.width <= 2 || a.height <= 2) break; l += Bitmap.createScaledBitmap(a, max(1, a.width / 2), max(1, a.height / 2), true) }
+        return l.getOrNull(n - 1) ?: l.lastOrNull() ?: b
+    }
+
+    private fun sello(c: Canvas, v: Vista, vis: DoubleArray, s: Sello, b0: Bitmap?, sel: Boolean) {
+        if (b0 == null) return
+        // Cuánto mide en la pantalla: se pinta desde la reducción que más se le acerca por arriba
+        val enPantalla = 64f * s.escala * v.zoom
+        val b = reducido(b0, if (enPantalla <= 0f) 0 else floor(ln(max(b0.width, b0.height) / enPantalla) / ln(2f)).toInt().coerceIn(0, 8))
         val lado = 64f * s.escala
+        if (s.x + lado < vis[0] || s.x - lado > vis[2] || s.y + lado < vis[1] || s.y - lado > vis[3]) return
+        // (Tan pequeño que no llega a medio píxel de la pantalla: no se ve)
+        if (lado * v.zoom < 0.5f && !sel) return
         val k = lado / max(b.width, b.height)
         c.save()
-        c.translate(s.x, s.y); c.rotate(s.giro); c.scale(if (s.espejo) -k else k, k)
+        c.translate(v.lx(s.x), v.ly(s.y)); c.rotate(s.giro); c.scale(if (s.espejo) -k else k, k)
         c.drawBitmap(b, -b.width / 2f, -b.height / 2f, pBmp)
         if (sel) { pLinea.color = ACENTO; pLinea.strokeWidth = 2f / k; pLinea.pathEffect = DashPathEffect(floatArrayOf(6f / k, 4f / k), 0f); c.drawRect(-b.width / 2f, -b.height / 2f, b.width / 2f, b.height / 2f, pLinea); pLinea.pathEffect = null }
         c.restore()
@@ -229,8 +296,8 @@ class Capas(private val ctx: Context) {
         val activa = mapa.secciones.firstOrNull { it.id == mapa.seccionActiva }
         if (activa != null && !op.impresion) {
             // Fuera de la sección activa, un velo: se ve dónde se puede dibujar
-            val vis = v.visible(); vis.inset(-10f, -10f)
-            c.save(); c.clipOutRect(activa.x, activa.y, activa.x + activa.w, activa.y + activa.h)
+            val vis = v.local(v.visibleD()); vis.inset(-10f / v.zoom, -10f / v.zoom)
+            c.save(); c.clipOutRect(v.lx(activa.x), v.ly(activa.y), v.lx(activa.x + activa.w), v.ly(activa.y + activa.h))
             pRelleno.color = 0x66000000; c.drawRect(vis, pRelleno); c.restore()
         }
         for (s in mapa.secciones) marco(c, mapa, s.x, s.y, s.w, s.h, s.nombre, s === activa, u, v)
@@ -240,9 +307,9 @@ class Capas(private val ctx: Context) {
     private fun marco(c: Canvas, mapa: Mapa, x: Float, y: Float, w: Float, h: Float, nombre: String, activa: Boolean, u: Float, v: Vista) {
         pLinea.pathEffect = if (activa) null else DashPathEffect(floatArrayOf(8 * u, 5 * u), 0f)
         pLinea.color = if (activa) 0xFF3D8BFF.toInt() else 0xAA3D8BFF.toInt(); pLinea.strokeWidth = (if (activa) 2.5f else 1.5f) * u
-        c.drawRect(x, y, x + w, y + h, pLinea); pLinea.pathEffect = null
+        c.drawRect(v.lx(x), v.ly(y), v.lx(x + w), v.ly(y + h), pLinea); pLinea.pathEffect = null
         val km = Medidas.formatoKm(w.toDouble() * mapa.kmPorPx) + " × " + Medidas.formatoKm(h.toDouble() * mapa.kmPorPx) + " · " + Medidas.formatoKm2(w.toDouble() * h * mapa.kmPorPx * mapa.kmPorPx)
-        c.save(); c.translate(x, y); c.scale(u, u)
+        c.save(); c.translate(v.lx(x), v.ly(y)); c.scale(u, u)
         pTexto.typeface = Letras.interSemi; pTexto.textSize = 12f; pTexto.letterSpacing = 0.04f; pTexto.textAlign = Paint.Align.LEFT; pTexto.color = 0xFF3D8BFF.toInt()
         pHalo.typeface = Letras.interSemi; pHalo.textSize = 12f; pHalo.letterSpacing = 0.04f; pHalo.textAlign = Paint.Align.LEFT; pHalo.strokeWidth = 3f; pHalo.color = PAPEL
         val t = "${nombre.uppercase()} · $km"
@@ -272,7 +339,9 @@ class Capas(private val ctx: Context) {
     }
 
     private fun leyenda(c: Canvas, mapa: Mapa, v: Vista, superficies: LongArray, sel: Boolean) {
-        val r = rectLeyenda(mapa, v, superficies)
+        val rm = rectLeyenda(mapa, v, superficies)
+        if (v.cerca) { val vis = v.visibleD(); if (rm.right < vis[0] || rm.left > vis[2] || rm.bottom < vis[1] || rm.top > vis[3]) return }
+        val r = v.local(rm)
         val l = mapa.leyenda
         val k = l.escala * 1.6f
         c.save(); c.concat(v.m)
@@ -316,6 +385,8 @@ class Capas(private val ctx: Context) {
         val p = v.aPantalla(r.x, r.y)
         val tam = r.tam * v.zoom
         if (tam < 5f * dens) return
+        // (Fuera de la pantalla, o tan de cerca que una letra no cabe en ella: no se dibuja)
+        if (tam > 6000f || p[0] < -tam * r.texto.length || p[0] > v.ancho + tam * r.texto.length || p[1] < -tam * 2 || p[1] > v.alto + tam * 2) { if (!sel) return }
         val tf = when (r.estilo) { "cursiva" -> Letras.serifCursiva; "grotesca" -> Letras.grotesca; "negrita" -> Letras.serifSemi; else -> Letras.serif }
         c.save()
         c.rotate(r.giro + v.giro, p[0], p[1])
@@ -337,13 +408,12 @@ class Capas(private val ctx: Context) {
     // ---------------------------------------------------------------- lugares
 
     private fun lugares(c: Canvas, mapa: Mapa, v: Vista, sel: Any?) {
-        val vis = v.visible()
         // Los pequeños se esconden de lejos (los grandes siempre se ven)
         val umbral = when { v.zoom > 0.8f -> 0; v.zoom > 0.35f -> 2; v.zoom > 0.15f -> 3; v.zoom > 0.07f -> 4; else -> 5 }
         val orden = mapa.lugares.filter { it.tamano > umbral || it === sel }.sortedBy { it.tamano }
         for (l in orden) {
-            if (l.x < vis.left - 50 || l.x > vis.right + 50 || l.y < vis.top - 50 || l.y > vis.bottom + 50) continue
             val p = v.aPantalla(l.x, l.y)
+            if (p[0] < -300 * dens || p[0] > v.ancho + 300 * dens || p[1] < -100 * dens || p[1] > v.alto + 100 * dens) continue
             val s = (5f + l.tamano * 0.9f) * dens * (0.75f + min(v.zoom, 2f) * 0.25f)
             simbolo(c, l.tipo, p[0], p[1], s)
             val tam = (if (l.tipo == "capital") 15f else if (l.tamano >= 5) 13.5f else 11.5f) * dens * (0.85f + min(v.zoom, 2f) * 0.15f)
@@ -422,14 +492,17 @@ class Capas(private val ctx: Context) {
 
     private fun cuadricula(c: Canvas, mapa: Mapa, v: Vista) {
         val km = casillaKm(mapa, v)
-        val px = (km / mapa.kmPorPx).toFloat()
-        val r = v.visible()
-        if (!mapa.infinito && !r.intersect(0f, 0f, mapa.ancho.toFloat(), mapa.alto.toFloat())) return
+        val px = km / mapa.kmPorPx
+        val r = v.visibleD()
+        if (!mapa.infinito) { r[0] = max(r[0], 0.0); r[1] = max(r[1], 0.0); r[2] = min(r[2], mapa.ancho.toDouble()); r[3] = min(r[3], mapa.alto.toDouble()); if (r[2] <= r[0] || r[3] <= r[1]) return }
         pLinea.color = if (android.graphics.Color.luminance(mapa.papel) < 0.4f && android.graphics.Color.alpha(mapa.papel) > 0) 0x44FFFFFF else 0x38000000; pLinea.strokeWidth = 1.2f * dens / v.zoom; pLinea.pathEffect = null
-        var x = floor(r.left / px) * px
-        while (x <= r.right) { c.drawLine(x, r.top, x, r.bottom, pLinea); x += px }
-        var y = floor(r.top / px) * px
-        while (y <= r.bottom) { c.drawLine(r.left, y, r.right, y, pLinea); y += px }
+        // (Las líneas se cuentan con números enteros: a un metro por casilla, en un mapa de miles de km, son millones)
+        var i = floor(r[0] / px).toLong(); val ni = ceil(r[2] / px).toLong()
+        if (ni - i > 2000) return
+        while (i <= ni) { val x = v.lx(i * px); c.drawLine(x, v.ly(r[1]), x, v.ly(r[3]), pLinea); i++ }
+        var j = floor(r[1] / px).toLong(); val nj = ceil(r[3] / px).toLong()
+        if (nj - j > 2000) return
+        while (j <= nj) { val y = v.ly(j * px); c.drawLine(v.lx(r[0]), y, v.lx(r[2]), y, pLinea); j++ }
     }
 
     private fun escala(c: Canvas, mapa: Mapa, v: Vista) {
@@ -481,9 +554,10 @@ class Capas(private val ctx: Context) {
             val p = v.aPantalla(if (t.lx.isNaN()) ce.x else t.lx, if (t.ly.isNaN()) ce.y else t.ly)
             if (abs(sx - p[0]) < 60 * dens && abs(sy - p[1]) < 14 * dens) return t
         }
-        for (s in mapa.sellos.reversed()) if (hypot(s.x - m[0], s.y - m[1]) < 32f * s.escala + tol / v.zoom * 0.5f) return s
+        for (s in mapa.sellos.reversed()) { val p = v.aPantalla(s.x, s.y); if (hypot(p[0] - sx, p[1] - sy) < 32f * s.escala * v.zoom + tol * 0.5f) return s }
         val tm = tol / v.zoom
-        for (l in mapa.rutas) for (i in 1 until l.n) if (distSeg(m[0], m[1], l.xs[i - 1], l.ys[i - 1], l.xs[i], l.ys[i]) < tm) return l
+        val md = v.aMapaD(sx, sy); val mlx = v.lx(md[0]); val mly = v.ly(md[1])
+        for (l in mapa.rutas) for (i in 1 until l.n) if (distSeg(mlx, mly, v.lx(l.xs[i - 1]), v.ly(l.ys[i - 1]), v.lx(l.xs[i]), v.ly(l.ys[i])) < tm) return l
         return null
     }
 
@@ -500,7 +574,7 @@ class Capas(private val ctx: Context) {
         fun distSeg(px: Float, py: Float, ax: Float, ay: Float, bx: Float, by: Float): Float {
             val dx = bx - ax; val dy = by - ay
             val l2 = dx * dx + dy * dy
-            val t = if (l2 < 1e-6f) 0f else (((px - ax) * dx + (py - ay) * dy) / l2).coerceIn(0f, 1f)
+            val t = if (l2 < 1e-30f) 0f else (((px - ax) * dx + (py - ay) * dy) / l2).coerceIn(0f, 1f)
             return hypot(px - (ax + t * dx), py - (ay + t * dy))
         }
 

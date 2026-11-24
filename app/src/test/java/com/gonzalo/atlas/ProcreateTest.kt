@@ -56,7 +56,7 @@ class ProcreateTest {
 
     @Test fun vinculosYCalcoSeGuardan() {
         val m = Mapa("m", "w", "Ciudad", 0, 0, Files.createTempDirectory("m").toFile())
-        m.lugares += Lugar("p", "Iglesia de San Olm", "templo", 10f, 20f, 3, "", "m_iglesia")
+        m.lugares += Lugar("p", "Iglesia de San Olm", "templo", 10.0, 20.0, 3, "", "m_iglesia")
         m.calco = Calco(true, 5f, 6f, 700f, 12f, 0.4f, true)
         m.guardaMeta()
         val m2 = Mapa.lee(m.dir!!)!!

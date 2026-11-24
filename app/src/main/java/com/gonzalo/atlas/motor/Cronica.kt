@@ -113,13 +113,24 @@ class Cronica(private val archivo: File) {
 object Medidas {
     fun km2(m: Mapa, pixeles: Long): Double = pixeles.toDouble() * m.kmPorPx * m.kmPorPx
 
+    private fun num(v: Double): String = if (v >= 10 || v == Math.rint(v)) String.format("%,d", Math.round(v)).replace(',', '.') else String.format("%.1f", v).replace('.', ',')
+
+    /** Una superficie en km² (o, si es pequeña, en m² o cm²). */
     fun formatoKm2(v: Double): String = when {
         v <= 0.0 -> "0 km²"
         v >= 1e6 -> String.format("%.2f millones de km²", v / 1e6).replace('.', ',')
-        else -> String.format("%,d km²", Math.round(v)).replace(',', '.')
+        v >= 1.0 -> String.format("%,d km²", Math.round(v)).replace(',', '.')
+        v >= 1e-6 -> num(v * 1e6) + " m²"
+        else -> num(v * 1e10) + " cm²"
     }
 
-    fun formatoKm(v: Double): String = if (v < 10) String.format("%.1f km", v).replace('.', ',') else String.format("%,d km", Math.round(v)).replace(',', '.')
+    /** Una distancia en km (o, si es corta, en metros o centímetros). */
+    fun formatoKm(v: Double): String = when {
+        v >= 10 -> String.format("%,d km", Math.round(v)).replace(',', '.')
+        v >= 1 || v <= 0.0 -> String.format("%.1f km", v).replace('.', ',')
+        v >= 0.001 -> num(v * 1000) + " m"
+        else -> num(v * 100000) + " cm"
+    }
 
     /** El paso «bonito» (1, 2, 5 × 10ⁿ) más cercano a [v]. */
     fun bonito(v: Double): Double {

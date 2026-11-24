@@ -151,8 +151,8 @@ fun verEnMapa(e: EstadoApp, enlace: String) {
     // Se apunta dónde mirar: la mesa lo usa al abrirse (o ya, si está abierta)
     val punto = when (p[1]) {
         "t" -> { val id = p[2].toIntOrNull() ?: return; ed.territorio = id; ed.herramienta = Herramienta.ELEGIR; ed.seleccion = ed.mapa.territorio(id)
-            ed.centros.firstOrNull { it.id == id }?.let { floatArrayOf(it.x, it.y) } }
-        "p" -> ed.mapa.lugares.firstOrNull { it.id == p[2] }?.let { l -> ed.herramienta = Herramienta.ELEGIR; ed.seleccion = l; floatArrayOf(l.x, l.y) }
+            ed.centros.firstOrNull { it.id == id }?.let { doubleArrayOf(it.x.toDouble(), it.y.toDouble()) } }
+        "p" -> ed.mapa.lugares.firstOrNull { it.id == p[2] }?.let { l -> ed.herramienta = Herramienta.ELEGIR; ed.seleccion = l; doubleArrayOf(l.x, l.y) }
         else -> null
     } ?: return
     ed.mapa.vista[0] = punto[0]; ed.mapa.vista[1] = punto[1]

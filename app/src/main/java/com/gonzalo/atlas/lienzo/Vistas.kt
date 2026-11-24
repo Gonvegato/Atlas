@@ -149,11 +149,14 @@ object Papel {
         return Paint().apply { shader = if (m.granoPapel) BitmapShader(g, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT) else null }
     }
 
-    /** El papel en la zona [r] del lienzo. */
-    fun pinta(c: Canvas, m: Mapa, r: RectF) {
-        if (Color.alpha(m.papel) == 0) { cuadros(c, r); return }
+    /**
+     * El papel en la zona [r] del lienzo. [zoom]: el acercamiento con que se ve; de cerca el grano del papel se va
+     * apagando (ampliado serían manchas) y de muy cerca ([cerca]) queda el color liso.
+     */
+    fun pinta(c: Canvas, m: Mapa, r: RectF, zoom: Float = 1f, cerca: Boolean = false) {
+        if (Color.alpha(m.papel) == 0) { if (cerca) c.drawRect(r, Paint().apply { color = 0xFFFFFFFF.toInt() }) else cuadros(c, r); return }
         c.drawRect(r, Paint().apply { color = m.papel })
-        if (m.granoPapel) c.drawRect(r, pintura(m))
+        if (m.granoPapel && zoom < 16f) c.drawRect(r, pintura(m).apply { if (zoom > 4f) alpha = (255 * (16f - zoom) / 12f).toInt() })
     }
 
     /** Fondo transparente: cuadros grises (como en los programas de dibujo). */
