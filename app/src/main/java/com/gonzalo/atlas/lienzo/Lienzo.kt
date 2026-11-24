@@ -124,7 +124,23 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     fun capa(id: String) = capas.firstOrNull { it.info.id == id }
     fun capaActiva(): CapaPx? = capa(activa) ?: capas.lastOrNull()
 
-    private fun sincronizaInfo() { mapa.capas.clear(); mapa.capas.addAll(capas.map { it.info }) }
+    private fun sincronizaInfo() { mapa.capas.clear(); mapa.capas.addAll(capas.map { it.info }); aplicaGrupos() }
+
+    /** Pone en cada capa si su grupo se ve (y quita los grupos que se han quedado sin capas). */
+    fun aplicaGrupos() {
+        val usados = capas.map { it.info.grupo }.toSet()
+        mapa.grupos.removeAll { it.id !in usados }
+        // (Un grupo que llega sin su ficha, al unir mapas: se le hace una)
+        for (g in usados) if (g.isNotEmpty() && mapa.grupos.none { it.id == g }) mapa.grupos += com.gonzalo.atlas.motor.GrupoCapas(g, "Grupo")
+        val vis = mapa.grupos.associate { it.id to it.visible }
+        for (c in capas) c.info.grupoVisible = c.info.grupo.isEmpty() || (vis[c.info.grupo] ?: true)
+    }
+
+    /** La máscara de la capa [i] de [l] (la capa de justo encima, si es máscara y está encendida), o null. */
+    fun mascaraDe(l: List<CapaPx>, i: Int): CapaPx? = l.getOrNull(i + 1)?.takeIf { it.info.mascara && it.info.visible }
+
+    /** La capa dueña de la máscara [m] (la de justo debajo), o null si [m] no es una máscara. */
+    fun duenaDe(m: CapaPx): CapaPx? { if (!m.info.mascara) return null; val i = capas.indexOf(m); return if (i > 0) capas[i - 1] else null }
 
     // ---------------------------------------------------------------- cargar y guardar
 
@@ -132,6 +148,7 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     fun carga(enSegundoPlano: Boolean = false) {
         capas.clear()
         for (ci in mapa.capas) capas += CapaPx(ci)
+        aplicaGrupos()
         if (capas.isEmpty()) { capas += CapaPx(CapaInfo("c" + System.currentTimeMillis().toString(36), "Dibujo")); sincronizaInfo() }
         activa = capas.lastOrNull { !it.info.referencia }?.info?.id ?: capas.last().info.id
         if (enSegundoPlano) enHilo { leeTeselas(); avisaTodo() } else leeTeselas()
@@ -494,14 +511,14 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     fun copiaSeleccion(c: CapaPx, cortar: Boolean, alAcabar: (String) -> Unit = {}) {
         val sel = seleccion?.takeIf { !it.vacia } ?: return
         cambiaCapas(if (cortar) "Cortar a una capa" else "Copiar a una capa") {
-            val n = CapaPx(CapaInfo("c" + java.lang.Long.toString(System.nanoTime(), 36), if (cortar) "Recorte" else "Copia"))
+            val n = CapaPx(CapaInfo("c" + java.lang.Long.toString(System.nanoTime(), 36), if (cortar) "Recorte" else "Copia", grupo = c.info.grupo))
             for (k in teselasEnSeleccion(c, sel)) {
                 val b = c.teselas[k] ?: continue
                 val d = conForma(b, k, sel, true)
                 if (!estaVacia(d)) n.teselas[k] = d
                 if (cortar) { val f = conForma(b, k, sel, false); if (estaVacia(f)) c.teselas.remove(k) else c.teselas[k] = f; c.fondo.remove(k); c.fondoSucias += k }
             }
-            capas.add(capas.indexOf(c) + 1, n); activa = n.info.id
+            capas.add(Grupos.trasUnidad(capas, c), n); activa = n.info.id
             alAcabar(n.info.id)
         }
     }
@@ -612,16 +629,17 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     }
 
     /** Dibuja las capas visibles de la zona [r] (píxeles del lienzo) en [c] (ya colocado en coordenadas del lienzo). */
-    fun componeZona(c: Canvas, r: Rect, incluir: (CapaPx) -> Boolean = { it.info.visible }) {
+    fun componeZona(c: Canvas, r: Rect, incluir: (CapaPx) -> Boolean = { it.info.seVe }) {
         val x0 = Math.floorDiv(r.left, L); val y0 = Math.floorDiv(r.top, L); val x1 = Math.floorDiv(r.right - 1, L); val y1 = Math.floorDiv(r.bottom - 1, L)
         val pCapa = Paint(Paint.FILTER_BITMAP_FLAG) // una por llamada: la usan varios hilos a la vez
         val pDentro = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
         val pNada = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR) }
+        val pFuera = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
         val l = capas.toList()
         for ((i, capa) in l.withIndex()) {
-            if (!incluir(capa)) continue
+            if (capa.info.mascara || !incluir(capa)) continue
             val base = baseDe(l, i)
-            if (base != null && !base.info.visible) continue
+            if (base != null && !base.info.seVe) continue
             pCapa.alpha = (capa.info.opacidad * 255).toInt()
             pCapa.blendMode = fusion(capa.info.fusion)
             val g = c.saveLayer(r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), pCapa)
@@ -631,12 +649,14 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
                 // Máscara de recorte: solo donde la capa de debajo tiene algo
                 if (base != null) { val m = base.teselas[clave(tx, ty)]; if (m != null) c.drawBitmap(m, tx * L.toFloat(), ty * L.toFloat(), pDentro) else c.drawRect(tx * L.toFloat(), ty * L.toFloat(), (tx + 1) * L.toFloat(), (ty + 1) * L.toFloat(), pNada) }
             }
+            // Su máscara: lo pintado en ella esconde la capa
+            mascaraDe(l, i)?.let { m -> for (ty in y0..y1) for (tx in x0..x1) m.teselas[clave(tx, ty)]?.let { c.drawBitmap(it, tx * L.toFloat(), ty * L.toFloat(), pFuera) } }
             c.restoreToCount(g)
         }
     }
 
     /** Lo que se usa como barrera para marcar territorios y seleccionar zonas: las capas de referencia que tengan dibujo (o, si no hay, todo lo visible). */
-    private fun barreras(): List<CapaPx> = capas.filter { it.info.referencia && it.info.visible && (it.teselas.isNotEmpty() || it.fondo.isNotEmpty()) }.ifEmpty { capas.filter { it.info.visible } }
+    private fun barreras(): List<CapaPx> = capas.filter { it.info.referencia && it.info.seVe && (it.teselas.isNotEmpty() || it.fondo.isNotEmpty()) }.ifEmpty { capas.filter { it.info.seVe } }
 
     /** Alfa de las barreras en (x, y), con caché por tesela. */
     private class Lector(val capas: List<CapaPx>) {
@@ -727,8 +747,8 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
      * dibujado y la capa en la que se pinta; si no hay capas de referencia con dibujo, todas las visibles.
      */
     private fun capasDelBote(activa: CapaPx): List<CapaPx> {
-        val ref = capas.filter { it.info.referencia && it.info.visible && tieneAlgo(it) }
-        return if (ref.isEmpty()) capas.filter { it.info.visible || it === activa } else capas.filter { it in ref || it === activa }
+        val ref = capas.filter { it.info.referencia && it.info.seVe && tieneAlgo(it) }
+        return if (ref.isEmpty()) capas.filter { it.info.seVe || it === activa } else capas.filter { it in ref || it === activa }
     }
 
     /**
@@ -1000,7 +1020,7 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     fun recorta(r: Rect, capa: CapaPx? = null): Bitmap {
         val b = Bitmap.createBitmap(max(1, r.width()), max(1, r.height()), Bitmap.Config.ARGB_8888)
         val c = Canvas(b); c.translate(-r.left.toFloat(), -r.top.toFloat())
-        componeZona(c, r) { if (capa != null) it === capa else it.info.visible }
+        componeZona(c, r) { if (capa != null) it === capa else it.info.seVe }
         return b
     }
 
@@ -1013,7 +1033,7 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         var x0 = Double.MAX_VALUE; var y0 = Double.MAX_VALUE; var x1 = -Double.MAX_VALUE; var y1 = -Double.MAX_VALUE
         contenido()?.let { r -> x0 = r.left.toDouble(); y0 = r.top.toDouble(); x1 = r.right.toDouble(); y1 = r.bottom.toDouble() }
         // (Lo dibujado muy de cerca no deja píxeles a tamaño real: se cuenta por sus trazos)
-        for (c in capas) if (c.info.visible) for (t in c.trazosVivos()) {
+        for (c in capas) if (c.info.seVe) for (t in c.trazosVivos()) {
             val d = t.datos.cajaD; if (t.datos.modo == TrazoDatos.BORRAR || d[2] < d[0] || d[3] < d[1]) continue
             x0 = min(x0, d[0]); y0 = min(y0, d[1]); x1 = max(x1, d[2]); y1 = max(y1, d[3])
         }
@@ -1030,15 +1050,17 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         fun tesela(c: CapaPx, tx: Int, ty: Int): Bitmap? { val kb = clave(Math.floorDiv(tx, s), Math.floorDiv(ty, s)); return if (c.teselas.containsKey(kb) || c.fondo.containsKey(kb)) nitidez.construye(c, e, tx, ty) else null }
         val lista = capas.toList()
         val pDentro = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }; val pNada = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR) }
+        val pFueraN = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
         for ((i, c) in lista.withIndex()) {
-            if (!c.info.visible) continue
-            val base = baseDe(lista, i); if (base != null && !base.info.visible) continue
+            if (!c.info.seVe) continue
+            val base = baseDe(lista, i); if (base != null && !base.info.seVe) continue
             val g = cv.saveLayer(null, Paint().apply { alpha = (c.info.opacidad * 255).toInt(); blendMode = fusion(c.info.fusion) })
             for (ty in ty0..ty1) for (tx in tx0..tx1) {
                 val x = (tx.toLong() * L - px0).toFloat(); val y = (ty.toLong() * L - py0).toFloat()
                 tesela(c, tx, ty)?.let { cv.drawBitmap(it, x, y, null) }
                 // Máscara de recorte: solo donde la capa de debajo tiene algo
                 if (base != null) { val m = tesela(base, tx, ty); if (m != null) cv.drawBitmap(m, x, y, pDentro) else cv.drawRect(x, y, x + L, y + L, pNada) }
+                mascaraDe(lista, i)?.let { m -> tesela(m, tx, ty)?.let { cv.drawBitmap(it, x, y, pFueraN) } }
             }
             cv.restoreToCount(g)
         }
@@ -1052,12 +1074,12 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     }
 
     /** Si hay trazos guardados como datos en alguna capa visible (lo dibujado se puede rehacer más grande y nítido). */
-    fun tieneTrazos() = capas.any { it.info.visible && it.fondo.isNotEmpty() && it.trazos.isNotEmpty() }
+    fun tieneTrazos() = capas.any { it.info.seVe && it.fondo.isNotEmpty() && it.trazos.isNotEmpty() }
 
     /** Los límites de lo que hay dibujado (en las capas visibles). */
     fun contenido(): Rect? {
         var r: Rect? = null
-        for (c in capas) if (c.info.visible) for ((k, b) in c.teselas) {
+        for (c in capas) if (c.info.seVe) for ((k, b) in c.teselas) {
             val px = pixeles(b)
             var x0 = L; var y0 = L; var x1 = -1; var y1 = -1
             for (i in px.indices) if ((px[i] ushr 24) > 8) { val x = i % L; val y = i / L; if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y }

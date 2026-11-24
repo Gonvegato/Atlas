@@ -136,7 +136,18 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
                 .shadow(16.dp, RoundedCornerShape(14.dp)).clip(RoundedCornerShape(14.dp)).background(O.PAPEL)) {
                 Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(titulos[p] ?: p, Modifier.weight(1f), style = O.titular(20.sp))
-                    if (p == "capas") BotonO("+ Capa nueva", lleno = true) { nuevaCapa(ed) }
+                    if (p == "capas") {
+                        BotonO("+ Grupo") {
+                            val c = ed.lienzo.capa(ed.lienzo.activa)?.let { if (it.info.mascara) ed.lienzo.duenaDe(it) else it }
+                            if (c == null) ed.avisa("Elige antes una capa") else ed.lienzo.cambiaCapas("Agrupar") {
+                                if (c.info.grupo.isNotEmpty()) com.gonzalo.atlas.lienzo.Grupos.desagrupa(ed.lienzo, c)
+                                val gr = com.gonzalo.atlas.lienzo.Grupos.agrupa(ed.lienzo, c, null)
+                                ed.avisa("Grupo nuevo, «${gr.nombre}», con «${c.info.nombre}». Mete más capas desde sus opciones («⋯» → Grupo).")
+                            }
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        BotonO("+ Capa nueva", lleno = true) { nuevaCapa(ed) }
+                    }
                     Text("✕", Modifier.pulsableO { panel = null; if (p == "sel") ed.seleccion = null }.padding(8.dp), style = O.texto(16.sp, O.GRIS))
                 }
                 Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 14.dp, end = 14.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -177,8 +188,11 @@ private fun nuevaCapa(ed: Editor) {
     val lz = ed.lienzo
     lz.cambiaCapas("Nueva capa") {
         // (Un nombre que no esté ya: «Capa 3», «Capa 4»…)
-        var n = lz.capas.size + 1; while (lz.capas.any { it.info.nombre == "Capa $n" }) n++
-        val c = CapaPx(CapaInfo("c" + System.nanoTime().toString(36), "Capa $n")); val i = lz.capas.indexOfFirst { it.info.id == lz.activa }; lz.capas.add(if (i < 0) lz.capas.size else i + 1, c); lz.activa = c.info.id
+        var n = lz.capas.count { !it.info.mascara } + 1; while (lz.capas.any { it.info.nombre == "Capa $n" }) n++
+        // Encima de la elegida (y de su máscara), en su mismo grupo
+        val activa = lz.capa(lz.activa)
+        val c = CapaPx(CapaInfo("c" + System.nanoTime().toString(36), "Capa $n", grupo = activa?.info?.grupo.orEmpty()))
+        lz.capas.add(com.gonzalo.atlas.lienzo.Grupos.trasUnidad(lz.capas, activa), c); lz.activa = c.info.id
         ed.avisa("Capa nueva: «Capa $n». Es la elegida: lo que pintes va en ella.")
     }
     ed.capaActiva = ""
@@ -186,11 +200,11 @@ private fun nuevaCapa(ed: Editor) {
 
 private fun borraCapa(ed: Editor, c: CapaPx) {
     val lz = ed.lienzo
-    if (lz.capas.size <= 1) { ed.avisa("Es la única capa: no se puede borrar (puedes vaciarla)"); return }
+    if (lz.capas.count { !it.info.mascara } <= 1) { ed.avisa("Es la única capa: no se puede borrar (puedes vaciarla)"); return }
     lz.cambiaCapas("Borrar capa") {
         val i = lz.capas.indexOf(c); if (i < 0) return@cambiaCapas
-        lz.capas.remove(c)
-        if (lz.activa == c.info.id || lz.capa(lz.activa) == null) lz.activa = lz.capas[(i - 1).coerceIn(0, lz.capas.size - 1)].info.id
+        lz.capas.removeAll(com.gonzalo.atlas.lienzo.Grupos.unidad(lz.capas, c))
+        if (lz.capa(lz.activa) == null) lz.activa = (lz.capas.take(i).lastOrNull { !it.info.mascara } ?: lz.capas.first { !it.info.mascara }).info.id
         ed.avisa("Capa «${c.info.nombre}» borrada. Deshacer la recupera.")
     }
     ed.capaActiva = ""
@@ -517,27 +531,76 @@ private fun PanelCapas(e: EstadoApp, ed: Editor, mesa: Mesa) {
         val vis = mesa.vista.visible()
         lz.enHilo { lz.importaImagen(b, "Imagen", vis.left + vis.width() * 0.1f, vis.top + vis.height() * 0.1f, vis.width() * 0.8f) }
     }
-    Text("${lz.capas.size} ${if (lz.capas.size == 1) "capa" else "capas"}. La de arriba tapa a las de abajo. Toca una para pintar en ella; «⋯» abre sus opciones y la papelera la borra.", style = O.texto(12.sp, O.GRIS))
-    for (c in lz.capas.reversed()) {
-        val activa = c.info.id == lz.activa
+    val lista = lz.capas.toList()
+    val normales = lista.count { !it.info.mascara }
+    Text("$normales ${if (normales == 1) "capa" else "capas"}. La de arriba tapa a las de abajo. Toca una para pintar en ella; «⋯» abre sus opciones y la papelera la borra. Un grupo se ve, se esconde y se ordena entero.", style = O.texto(12.sp, O.GRIS))
+    var abiertoGrupo by remember { mutableStateOf<String?>(null) }
+    var grupoPintado = ""
+    for (c in lista.reversed()) {
+        if (c.info.mascara) continue
+        val g = c.info.grupo
+        val grupo = ed.mapa.grupos.firstOrNull { it.id == g }
+        // La cabecera de su grupo (una vez, encima de sus capas)
+        if (g.isNotEmpty() && g != grupoPintado && grupo != null) {
+            grupoPintado = g
+            val cuantas = lista.count { it.info.grupo == g && !it.info.mascara }
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(O.CRUDO)) {
+                Row(Modifier.fillMaxWidth().pulsableO { abiertoGrupo = if (abiertoGrupo == g) null else g }.padding(horizontal = 8.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (grupo.plegado) "▸" else "▾", Modifier.pulsableO { lz.cambiaCapas(if (grupo.plegado) "Desplegar grupo" else "Plegar grupo") { grupo.plegado = !grupo.plegado } }.padding(horizontal = 8.dp, vertical = 4.dp), style = O.titular(16.sp, O.GRIS))
+                    Text("▭", Modifier.padding(end = 8.dp), style = O.titular(16.sp, O.TINTA))
+                    Text(grupo.nombre, Modifier.weight(1f), style = O.titular(15.sp, O.TINTA), maxLines = 1)
+                    Text("$cuantas ${if (cuantas == 1) "capa" else "capas"}", Modifier.padding(horizontal = 8.dp), style = O.texto(11.sp, O.GRIS))
+                    Box(Modifier.size(24.dp).clip(RoundedCornerShape(5.dp)).border(2.dp, O.TINTA, RoundedCornerShape(5.dp)).background(if (grupo.visible) O.TINTA else Color.Transparent)
+                        .pulsableO { lz.cambiaCapas(if (grupo.visible) "Esconder grupo" else "Ver grupo") { grupo.visible = !grupo.visible } }, contentAlignment = Alignment.Center) {
+                        if (grupo.visible) Text("✓", style = O.texto(13.sp, O.PAPEL))
+                    }
+                }
+                if (abiertoGrupo == g) Column(Modifier.fillMaxWidth().background(O.PAPEL.copy(alpha = 0.5f)).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    var nombre by remember(g) { mutableStateOf(grupo.nombre) }
+                    CampoO(nombre, { nombre = it; grupo.nombre = it; ed.mapa.avisaVector(); ed.cambios++ }, Modifier.fillMaxWidth())
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        BotonO("Subir el grupo") { lz.cambiaCapas("Ordenar") { com.gonzalo.atlas.lienzo.Grupos.mueveGrupo(lz, g, true) } }
+                        BotonO("Bajar el grupo") { lz.cambiaCapas("Ordenar") { com.gonzalo.atlas.lienzo.Grupos.mueveGrupo(lz, g, false) } }
+                        BotonO("Deshacer el grupo") { abiertoGrupo = null; lz.cambiaCapas("Deshacer grupo") { com.gonzalo.atlas.lienzo.Grupos.deshazGrupo(lz, g) } }
+                        BotonO("Borrar el grupo y sus capas", color = O.ROJO) {
+                            abiertoGrupo = null
+                            lz.cambiaCapas("Borrar grupo") { if (!com.gonzalo.atlas.lienzo.Grupos.borraGrupo(lz, g)) ed.avisa("Son todas las capas: no se puede borrar el grupo (puedes deshacerlo)") else ed.avisa("Grupo «${grupo.nombre}» borrado. Deshacer lo recupera.") }
+                        }
+                    }
+                }
+            }
+        }
+        if (grupo?.plegado == true) continue
+        val mascara = com.gonzalo.atlas.lienzo.Grupos.mascara(lz, c)
+        val enMascara = mascara != null && mascara.info.id == lz.activa
+        val activa = c.info.id == lz.activa || enMascara
         val mini by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, c.teselas.size, lz.version / 4) {
             value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { com.gonzalo.atlas.lienzo.Ajustes.vistaCapa(c, 96)?.first }.getOrNull() }
         }
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (activa) O.ACENTO else O.CRUDO)) {
-            Row(Modifier.fillMaxWidth().pulsableO { if (activa) abierta = if (abierta == c.info.id) null else c.info.id else { ed.ponCapa(c.info.id); abierta = null } }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(width = 64.dp, height = 46.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF8E8E93)), contentAlignment = Alignment.Center) {
+        val miniM by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, mascara?.teselas?.size, lz.version / 4, mascara?.info?.id) {
+            value = mascara?.let { m -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { com.gonzalo.atlas.lienzo.Ajustes.vistaCapa(m, 96)?.first }.getOrNull() } }
+        }
+        Column(Modifier.fillMaxWidth().padding(start = if (g.isNotEmpty()) 18.dp else 0.dp).clip(RoundedCornerShape(10.dp)).background(if (activa) O.ACENTO else O.CRUDO)) {
+            Row(Modifier.fillMaxWidth().pulsableO { if (c.info.id == lz.activa) abierta = if (abierta == c.info.id) null else c.info.id else { ed.ponCapa(c.info.id); abierta = null } }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(width = 64.dp, height = 46.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF8E8E93)).border(if (activa && !enMascara) 2.dp else 0.dp, O.TINTA, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
                     androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) { val l = 8.dp.toPx(); var y = 0f; var f = 0; while (y < size.height) { var x = if (f % 2 == 0) 0f else l; while (x < size.width) { drawRect(Color(0xFFB0B0B5), androidx.compose.ui.geometry.Offset(x, y), androidx.compose.ui.geometry.Size(l, l)); x += 2 * l }; y += l; f++ } }
                     mini?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize()) }
                 }
+                // La máscara: blanca donde deja ver, con lo pintado (lo que esconde) encima. Tocarla la elige para pintar en ella.
+                if (mascara != null) Box(Modifier.padding(start = 6.dp).size(width = 46.dp, height = 46.dp).clip(RoundedCornerShape(6.dp)).background(Color.White)
+                    .border(if (enMascara) 2.dp else 0.dp, O.TINTA, RoundedCornerShape(6.dp)).pulsableO { ed.ponCapa(mascara.info.id); abierta = null }) {
+                    miniM?.let { Image(it.asImageBitmap(), "La máscara de «${c.info.nombre}»", Modifier.fillMaxSize(), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.Black)) }
+                    if (!mascara.info.visible) Text("✕", Modifier.align(Alignment.Center), style = O.titular(16.sp, O.ROJO))
+                }
                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                     Text(c.info.nombre, style = O.texto(15.sp, O.TINTA), maxLines = 1)
-                    val extra = listOfNotNull("↳ Recortada a la de abajo".takeIf { c.info.recorte }, "Referencia".takeIf { c.info.referencia }, "Transparencia bloqueada".takeIf { c.info.bloqueoAlfa })
+                    val extra = listOfNotNull("Pintando la máscara".takeIf { enMascara }, "↳ Recortada a la de abajo".takeIf { c.info.recorte }, "Referencia".takeIf { c.info.referencia }, "Transparencia bloqueada".takeIf { c.info.bloqueoAlfa })
                     if (extra.isNotEmpty()) Text(extra.joinToString(" · "), style = O.texto(11.sp, if (activa) O.TINTA else O.GRIS))
                 }
                 Text(letraFusion(c.info.fusion), Modifier.padding(horizontal = 6.dp), style = O.titular(14.sp))
                 // Las opciones de la capa y borrarla, a la vista (sin tener que saber que se abren tocándola otra vez)
                 Text("⋯", Modifier.pulsableO { ed.ponCapa(c.info.id); abierta = if (abierta == c.info.id) null else c.info.id }.padding(horizontal = 8.dp, vertical = 4.dp), style = O.titular(20.sp, O.TINTA))
-                if (lz.capas.size > 1) androidx.compose.material3.Icon(Icons.Outlined.Delete, "Borrar la capa", Modifier.padding(end = 8.dp).size(22.dp).pulsableO { borraCapa(ed, c) }, tint = if (activa) O.TINTA else O.GRIS)
+                if (normales > 1) androidx.compose.material3.Icon(Icons.Outlined.Delete, "Borrar la capa", Modifier.padding(end = 8.dp).size(22.dp).pulsableO { borraCapa(ed, c) }, tint = if (activa) O.TINTA else O.GRIS)
                 Box(Modifier.size(24.dp).clip(RoundedCornerShape(5.dp)).border(2.dp, O.TINTA, RoundedCornerShape(5.dp)).background(if (c.info.visible) O.TINTA else Color.Transparent)
                     .pulsableO { lz.cambiaCapas("Ver capa") { c.info.visible = !c.info.visible } }, contentAlignment = Alignment.Center) {
                     if (c.info.visible) Text("✓", style = O.texto(13.sp, if (activa) O.ACENTO else O.PAPEL))
@@ -550,17 +613,40 @@ private fun PanelCapas(e: EstadoApp, ed: Editor, mesa: Mesa) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     for ((k, n) in Lienzo.FUSIONES) FichaO(n, c.info.fusion == k) { lz.cambiaCapas("Fusión") { c.info.fusion = k } }
                 }
+                // Su máscara
+                Text("MÁSCARA", style = O.texto(11.sp, O.GRIS))
+                if (mascara == null) {
+                    BotonO("Añadir una máscara") { lz.cambiaCapas("Añadir máscara") { com.gonzalo.atlas.lienzo.Grupos.nuevaMascara(lz, c) }; ed.capaActiva = ""; ed.avisa("Máscara nueva, elegida: lo que pintes en ella esconde la capa, y borrar vuelve a enseñarla.") }
+                } else {
+                    InterruptorO("Máscara encendida", mascara.info.visible) { v -> lz.cambiaCapas(if (v) "Encender máscara" else "Apagar máscara") { mascara.info.visible = v } }
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (enMascara) BotonO("Pintar la capa") { ed.ponCapa(c.info.id) } else BotonO("Pintar la máscara", lleno = true) { ed.ponCapa(mascara.info.id) }
+                        BotonO("Invertir la máscara") { lz.cambiaCapas("Invertir máscara") { com.gonzalo.atlas.lienzo.Grupos.invierteMascara(lz, c) } }
+                        BotonO("Aplicarla y quitarla") { lz.cambiaCapas("Aplicar máscara") { com.gonzalo.atlas.lienzo.Grupos.aplicaMascara(lz, c) }; ed.capaActiva = ""; ed.avisa("Máscara aplicada: lo que escondía se ha borrado de la capa (deshacer lo recupera).") }
+                        BotonO("Quitarla", color = O.ROJO) { lz.cambiaCapas("Quitar máscara") { com.gonzalo.atlas.lienzo.Grupos.quitaMascara(lz, c) }; ed.capaActiva = "" }
+                    }
+                    Text("En la máscara, pintar esconde la capa y borrar la vuelve a enseñar. No se pierde nada de la capa hasta que la aplicas.", style = O.texto(11.sp, O.GRIS))
+                }
+                // Su grupo
+                Text("GRUPO", style = O.texto(11.sp, O.GRIS))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (g.isNotEmpty()) BotonO("Sacarla del grupo") { lz.cambiaCapas("Sacar del grupo") { com.gonzalo.atlas.lienzo.Grupos.desagrupa(lz, c) } }
+                    else {
+                        BotonO("Meterla en un grupo nuevo") { lz.cambiaCapas("Agrupar") { val gr = com.gonzalo.atlas.lienzo.Grupos.agrupa(lz, c, null); ed.avisa("Grupo nuevo: «${gr.nombre}». Toca su cabecera para cambiarle el nombre.") } }
+                        for (otro in ed.mapa.grupos) BotonO("A «${otro.nombre}»") { lz.cambiaCapas("Agrupar") { com.gonzalo.atlas.lienzo.Grupos.agrupa(lz, c, otro) } }
+                    }
+                }
                 InterruptorO("Máscara de recorte (solo se ve sobre lo pintado en la capa de abajo)", c.info.recorte) { v -> lz.cambiaCapas("Máscara de recorte") { c.info.recorte = v } }
                 InterruptorO("Bloquear transparencia (pintar solo sobre lo ya pintado)", c.info.bloqueoAlfa) { v -> lz.cambiaCapas("Bloquear") { c.info.bloqueoAlfa = v } }
                 InterruptorO("Referencia (para rellenar y marcar territorios)", c.info.referencia) { v -> lz.cambiaCapas("Referencia") { c.info.referencia = v } }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    BotonO("Subir") { lz.cambiaCapas("Ordenar") { val i = lz.capas.indexOf(c); if (i < lz.capas.size - 1) { lz.capas.removeAt(i); lz.capas.add(i + 1, c) } } }
-                    BotonO("Bajar") { lz.cambiaCapas("Ordenar") { val i = lz.capas.indexOf(c); if (i > 0) { lz.capas.removeAt(i); lz.capas.add(i - 1, c) } } }
-                    BotonO("Duplicar") { lz.cambiaCapas("Duplicar") { val n = CapaPx(CapaInfo.de(c.info.json().put("id", "c" + System.nanoTime().toString(36)).put("n", c.info.nombre + " (copia)"))); n.teselas.putAll(c.teselas); n.trazos = c.trazos; n.fondo.putAll(c.fondo); n.seq = c.seq; n.trazosSucios = true; lz.capas.add(lz.capas.indexOf(c) + 1, n) } }
+                    BotonO("Subir") { lz.cambiaCapas("Ordenar") { if (!com.gonzalo.atlas.lienzo.Grupos.mueve(lz, c, true) && g.isNotEmpty()) ed.avisa("Es la de arriba de su grupo: para sacarla, «Sacarla del grupo»") } }
+                    BotonO("Bajar") { lz.cambiaCapas("Ordenar") { if (!com.gonzalo.atlas.lienzo.Grupos.mueve(lz, c, false) && g.isNotEmpty()) ed.avisa("Es la de abajo de su grupo: para sacarla, «Sacarla del grupo»") } }
+                    BotonO("Duplicar") { lz.cambiaCapas("Duplicar") { duplicaCapa(lz, c) } }
                     BotonO("Combinar abajo") { combinaAbajo(lz, c) }
                     BotonO("Rellenar capa") { lz.cambiaCapas("Rellenar capa") { c.soloPixeles(); rellenaCapa(lz, c, ed.color) } }
                     BotonO("Vaciar") { lz.cambiaCapas("Vaciar capa") { c.soloPixeles(); c.teselas.clear() } }
-                    if (lz.capas.size > 1) BotonO("Borrar", color = O.ROJO) { borraCapa(ed, c) }
+                    if (normales > 1) BotonO("Borrar", color = O.ROJO) { borraCapa(ed, c) }
                 }
             }
         }
@@ -675,7 +761,9 @@ private fun PanelMundo(ed: Editor, abre: (String) -> Unit) {
 private fun combinaAbajo(lz: Lienzo, c: CapaPx) {
     lz.cambiaCapas("Combinar") {
         val i = lz.capas.indexOf(c); if (i <= 0) return@cambiaCapas
-        val abajo = lz.capas[i - 1]
+        val abajo = lz.capas.take(i).lastOrNull { !it.info.mascara } ?: return@cambiaCapas
+        // (Las máscaras de las dos se aplican antes de juntarlas)
+        com.gonzalo.atlas.lienzo.Grupos.hornea(lz, c); com.gonzalo.atlas.lienzo.Grupos.hornea(lz, abajo)
         c.soloPixeles(); abajo.soloPixeles()
         val claves = (c.teselas.keys + abajo.teselas.keys).toSet()
         val nuevo = HashMap<Long, android.graphics.Bitmap>()
@@ -997,4 +1085,16 @@ private fun PanelSecciones(ed: Editor, mesa: Mesa) {
             }
         }
     }
+}
+
+/** Una copia de la capa (con su máscara, si tiene) justo encima, en su mismo grupo. */
+private fun duplicaCapa(lz: Lienzo, c: CapaPx) {
+    fun copia(x: CapaPx, nombre: String): CapaPx {
+        val n = CapaPx(CapaInfo.de(x.info.json().put("id", "c" + System.nanoTime().toString(36)).put("n", nombre)))
+        n.teselas.putAll(x.teselas); n.trazos = x.trazos; n.fondo.putAll(x.fondo); n.seq = x.seq; n.trazosSucios = true
+        return n
+    }
+    val u = com.gonzalo.atlas.lienzo.Grupos.unidad(lz.capas, c)
+    val nuevas = u.mapIndexed { k, x -> copia(x, if (k == 0) c.info.nombre + " (copia)" else x.info.nombre) }
+    lz.capas.addAll(com.gonzalo.atlas.lienzo.Grupos.trasUnidad(lz.capas, c), nuevas)
 }

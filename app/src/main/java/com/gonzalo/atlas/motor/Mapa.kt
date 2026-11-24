@@ -46,9 +46,28 @@ class CapaInfo(
     var referencia: Boolean = false,
     /** Máscara de recorte: solo se ve donde la capa de debajo tiene algo pintado. */
     var recorte: Boolean = false,
+    /** El grupo en el que está ([GrupoCapas.id]; "" = suelta). Las capas de un grupo van seguidas. */
+    var grupo: String = "",
+    /**
+     * Es la máscara de la capa de justo debajo: no se ve ella, sino que lo que tiene pintado esconde esa capa (pintar esconde,
+     * borrar vuelve a enseñar; no se pierde nada de la capa). Con [visible] en falso, la máscara está apagada.
+     */
+    var mascara: Boolean = false,
 ) {
+    /** Si su grupo se ve (lo pone el lienzo; no se guarda). */
+    @Volatile @Transient var grupoVisible: Boolean = true
+    /** Si se ve de verdad: ella y su grupo. */
+    val seVe: Boolean get() = visible && grupoVisible && !mascara
+
     fun json() = JSONObject().put("id", id).put("n", nombre).put("v", visible).put("o", opacidad.toDouble()).put("f", fusion).put("a", bloqueoAlfa).put("r", referencia).put("k", recorte)
-    companion object { fun de(o: JSONObject) = CapaInfo(o.optString("id"), o.optString("n"), o.optBoolean("v", true), o.optDouble("o", 1.0).toFloat(), o.optString("f", "normal"), o.optBoolean("a"), o.optBoolean("r"), o.optBoolean("k")) }
+        .also { if (grupo.isNotEmpty()) it.put("g", grupo); if (mascara) it.put("m", true) }
+    companion object { fun de(o: JSONObject) = CapaInfo(o.optString("id"), o.optString("n"), o.optBoolean("v", true), o.optDouble("o", 1.0).toFloat(), o.optString("f", "normal"), o.optBoolean("a"), o.optBoolean("r"), o.optBoolean("k"), o.optString("g"), o.optBoolean("m")) }
+}
+
+/** Un grupo de capas: se ve o se esconde entero, se pliega en la lista y se ordena junto. */
+class GrupoCapas(val id: String, var nombre: String, var visible: Boolean = true, var plegado: Boolean = false) {
+    fun json() = JSONObject().put("id", id).put("n", nombre).put("v", visible).put("p", plegado)
+    companion object { fun de(o: JSONObject) = GrupoCapas(o.optString("id"), o.optString("n"), o.optBoolean("v", true), o.optBoolean("p")) }
 }
 
 /** La imagen para calcar: detrás (o encima) del dibujo, que no sale al exportar. Mide [ancho] px del lienzo. */
@@ -220,6 +239,8 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
     val sellos = CopyOnWriteArrayList<Sello>()
     var leyenda = Leyenda()
     val secciones = CopyOnWriteArrayList<Seccion>()
+    /** Los grupos de capas (las capas dicen en cuál están). */
+    val grupos = CopyOnWriteArrayList<GrupoCapas>()
     /** Las tierras generadas en este mapa (para poder unirlas con las siguientes). */
     val tierras = CopyOnWriteArrayList<Tierra>()
     /** La sección en la que se dibuja (lo de fuera no se pinta); "" ninguna. */
@@ -264,6 +285,7 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         .put("calco", calco?.json() ?: JSONObject.NULL).put("simetria", simetria?.json() ?: JSONObject.NULL)
         .put("secciones", JSONArray().also { a -> secciones.forEach { a.put(it.json()) } }).put("seccionActiva", seccionActiva)
         .put("capas", JSONArray().also { a -> capas.forEach { a.put(it.json()) } })
+        .put("grupos", JSONArray().also { a -> grupos.forEach { a.put(it.json()) } })
         .put("tierras", JSONArray().also { a -> tierras.forEach { a.put(it.json()) } })
 
     fun ponVector(o: JSONObject) {
@@ -280,6 +302,7 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         lista("secciones", secciones, Seccion::de)
         seccionActiva = o.optString("seccionActiva")
         if (o.has("capas")) lista("capas", capas, CapaInfo::de)
+        lista("grupos", grupos, GrupoCapas::de)
         lista("tierras", tierras, Tierra::de)
     }
 

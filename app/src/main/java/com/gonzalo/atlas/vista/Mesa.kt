@@ -259,13 +259,40 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         fun x(tx: Int) = vista.lx(tx * L.toDouble())
         fun y(ty: Int) = vista.ly(ty * L.toDouble())
         lz.vivos.removeAll { it.estado >= TrazoVivo.ASENTADO }
+        /** Las teselas de [capa] en lo que se ve (de cerca, las nítidas donde tiene trazos guardados). */
+        fun teselasDe(capa: com.gonzalo.atlas.lienzo.CapaPx) {
+            val cerca = e > 0 && capa.fondo.isNotEmpty()
+            for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) {
+                val k = Lienzo.clave(tx, ty)
+                val b = capa.teselas[k]
+                if (cerca && capa.fondo.containsKey(k)) {
+                    // De cerca: sus teselas nítidas; mientras se hacen, la de un nivel menos fino que ya esté o la normal ampliada
+                    val hx0 = max(th[0].toLong(), tx.toLong() * s).toInt(); val hx1 = min(th[2].toLong(), tx.toLong() * s + s - 1).toInt()
+                    val hy0 = max(th[1].toLong(), ty.toLong() * s).toInt(); val hy1 = min(th[3].toLong(), ty.toLong() * s + s - 1).toInt()
+                    for (hy in hy0..hy1) for (hx in hx0..hx1) {
+                        rDst.set(vista.lx(hx * lado), vista.ly(hy * lado), vista.lx((hx + 1) * lado), vista.ly((hy + 1) * lado))
+                        val hb = lz.nitidez.tesela(capa, e, hx, hy)
+                        if (hb != null) { c.drawBitmap(hb, null, rDst, pFiltro); continue }
+                        c.save(); c.clipRect(rDst)
+                        var puesta = false
+                        for (sube in 1..min(4, e - 1)) {
+                            val pb = lz.nitidez.hecha(capa, e - sube, hx shr sube, hy shr sube) ?: continue
+                            val pl = lado * (1 shl sube); val px = (hx shr sube) * pl; val py = (hy shr sube) * pl
+                            rDst.set(vista.lx(px), vista.ly(py), vista.lx(px + pl), vista.ly(py + pl)); c.drawBitmap(pb, null, rDst, pFiltro); puesta = true; break
+                        }
+                        if (!puesta && b != null) c.drawBitmap(b, x(tx), y(ty), pFiltro)
+                        c.restore()
+                    }
+                } else if (b != null) c.drawBitmap(b, x(tx), y(ty), pFiltro)
+            }
+        }
         synchronized(lz.cierre) {
             val lista = lz.capas.toList()
             for ((ci, capa) in lista.withIndex()) {
                 val vivos = lz.vivos.filter { it.capa === capa && it.estado < TrazoVivo.ASENTADO }
-                if (!capa.info.visible || (capa.teselas.isEmpty() && capa.fondo.isEmpty() && vivos.isEmpty())) continue
+                if (capa.info.mascara || !capa.info.seVe || (capa.teselas.isEmpty() && capa.fondo.isEmpty() && vivos.isEmpty())) continue
                 val base = lz.baseDe(lista, ci)
-                if (base != null && !base.info.visible) continue
+                if (base != null && !base.info.seVe) continue
                 pCapa.alpha = (capa.info.opacidad * 255).toInt()
                 pCapa.blendMode = Lienzo.fusion(capa.info.fusion)
                 // El ajuste de color que se está probando en la capa activa
@@ -281,35 +308,19 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                     continue
                 }
                 val g = c.saveLayer(r, pCapa)
-                val cerca = e > 0 && capa.fondo.isNotEmpty()
-                for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) {
-                    val k = Lienzo.clave(tx, ty)
-                    val b = capa.teselas[k]
-                    if (cerca && capa.fondo.containsKey(k)) {
-                        // De cerca: sus teselas nítidas; mientras se hacen, la de un nivel menos fino que ya esté o la normal ampliada
-                        val hx0 = max(th[0].toLong(), tx.toLong() * s).toInt(); val hx1 = min(th[2].toLong(), tx.toLong() * s + s - 1).toInt()
-                        val hy0 = max(th[1].toLong(), ty.toLong() * s).toInt(); val hy1 = min(th[3].toLong(), ty.toLong() * s + s - 1).toInt()
-                        for (hy in hy0..hy1) for (hx in hx0..hx1) {
-                            rDst.set(vista.lx(hx * lado), vista.ly(hy * lado), vista.lx((hx + 1) * lado), vista.ly((hy + 1) * lado))
-                            val hb = lz.nitidez.tesela(capa, e, hx, hy)
-                            if (hb != null) { c.drawBitmap(hb, null, rDst, pFiltro); continue }
-                            c.save(); c.clipRect(rDst)
-                            var puesta = false
-                            for (sube in 1..min(4, e - 1)) {
-                                val pb = lz.nitidez.hecha(capa, e - sube, hx shr sube, hy shr sube) ?: continue
-                                val pl = lado * (1 shl sube); val px = (hx shr sube) * pl; val py = (hy shr sube) * pl
-                                rDst.set(vista.lx(px), vista.ly(py), vista.lx(px + pl), vista.ly(py + pl)); c.drawBitmap(pb, null, rDst, pFiltro); puesta = true; break
-                            }
-                            if (!puesta && b != null) c.drawBitmap(b, x(tx), y(ty), pFiltro)
-                            c.restore()
-                        }
-                    } else if (b != null) c.drawBitmap(b, x(tx), y(ty), pFiltro)
-                }
+                teselasDe(capa)
                 for (v in vivos) pintaVivo(c, v, r)
                 // Máscara de recorte: solo queda donde la capa de debajo tiene algo
                 if (base != null) for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) {
                     val m = base.teselas[Lienzo.clave(tx, ty)]
                     if (m != null) c.drawBitmap(m, x(tx), y(ty), pDentroF) else c.drawRect(x(tx), y(ty), x(tx + 1), y(ty + 1), pNada)
+                }
+                // Su máscara (con el trazo que se le esté pintando): lo pintado en ella esconde la capa
+                lz.mascaraDe(lista, ci)?.let { m ->
+                    val gm = c.saveLayer(r, pFuera)
+                    teselasDe(m)
+                    for (v in lz.vivos) if (v.capa === m && v.estado < TrazoVivo.ASENTADO) pintaVivo(c, v, r)
+                    c.restoreToCount(gm)
                 }
                 c.restoreToCount(g)
             }
@@ -368,8 +379,11 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
             val h = v.humedo
             val asentado = v.estado == TrazoVivo.ASENTADO
             if (asentado && h.escala != esc) { lz.vivos.remove(v); continue }
-            if (!v.capa.info.visible) continue
+            // (De lejos, lo que se pinta en una máscara se ve como si tapara con el papel; borrar en ella no se ve hasta asentarse)
+            val enMascara = v.capa.info.mascara
+            if (if (enMascara) !v.capa.info.visible else !v.capa.info.seVe) continue
             val borra = v.modo == TrazoDatos.BORRAR
+            if (enMascara && borra) continue
             if (borra && asentado) { lz.vivos.remove(v); continue }
             pLejos.alpha = ((if (borra) 0.75f else 1f) * v.opacidad * 255).toInt()
             var queda = false
@@ -378,7 +392,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 if (!l.tocada) continue
                 if (asentado && piramide.limpia(nivel, (l.ox / Lienzo.L).toInt(), (l.oy / Lienzo.L).toInt())) continue
                 queda = true
-                c.drawBitmap(imagenDe(l, if (borra) mapa.papel else v.color, v.def.bordes), null, sitio(l, h.escala), pLejos)
+                c.drawBitmap(imagenDe(l, if (borra || enMascara) mapa.papel else v.color, v.def.bordes), null, sitio(l, h.escala), pLejos)
             }
             c.restore()
             if (asentado && !queda) lz.vivos.remove(v)
@@ -511,7 +525,11 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         val goma = gomaLapiz || editor.herramienta == Herramienta.GOMA
         val def = Pinceles.def(if (goma) editor.goma else editor.pincel)
         val capa = lz.capaActiva() ?: return
-        if (!capa.info.visible) { editor.aviso = "La capa «${capa.info.nombre}» está oculta"; return }
+        if (capa.info.mascara) {
+            val d = lz.duenaDe(capa)
+            if (!capa.info.visible) { editor.aviso = "La máscara de «${d?.info?.nombre ?: "la capa"}» está apagada (Capas → sus opciones)"; return }
+            if (d != null && !d.info.seVe) { editor.aviso = "La capa «${d.info.nombre}» está oculta"; return }
+        } else if (!capa.info.seVe) { editor.aviso = if (!capa.info.grupoVisible) "El grupo de «${capa.info.nombre}» está oculto" else "La capa «${capa.info.nombre}» está oculta"; return }
         val i = e.actionIndex
         punteroTrazo = e.getPointerId(i)
         lapizTrazo = esLapiz(e, i)
