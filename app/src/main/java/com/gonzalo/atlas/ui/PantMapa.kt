@@ -178,7 +178,7 @@ private fun BarraSuperior(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean,
     val h = ed.herramienta
     fun herramienta(x: Herramienta, p: String) { if (ed.herramienta == x) abre(p) else { ed.herramienta = x; ed.seleccion = null; ed.regla = null; if (panel != null && panel != p) abre(p) } }
     Row(Modifier.fillMaxWidth().background(O.CABECERA.copy(alpha = 0.96f)).statusBarsPadding().height(54.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Galería", Modifier.pulsableO { ed.guardaYa(); if (taller) e.cierraDibujo() else e.seccion = "portada" }.padding(horizontal = 12.dp, vertical = 8.dp), style = O.texto(17.sp, O.TINTA))
+        Text("Galería", Modifier.pulsableO { ed.guardaYa(); if (taller) e.cierraDibujo() else e.dibujando = false }.padding(horizontal = 12.dp, vertical = 8.dp), style = O.texto(17.sp, O.TINTA))
         Icono(Icons.Outlined.Build, "Acciones", panel == "acciones") { abre("acciones") }
         Icono(Icons.Outlined.AutoFixHigh, "Ajustes", panel == "ajustes") { abre("ajustes") }
         Icono(Icons.Outlined.NearMe, "Transformar", h == Herramienta.TRANSFORMAR) { ed.herramienta = if (h == Herramienta.TRANSFORMAR) Herramienta.PINCEL else Herramienta.TRANSFORMAR; if (h == Herramienta.TRANSFORMAR) ed.transformacion = null }

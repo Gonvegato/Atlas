@@ -4,6 +4,11 @@ App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma fir
 Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
 etiqueta `v0.15.0`.
 
+## 1.2.2
+
+- **Mapas** (antes «Mapa»): elegir dónde dibujar. Seguir con el mapa en el que estabas, abrir cualquiera de tus mundos, hacer
+  un mapa nuevo en un mundo que ya tienes o empezar un mundo nuevo. Al dibujar, «Galería» vuelve aquí.
+
 ## 1.2.1
 
 - **Arreglado: lo dibujado se borraba al levantar el lápiz.** El trazo en curso lo pinta Ink en pantalla; al terminar hay que

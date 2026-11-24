@@ -93,6 +93,8 @@ class EstadoApp(val ctx: Context) {
     private val prefs = ctx.getSharedPreferences("atlas", Context.MODE_PRIVATE)
 
     var seccion by mutableStateOf("portada")
+    /** En «Mapas»: dibujando el mapa abierto (si no, eligiendo dónde dibujar). */
+    var dibujando by mutableStateOf(false)
     var editor by mutableStateOf<Editor?>(null)
         private set
     /** El dibujo suelto abierto en el Taller (y su id en la biblioteca, si ya se guardó). */
@@ -124,10 +126,10 @@ class EstadoApp(val ctx: Context) {
     fun mesaAbierta(ed: Editor): Mesa? = mesas[ed]
 
     fun abreMapa(m: Mapa, irAlMapa: Boolean = true) {
-        editor?.let { if (it.mapa.id == m.id) { if (irAlMapa) seccion = "mapa"; return }; cierraEditor(it) }
+        editor?.let { if (it.mapa.id == m.id) { if (irAlMapa) { seccion = "mapa"; dibujando = true }; return }; cierraEditor(it) }
         editor = Editor(m, ctx.resources) { listas++; cuenta.programaSubida(this) }
         prefs.edit().putString("ultimo", m.id).apply()
-        if (irAlMapa) seccion = "mapa"
+        if (irAlMapa) { seccion = "mapa"; dibujando = true }
         listas++
     }
 
@@ -228,18 +230,18 @@ class EstadoApp(val ctx: Context) {
     fun alSalir() { mesas.values.forEach { it.recuerdaVista() }; editor?.guardaYa(); editorTaller?.guardaYa() }
 }
 
-val SECCIONES = listOf("portada" to "Portada", "mapa" to "Mapa", "cronica" to "Crónica", "taller" to "Taller", "mundo" to "Mundo")
+val SECCIONES = listOf("portada" to "Portada", "mapa" to "Mapas", "cronica" to "Crónica", "taller" to "Taller", "mundo" to "Mundo")
 
 @Composable
 fun App(e: EstadoApp) {
     // Dibujando, el lienzo ocupa toda la pantalla (como en Procreate): «Galería» vuelve a la portada
-    val dibujando = (e.seccion == "mapa" && e.editor != null) || (e.seccion == "taller" && e.editorTaller != null)
+    val dibujando = (e.seccion == "mapa" && e.editor != null && e.dibujando) || (e.seccion == "taller" && e.editorTaller != null)
     Column(Modifier.fillMaxSize().background(if (dibujando) O.MESA else T.PAPEL)) {
         if (!dibujando) { Cabecera(e); Pestanas(e) }
         Box(Modifier.fillMaxWidth().weight(1f)) {
             when (e.seccion) {
                 "portada" -> Portada(e)
-                "mapa" -> PantMapa(e)
+                "mapa" -> if (dibujando) PantMapa(e) else PantMapas(e)
                 "cronica" -> PantCronica(e)
                 "taller" -> PantMapa(e, taller = true)
                 "mundo" -> PantMundo(e)
@@ -251,7 +253,7 @@ fun App(e: EstadoApp) {
 /** La cabecera negra: la fila pequeña (mundo, cuenta) y el nombre grande con el punto del acento. En el mapa, en pequeño. */
 @Composable
 fun Cabecera(e: EstadoApp) {
-    val enMapa = e.seccion == "mapa" || e.seccion == "taller"
+    val enMapa = false
     val mundo = e.mapa?.let { m -> e.bib.mundo(m.mundo)?.nombre }.orEmpty()
     Column(Modifier.fillMaxWidth().background(T.CABECERA).statusBarsPadding().padding(horizontal = 20.dp, vertical = if (enMapa) 6.dp else 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -276,7 +278,7 @@ fun Pestanas(e: EstadoApp) {
         Row(Modifier.fillMaxWidth().height(46.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             for ((k, n) in SECCIONES) {
                 val sel = e.seccion == k
-                Box(Modifier.fillMaxHeight().background(if (sel) T.ACENTO else T.PAPEL).pulsable { e.seccion = k }.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxHeight().background(if (sel) T.ACENTO else T.PAPEL).pulsable { e.seccion = k; if (k == "mapa") e.dibujando = false }.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Etiqueta(n, tam = 13.sp, color = if (sel) T.PAPEL else T.TINTA)
                         val cuenta = androidx.compose.runtime.remember(e.listas, e.recursos.version, k) { when (k) { "portada" -> e.bib.mapas().size; "cronica" -> e.mapa?.let { m -> e.cronica(m.mundo).entradas.size } ?: 0; "taller" -> e.recursos.lista().size; else -> 0 } }

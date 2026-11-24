@@ -148,7 +148,7 @@ fun verEnMapa(e: EstadoApp, enlace: String) {
     val p = enlace.split(':'); if (p.size != 3) return
     if (e.mapa?.id != p[0]) e.abreMapa(p[0], irAlMapa = false)
     val ed = e.editor ?: return
-    e.seccion = "mapa"
+    e.seccion = "mapa"; e.dibujando = true
     // Se apunta dónde mirar: la mesa lo usa al abrirse (o ya, si está abierta)
     val punto = when (p[1]) {
         "t" -> { val id = p[2].toIntOrNull() ?: return; ed.territorio = id; ed.herramienta = Herramienta.ELEGIR; ed.seleccion = ed.mapa.territorio(id)

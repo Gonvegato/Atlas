@@ -60,7 +60,7 @@ fun Portada(e: EstadoApp) {
             val info = mapas.firstOrNull { it.id == actual.id }
             BoxWithConstraints {
                 val ancho = maxWidth > 700.dp
-                val cartel = @Composable { mod: Modifier -> Miniatura(e.bib.miniatura(actual.id), mod.border(2.dp, T.TINTA).background(T.MESA).pulsable { e.seccion = "mapa" }, e.listas) }
+                val cartel = @Composable { mod: Modifier -> Miniatura(e.bib.miniatura(actual.id), mod.border(2.dp, T.TINTA).background(T.MESA).pulsable { e.abreMapa(actual) }, e.listas) }
                 val texto = @Composable { mod: Modifier ->
                     Column(mod, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Etiqueta("Estás dibujando", tam = 11.sp, color = T.ACENTO)
@@ -71,7 +71,7 @@ fun Portada(e: EstadoApp) {
                             Cifra(if (actual.infinito) 0 else actual.ancho, if (actual.infinito) "infinito" else "px de ancho")
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Boton("Seguir dibujando", lleno = true) { e.seccion = "mapa" }
+                            Boton("Seguir dibujando", lleno = true) { e.abreMapa(actual) }
                             Boton("+ Mapa en este mundo") { nuevo = actual.mundo }
                         }
                     }
@@ -170,7 +170,7 @@ private val TAMANOS = listOf(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DialogoNuevo(e: EstadoApp, mundo: String?, cerrar: () -> Unit) {
+internal fun DialogoNuevo(e: EstadoApp, mundo: String?, cerrar: () -> Unit) {
     var nombre by remember { mutableStateOf(Nombres.raiz()) }
     var nombreMundo by remember { mutableStateOf(Nombres.mundo()) }
     var tam by remember { mutableStateOf(TAMANOS[0]) }
@@ -313,3 +313,42 @@ object Uniones {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Suppress("unused") @Composable private fun nada() = FlowRow {}
+
+/**
+ * Mapas: elegir dónde dibujar. Seguir con el que estabas, abrir cualquiera de tus mundos, hacer un mapa nuevo en un mundo que
+ * ya tienes o empezar un mundo nuevo.
+ */
+@Composable
+fun PantMapas(e: EstadoApp) {
+    @Suppress("UNUSED_VARIABLE") val l = e.listas
+    val mapas = remember(e.listas) { e.bib.mapas() }
+    val mundos = remember(e.listas) { e.bib.mundos() }
+    var nuevo by remember { mutableStateOf<String?>(null) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(Relleno).navigationBarsPadding(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text("¿Dónde dibujas?", style = T.titular(36.sp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            e.mapa?.let { m -> Boton("Seguir con «${m.nombre}»", lleno = true) { e.abreMapa(m) } }
+            Boton("+ Mundo nuevo", lleno = e.mapa == null) { nuevo = "" }
+        }
+        if (mundos.isEmpty()) Text("Aún no tienes mundos. Empieza uno: luego puedes hacer en él tantos mapas como quieras (el continente, una región, una ciudad…).", style = T.texto(15.sp, T.GRIS))
+        var n = 1
+        for (w in mundos) {
+            val suyos = mapas.filter { it.mundo == w.id }
+            Seccion(n++, w.nombre, derecha = { Enlace("+ Mapa en este mundo") { nuevo = w.id } })
+            if (suyos.isEmpty()) Text("Sin mapas todavía.", style = T.texto(14.sp, T.GRIS))
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                for (m in suyos) Column(Modifier.width(220.dp).pulsable { e.abreMapa(m.id) }) {
+                    Miniatura(e.bib.miniatura(m.id), Modifier.fillMaxWidth().aspectRatio(1.4f).border(if (e.mapa?.id == m.id) 3.dp else 1.dp, if (e.mapa?.id == m.id) T.ACENTO else T.TINTA).background(T.MESA), e.listas)
+                    Text(m.nombre, style = T.nombre(18.sp), maxLines = 1)
+                    Text((if (m.infinito) "Infinito" else "${m.ancho} × ${m.alto}") + " · ${m.reinos} territorios · ${m.lugares} lugares", style = T.texto(12.sp, T.GRIS))
+                }
+                Column(Modifier.width(220.dp).aspectRatio(1.4f).border(1.5.dp, T.GRIS_CLARO).pulsable { nuevo = w.id }, verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("+", style = T.titular(40.sp, T.ACENTO)); Etiqueta("Mapa nuevo", tam = 11.sp, color = T.ACENTO)
+                }
+            }
+        }
+        Spacer(Modifier.height(30.dp))
+    }
+    nuevo?.let { w -> DialogoNuevo(e, w.ifBlank { null }) { nuevo = null } }
+}

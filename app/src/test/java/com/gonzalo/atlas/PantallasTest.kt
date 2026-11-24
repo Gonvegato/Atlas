@@ -49,6 +49,8 @@ class PantallasTest {
         captura("cronica.png")
         e.seccion = "mundo"
         captura("mundo.png")
+        e.seccion = "mapa"; e.dibujando = false
+        captura("mapas.png")
         e.seccion = "taller"
         captura("taller.png")
     }
