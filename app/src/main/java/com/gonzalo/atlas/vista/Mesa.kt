@@ -47,7 +47,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     val mapa = editor.mapa
     val vista = Vista()
     val capas = Capas(ctx)
-    val opciones = Capas.Opciones()
+    val opciones = Capas.Opciones(cuadricula = mapa.mundo.isNotBlank())
     val velo = VeloTerritorios(lz)
     private val dibujo = object : View(ctx) { override fun onDraw(c: Canvas) = pinta(c) }
     val piramide = Piramide(lz, velo) { dibujo.postInvalidateOnAnimation() }
@@ -160,7 +160,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         if (!papel.isEmpty) {
             Papel.pinta(c, mapa, papel)
             if (mapa.calco?.encima != true) pintaCalco(c)
-            val nivel = if (vista.zoom >= 0.7f) 0 else floor(ln(1f / vista.zoom) / ln(2f)).toInt().coerceIn(1, 7)
+            val nivel = if (vista.zoom >= 0.7f || editor.transformacion != null) 0 else floor(ln(1f / vista.zoom) / ln(2f)).toInt().coerceIn(1, 7)
             if (nivel == 0) capasDirectas(c, papel) else desdePiramide(c, papel, nivel)
             if (mapa.calco?.encima == true) pintaCalco(c)
             // Borde del lienzo
@@ -179,14 +179,26 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     private fun capasDirectas(c: Canvas, r: RectF) {
         val L = Lienzo.L.toFloat()
         val t = rango(r, L)
+        val tm = editor.transformacion
         for (capa in lz.capas) {
             if (!capa.info.visible || capa.teselas.isEmpty()) continue
             pCapa.alpha = (capa.info.opacidad * 255).toInt()
             pCapa.blendMode = Lienzo.fusion(capa.info.fusion)
+            if (tm != null && capa.info.id == lz.activa) {
+                // La capa que se transforma: una imagen suya movida con la matriz
+                if (vistaTransfCapa != capa.info.id || vistaTransf == null) { vistaTransf = com.gonzalo.atlas.lienzo.Ajustes.vistaCapa(capa); vistaTransfCapa = capa.info.id }
+                vistaTransf?.let { (b, caja) ->
+                    val g = c.saveLayer(null, pCapa); c.save(); c.concat(tm); c.drawBitmap(b, null, caja, pFiltro)
+                    val borde = Paint().apply { style = Paint.Style.STROKE; color = 0xFF3D8BFF.toInt(); strokeWidth = 2f / vista.zoom }
+                    c.drawRect(caja, borde); c.restore(); c.restoreToCount(g)
+                }
+                continue
+            }
             val g = c.saveLayer(r, pCapa)
             for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) capa.teselas[Lienzo.clave(tx, ty)]?.let { c.drawBitmap(it, tx * L, ty * L, pFiltro) }
             c.restoreToCount(g)
         }
+        if (tm == null) vistaTransf = null
         if (mapa.verTerritorios) for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) velo.tesela(Lienzo.clave(tx, ty))?.let { c.drawBitmap(it, tx * L, ty * L, pFiltro) }
     }
 
@@ -213,7 +225,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
 
     // ---------------------------------------------------------------- tocar
 
-    private enum class Gesto { NADA, TINTA, ARRASTRE, MOVER, CALCO }
+    private enum class Gesto { NADA, TINTA, ARRASTRE, MOVER, CALCO, DIFUMINAR, TRANSFORMAR }
     private var gesto = Gesto.NADA
     private var trazo: InProgressStrokeId? = null
     private var punteroTrazo = -1
@@ -236,8 +248,12 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 bajoX = e.x; bajoY = e.y; bajoT = e.eventTime; movido = false; previo = null
                 val h = editor.herramienta
                 val goma = e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
+                maxDedos = 1; bajoMulti = e.eventTime; multiMovido = false
+                if (!esLapiz(e, 0)) programaCuentagotas(e.x, e.y)
                 gesto = when {
+                    h == Herramienta.TRANSFORMAR -> { if (editor.transformacion == null) editor.transformacion = Matrix(); Gesto.TRANSFORMAR }
                     h == Herramienta.CALCO && mapa.calco != null -> Gesto.CALCO
+                    h == Herramienta.DIFUMINAR && puedeDibujar(e, 0) -> { punteroTrazo = e.getPointerId(0); editor.empiezaDifuminar(); difumina(e); Gesto.DIFUMINAR }
                     !puedeDibujar(e, 0) -> Gesto.MOVER
                     h == Herramienta.PINCEL || h == Herramienta.GOMA || goma -> { empiezaTinta(e, goma); Gesto.TINTA }
                     h == Herramienta.ELEGIR && editor.seleccion != null && capas.queHay(mapa, vista, e.x, e.y, editor.centros, editor.superficies) === editor.seleccion -> { empiezaArrastre(e); Gesto.ARRASTRE }
@@ -246,14 +262,19 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 }
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
+                cancelaCuentagotas()
+                maxDedos = maxOf(maxDedos, e.pointerCount)
                 val i = e.actionIndex
+                if (gesto == Gesto.DIFUMINAR && !esLapiz(e, i)) { editor.terminaDifuminar(); editor.deshacer(); gesto = Gesto.MOVER }
                 if (gesto == Gesto.TINTA && !esLapiz(e, i) && !esLapizActivo(e)) {
                     // Un segundo dedo mientras se dibuja con el dedo: era para mover; el trazo se cancela
                     trazo?.let { tinta.cancelStroke(it, e); metas.remove(it) }; trazo = null; gesto = Gesto.MOVER
                 } else if (gesto == Gesto.ARRASTRE && !esLapiz(e, i) && !esLapiz(e, 0)) { gesto = Gesto.MOVER }
                 previo = null
             }
-            MotionEvent.ACTION_MOVE -> when (gesto) {
+            MotionEvent.ACTION_MOVE -> { if (hypot(e.x - bajoX, e.y - bajoY) > 10 * dens) { cancelaCuentagotas(); if (e.pointerCount > 1) multiMovido = true }
+                for (i in 0 until e.pointerCount) if (e.historySize > 0 && hypot(e.getX(i) - e.getHistoricalX(i, 0), e.getY(i) - e.getHistoricalY(i, 0)) > 3 * dens && e.pointerCount > 1) multiMovido = true
+                when (gesto) {
                 Gesto.TINTA -> trazo?.let { id ->
                     val i = e.findPointerIndex(punteroTrazo); if (i < 0) return true
                     if (cuerda != null) { estabiliza(e, i, id); cursor(e.getX(i), e.getY(i)); return true }
@@ -270,18 +291,24 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 }
                 Gesto.MOVER -> { if (hypot(e.x - bajoX, e.y - bajoY) > 8 * dens || e.pointerCount > 1) movido = true; mueveVista(e) }
                 Gesto.CALCO -> mueveCalco(e)
+                Gesto.TRANSFORMAR -> mueveTransformacion(e)
+                Gesto.DIFUMINAR -> difumina(e)
                 else -> {}
-            }
+            } }
             MotionEvent.ACTION_POINTER_UP -> {
                 if (gesto == Gesto.TINTA && e.getPointerId(e.actionIndex) == punteroTrazo) terminaTinta(e)
                 previo = null
             }
             MotionEvent.ACTION_UP -> {
+                cancelaCuentagotas()
+                // Toque con dos dedos: deshacer; con tres: rehacer (como en Procreate)
+                if (maxDedos >= 2 && !multiMovido && e.eventTime - bajoMulti < 350) { if (maxDedos == 2) editor.deshacer() else editor.rehacer(); gesto = Gesto.NADA; previo = null; return true }
                 when (gesto) {
                     Gesto.TINTA -> terminaTinta(e)
                     Gesto.ARRASTRE -> { editor.termina(); if (e.eventTime - bajoT < 250 && hypot(e.x - bajoX, e.y - bajoY) < 8 * dens) toque(e.x, e.y) }
                     Gesto.MOVER -> if (!movido && e.eventTime - bajoT < 350) toque(e.x, e.y)
                     Gesto.CALCO -> mapa.avisaVector()
+                    Gesto.DIFUMINAR -> editor.terminaDifuminar()
                     else -> {}
                 }
                 gesto = Gesto.NADA; previo = null; opciones.cursor = null
@@ -301,11 +328,11 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     private val inv = Matrix()
     private fun empiezaTinta(e: MotionEvent, gomaLapiz: Boolean) {
         val goma = gomaLapiz || editor.herramienta == Herramienta.GOMA
-        val tipo = Pinceles.de(if (goma) editor.goma else editor.pincel)
+        val tipo = if (goma) Pinceles.de(editor.goma).comoGoma() else Pinceles.de(editor.pincel)
         val capa = lz.capaActiva() ?: return
         if (!capa.info.visible) { editor.aviso = "La capa «${capa.info.nombre}» está oculta"; return }
         val tam = if (goma) editor.tamanoGoma else editor.tamano
-        val op = if (goma) tipo.opacidad else editor.opacidad
+        val op = if (goma) editor.opacidadGoma else editor.opacidad
         // Lo que se ve mientras se dibuja: el color con su opacidad (la goma, un velo del papel)
         val verColor = if (goma) (0xB0 shl 24) or (mapa.papel and 0xFFFFFF) else ((op * 255).toInt().coerceIn(10, 255) shl 24) or (editor.color and 0xFFFFFF)
         vista.m.invert(inv)
@@ -420,6 +447,57 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         }
         previo = floatArrayOf(mx, my, d, n.toFloat(), a)
     }
+
+    // ---------------------------------------------------------------- toques de varios dedos y cuentagotas
+
+    private var maxDedos = 1
+    private var bajoMulti = 0L
+    private var multiMovido = false
+    private val cuentagotas = Runnable {
+        if (gesto == Gesto.MOVER || gesto == Gesto.NADA || (gesto == Gesto.TINTA && trazo == null)) {
+            val m = vista.aMapa(bajoX, bajoY)
+            editor.lienzo.enHilo { val c = editor.lienzo.colorEn(m[0].toInt(), m[1].toInt()); post { editor.ponColor(c or (0xFF shl 24)); editor.aviso = "Color recogido" } }
+            movido = true
+        }
+    }
+    private fun programaCuentagotas(x: Float, y: Float) { removeCallbacks(cuentagotas); if (lapizVisto && !dedoDibuja) postDelayed(cuentagotas, 550) }
+    private fun cancelaCuentagotas() = removeCallbacks(cuentagotas)
+
+    private fun difumina(e: MotionEvent) {
+        val i = e.findPointerIndex(punteroTrazo).takeIf { it >= 0 } ?: 0
+        val n = e.historySize + 1
+        val xs = FloatArray(n); val ys = FloatArray(n); val ps = FloatArray(n)
+        for (h in 0 until e.historySize) { val m = vista.aMapa(e.getHistoricalX(i, h), e.getHistoricalY(i, h)); xs[h] = m[0]; ys[h] = m[1]; ps[h] = if (esLapiz(e, i)) e.getHistoricalPressure(i, h) else 1f }
+        val m = vista.aMapa(e.getX(i), e.getY(i)); xs[n - 1] = m[0]; ys[n - 1] = m[1]; ps[n - 1] = if (esLapiz(e, i)) e.getPressure(i) else 1f
+        editor.difumina(xs, ys, ps) { r -> piramide.ensucia(r); dibujo.invalidate() }
+        opciones.cursor = floatArrayOf(e.getX(i), e.getY(i), editor.tamanoDifuminar / 2 * vista.zoom)
+    }
+
+    /** Transformar la capa activa: un dedo la mueve; dos la escalan y giran. */
+    private fun mueveTransformacion(e: MotionEvent) {
+        val m = editor.transformacion ?: return
+        val n = min(e.pointerCount, 2)
+        var mx = 0f; var my = 0f
+        for (i in 0 until n) { mx += e.getX(i); my += e.getY(i) }
+        mx /= n; my /= n
+        val d = if (n == 2) hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0)) else 0f
+        val a = if (n == 2) Math.toDegrees(atan2((e.getY(1) - e.getY(0)).toDouble(), (e.getX(1) - e.getX(0)).toDouble())).toFloat() else 0f
+        val p = previo
+        if (p != null && p[3] == n.toFloat()) {
+            val antes = vista.aMapa(p[0], p[1]); val ahora = vista.aMapa(mx, my)
+            m.postTranslate(ahora[0] - antes[0], ahora[1] - antes[1])
+            if (n == 2 && p[2] > 0f) {
+                var dg = a - p[4]; if (dg > 180) dg -= 360; if (dg < -180) dg += 360
+                m.postScale(d / p[2], d / p[2], ahora[0], ahora[1]); m.postRotate(dg, ahora[0], ahora[1])
+            }
+            editor.transformacion = Matrix(m)
+            dibujo.invalidate()
+        }
+        previo = floatArrayOf(mx, my, d, n.toFloat(), a)
+    }
+
+    private var vistaTransf: Pair<Bitmap, RectF>? = null
+    private var vistaTransfCapa: String? = null
 
     /** Mover (un dedo), escalar y girar (dos) la imagen de calcar. */
     private fun mueveCalco(e: MotionEvent) {

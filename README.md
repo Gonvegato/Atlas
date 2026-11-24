@@ -4,6 +4,27 @@ App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma fir
 Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
 etiqueta `v0.15.0`.
 
+## 1.2.0 — una app de dibujo de verdad, vuelta hacia los mundos
+
+- **La mesa de dibujo como Procreate.** Al dibujar, el lienzo ocupa toda la pantalla (sin la cabecera de la familia): barra
+  oscura arriba con Galería, Acciones, Ajustes, Transformar, Calco y Mundo a la izquierda, y Pintar, Difuminar, Borrar, Capas
+  y el color a la derecha; barra lateral con tamaño, cuentagotas, opacidad, deshacer y rehacer; paneles oscuros flotantes.
+- **Biblioteca de pinceles** por categorías (Bocetos, Entintado, Pintura, Aerógrafo, Texturas, Cartografía, Importados, Míos),
+  33 de serie, con la muestra de su trazo. Pintar, difuminar y borrar eligen pincel cada uno.
+- **Estudio del pincel**: estabilización propia, espaciado, dispersión, giro al azar, punta que sigue la dirección, afilado
+  al empezar y al terminar, forma (redonda, plana, o puntas de textura: suave, áspera, salpicadura, carbón, hojas, piedras,
+  hierba, olas), achatado y ángulo, grano (papel, lienzo, ruido, rayado, piedra, arena) y su escala, presión → tamaño y
+  opacidad, velocidad → tamaño, inclinación → tamaño, acumular, tamaño y opacidad. Duplicar, restablecer y borrar.
+- **Difuminar** con cualquier pincel (arrastra la pintura, como el dedo de Procreate).
+- **Color**: disco, clásico, valores (tono, saturación, brillo, rojo, verde, azul y código) y paletas, con historial.
+- **Capas** con miniatura, letra del modo de fusión y casilla de ver; al tocar la elegida, sus opciones (nombre, opacidad,
+  fusión, bloquear transparencia, referencia, subir, bajar, duplicar, combinar, rellenar, vaciar, borrar). Abajo, el color de
+  fondo.
+- **Ajustes**: tono, saturación y brillo, y desenfoque gaussiano de la capa. **Transformar** la capa: mover, escalar, girar,
+  voltear.
+- **Gestos**: dos dedos tocando, deshacer; tres, rehacer; con el lápiz, un dedo quieto coge el color.
+- **Cuadrícula en km encendida** en los mapas, con «CASILLA … · … KM²» siempre a la vista junto a la escala.
+
 ## 1.1.0
 
 - **Estabilización del trazo**, como la StreamLine de Procreate (en Pinceles, de 0 a 100 %): el pincel va detrás del lápiz

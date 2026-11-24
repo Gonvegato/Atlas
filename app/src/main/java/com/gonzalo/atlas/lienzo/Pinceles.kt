@@ -3,24 +3,17 @@
 package com.gonzalo.atlas.lienzo
 
 import android.content.res.Resources
-import android.graphics.Bitmap
-import android.graphics.Color
 import androidx.ink.brush.Brush
-import androidx.ink.brush.BrushBehavior
 import androidx.ink.brush.BrushFamily
-import androidx.ink.brush.BrushPaint
-import androidx.ink.brush.BrushTip
-import androidx.ink.brush.SelfOverlap
 import androidx.ink.brush.StockBrushes
 import androidx.ink.brush.StockTextureBitmapStore
-import com.gonzalo.atlas.motor.Ruido
-import kotlin.math.exp
-import kotlin.math.sqrt
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 
-/**
- * Los pinceles del lienzo, sobre la biblioteca Ink de Google (trazo de baja latencia: se dibuja en el búfer delantero de la
- * pantalla). [goma]: borra en lugar de pintar. El tamaño va en píxeles del lienzo.
- */
+/** Un pincel listo para pintar: su familia de Ink (se crea al usarlo), su tamaño y opacidad al elegirlo y si borra. */
 class TipoPincel(
     val clave: String,
     val nombre: String,
@@ -32,124 +25,90 @@ class TipoPincel(
 ) {
     val fam: BrushFamily by lazy { runCatching { familia() }.getOrElse { StockBrushes.pressurePen() } }
     fun brush(color: Int, tam: Float): Brush = Brush.createWithColorIntArgb(fam, color, tam.coerceAtLeast(0.5f), 0.1f)
+    /** El mismo pincel, pero borrando. */
+    fun comoGoma(): TipoPincel = TipoPincel(clave, nombre, desc, tamano, opacidad, true) { fam }
 }
 
+/**
+ * Los pinceles: los de serie (por categorías), los tuyos (duplicados y cambiados en el estudio, en `pinceles.json`) y los
+ * importados de Procreate. Las texturas (puntas y granos) se registran en el almacén de Ink.
+ */
 object Pinceles {
-    const val GRANO = "atlas_grano"
-    const val PUNTO = "atlas_punto"
-    const val LIENZO = "atlas_lienzo"
-
     @Volatile private var almacen: StockTextureBitmapStore? = null
-
-    /** Las texturas de los pinceles (las de Ink y las nuestras: grano de papel, punto difuminado, tela). */
-    fun almacen(res: Resources): StockTextureBitmapStore = almacen ?: synchronized(this) {
-        almacen ?: StockTextureBitmapStore(res).also { s ->
-            s.addTexture(GRANO, grano(256, 3f, 7))
-            s.addTexture(PUNTO, punto(128))
-            s.addTexture(LIENZO, grano(256, 1.2f, 13))
-            runCatching { s.preloadStockBrushesTextures(StockBrushes.pencilUnstable) }
-            almacen = s
-        }
-    }
-
-    /** Grano: blanco con transparencia irregular (multiplica el color del pincel). */
-    private fun grano(lado: Int, escala: Float, semilla: Long): Bitmap {
-        val t = com.gonzalo.atlas.motor.RuidoTabla(lado, semilla, lado / escala / 8f, 3)
-        val px = IntArray(lado * lado)
-        for (i in px.indices) {
-            val v = (t.v[i] * 0.5f + 0.5f)
-            val fino = Ruido.hash01(i % lado, i / lado, semilla.toInt()) * 0.35f
-            val a = ((v * 0.8f + fino) * 255).toInt().coerceIn(30, 255)
-            px[i] = Color.argb(a, 255, 255, 255)
-        }
-        return Bitmap.createBitmap(px, lado, lado, Bitmap.Config.ARGB_8888)
-    }
-
-    /** Un punto blanco difuminado (para el aerógrafo y la acuarela). */
-    private fun punto(lado: Int): Bitmap {
-        val px = IntArray(lado * lado)
-        val c = (lado - 1) / 2f
-        for (y in 0 until lado) for (x in 0 until lado) {
-            val d = sqrt((x - c) * (x - c) + (y - c) * (y - c)) / c
-            val a = if (d >= 1f) 0f else exp(-d * d * 3.2f) * (1f - d * d)
-            px[y * lado + x] = Color.argb((a * 255).toInt().coerceIn(0, 255), 255, 255, 255)
-        }
-        return Bitmap.createBitmap(px, lado, lado, Bitmap.Config.ARGB_8888)
-    }
-
-    private fun presionTamano(min: Float, max: Float = 1f) = BrushBehavior(
-        source = BrushBehavior.Source.NORMALIZED_PRESSURE, target = BrushBehavior.Target.SIZE_MULTIPLIER,
-        sourceValueRangeStart = 0f, sourceValueRangeEnd = 1f, targetModifierRangeStart = min, targetModifierRangeEnd = max)
-
-    private fun presionOpacidad(min: Float) = BrushBehavior(
-        source = BrushBehavior.Source.NORMALIZED_PRESSURE, target = BrushBehavior.Target.OPACITY_MULTIPLIER,
-        sourceValueRangeStart = 0f, sourceValueRangeEnd = 1f, targetModifierRangeStart = min, targetModifierRangeEnd = 1f)
-
-    private fun texturado(id: String, tamTextura: Float, unidad: BrushPaint.TextureSizeUnit, mapeo: BrushPaint.TextureMapping, solape: SelfOverlap) =
-        BrushPaint(listOf(BrushPaint.TextureLayer(clientTextureId = id, sizeX = tamTextura, sizeY = tamTextura, sizeUnit = unidad, mapping = mapeo)), emptyList(), solape)
-
-    val TODOS: List<TipoPincel> = listOf(
-        TipoPincel("pluma", "Pluma", "Tinta con presión: líneas finas y gruesas", 6f, 1f) { StockBrushes.pressurePen() },
-        TipoPincel("rotulador", "Rotulador", "Trazo igual de principio a fin", 8f, 1f) { StockBrushes.marker() },
-        TipoPincel("lapiz", "Lápiz", "Con grano de papel, para bocetar", 4f, 0.9f) { StockBrushes.pencilUnstable },
-        TipoPincel("carboncillo", "Carboncillo", "Grueso y con grano; sombrea con la presión", 18f, 0.85f) {
-            BrushFamily(BrushTip(cornerRounding = 1f, behaviors = listOf(presionTamano(0.35f), presionOpacidad(0.35f))),
-                texturado(GRANO, 64f, BrushPaint.TextureSizeUnit.STROKE_COORDINATES, BrushPaint.TextureMapping.TILING, SelfOverlap.DISCARD), "atlas:carboncillo")
-        },
-        TipoPincel("pincel", "Pincel", "Pincel redondo con presión, para colorear", 28f, 1f) {
-            BrushFamily(BrushTip(cornerRounding = 1f, behaviors = listOf(presionTamano(0.2f))), BrushPaint(emptyList(), emptyList(), SelfOverlap.DISCARD), "atlas:pincel")
-        },
-        TipoPincel("acuarela", "Acuarela", "Manchas suaves que se funden; ve cargando color", 60f, 0.35f) {
-            BrushFamily(BrushTip(cornerRounding = 1f, particleGapDistanceScale = 0.12f, behaviors = listOf(presionTamano(0.5f), presionOpacidad(0.2f))),
-                texturado(PUNTO, 1f, BrushPaint.TextureSizeUnit.BRUSH_SIZE, BrushPaint.TextureMapping.STAMPING, SelfOverlap.ACCUMULATE), "atlas:acuarela")
-        },
-        TipoPincel("aerografo", "Aerógrafo", "Difuminado para sombras, mar y relieve", 90f, 0.25f) {
-            BrushFamily(BrushTip(cornerRounding = 1f, particleGapDistanceScale = 0.08f, behaviors = listOf(presionOpacidad(0.1f))),
-                texturado(PUNTO, 1f, BrushPaint.TextureSizeUnit.BRUSH_SIZE, BrushPaint.TextureMapping.STAMPING, SelfOverlap.ACCUMULATE), "atlas:aerografo")
-        },
-        TipoPincel("tiza", "Tiza", "Textura de tela, para rellenar con grano", 36f, 0.8f) {
-            BrushFamily(BrushTip(cornerRounding = 0.6f, behaviors = listOf(presionTamano(0.4f))),
-                texturado(LIENZO, 48f, BrushPaint.TextureSizeUnit.STROKE_COORDINATES, BrushPaint.TextureMapping.TILING, SelfOverlap.DISCARD), "atlas:tiza")
-        },
-        TipoPincel("resaltador", "Resaltador", "Transparente y de punta plana", 24f, 0.45f) { StockBrushes.highlighter(SelfOverlap.DISCARD) },
-        TipoPincel("discontinua", "Discontinua", "Fronteras, caminos y rutas", 4f, 1f) { StockBrushes.dashedLine() },
-        TipoPincel("puntos", "Puntos", "Línea de puntos (rutas, sendas)", 5f, 1f) {
-            BrushFamily(BrushTip(cornerRounding = 1f, particleGapDistanceScale = 2.2f), BrushPaint(emptyList(), emptyList(), SelfOverlap.ANY), "atlas:puntos")
-        },
-        TipoPincel("goma", "Goma", "Borra con presión", 30f, 1f, goma = true) { StockBrushes.pressurePen() },
-        TipoPincel("goma_suave", "Goma suave", "Borra difuminando", 80f, 0.5f, goma = true) {
-            BrushFamily(BrushTip(cornerRounding = 1f, particleGapDistanceScale = 0.1f, behaviors = listOf(presionOpacidad(0.1f))),
-                texturado(PUNTO, 1f, BrushPaint.TextureSizeUnit.BRUSH_SIZE, BrushPaint.TextureMapping.STAMPING, SelfOverlap.ACCUMULATE), "atlas:goma_suave")
-        },
-    )
-
-    /** Los pinceles importados (de Procreate), guardados en recursos/pinceles. */
-    private val importados = java.util.concurrent.CopyOnWriteArrayList<TipoPincel>()
+    @Volatile var raiz: File? = null
+    private val propios = CopyOnWriteArrayList<DefPincel>()
+    private val importados = CopyOnWriteArrayList<DefPincel>()
+    private val tipos = ConcurrentHashMap<String, Pair<String, TipoPincel>>()
     private val versionEstado = androidx.compose.runtime.mutableIntStateOf(0)
     var version: Int
         get() = versionEstado.intValue
         set(v) { versionEstado.intValue = v }
 
-    fun todos(): List<TipoPincel> = TODOS + importados
-    fun de(clave: String) = todos().firstOrNull { it.clave == clave } ?: TODOS[0]
+    fun almacen(res: Resources): StockTextureBitmapStore = almacen ?: synchronized(this) {
+        almacen ?: StockTextureBitmapStore(res).also { s ->
+            Texturas.todas().forEach { (k, b) -> s.addTexture(k, b) }
+            runCatching { s.preloadStockBrushesTextures(StockBrushes.pencilUnstable) }
+            almacen = s
+        }
+    }
 
-    /** Lee los pinceles importados y registra sus texturas. */
-    fun cargaImportados(recursos: java.io.File, res: Resources) {
+    /** Todos los pinceles (los tuyos primero si cambian uno de serie con el mismo id). */
+    fun defs(): List<DefPincel> {
+        val mios = propios.associateBy { it.id }
+        return Catalogo2.SERIE.map { mios[it.id] ?: it } + propios.filter { p -> Catalogo2.SERIE.none { it.id == p.id } } + importados
+    }
+
+    fun def(clave: String): DefPincel = defs().firstOrNull { it.id == clave } ?: Catalogo2.SERIE[0]
+
+    fun de(clave: String): TipoPincel {
+        val d = def(clave)
+        val firma = d.json().toString()
+        tipos[clave]?.let { if (it.first == firma) return it.second }
+        return d.tipo().also { tipos[clave] = firma to it }
+    }
+
+    /** Lee tus pinceles y los importados. */
+    fun carga(raizAtlas: File, res: Resources) {
+        raiz = raizAtlas
+        runCatching { JSONArray(File(raizAtlas, "pinceles.json").readText()) }.getOrNull()?.let { a ->
+            propios.clear(); for (i in 0 until a.length()) runCatching { propios += DefPincel.de(a.getJSONObject(i)) }
+        }
+        cargaImportados(File(raizAtlas, "recursos"), res)
+    }
+
+    private fun guardaPropios() {
+        val r = raiz ?: return
+        File(r, "pinceles.json").writeText(JSONArray().also { a -> propios.forEach { a.put(it.json()) } }.toString())
+        android.os.Handler(android.os.Looper.getMainLooper()).post { version++ }
+    }
+
+    /** Guarda un pincel cambiado en el estudio (si es de serie, queda como tuyo con el mismo id: «Restablecer» lo devuelve). */
+    fun guarda(d: DefPincel) { propios.removeAll { it.id == d.id }; propios += d.copy(); tipos.remove(d.id); guardaPropios() }
+
+    fun duplica(d: DefPincel): DefPincel {
+        val n = d.copy(id = "m" + System.nanoTime().toString(36), nombre = d.nombre + " (copia)", categoria = "Míos", propio = true)
+        propios += n; guardaPropios(); return n
+    }
+
+    fun restablece(id: String) { propios.removeAll { it.id == id }; tipos.remove(id); guardaPropios() }
+    fun borra(id: String) { propios.removeAll { it.id == id }; importados.removeAll { it.id == id }; tipos.remove(id); guardaPropios() }
+    fun esDeSerie(id: String) = Catalogo2.SERIE.any { it.id == id }
+    fun cambiado(id: String) = esDeSerie(id) && propios.any { it.id == id }
+
+    /** Los pinceles importados (de Procreate): su punta y su grano como texturas. */
+    fun cargaImportados(recursos: File, res: Resources) {
         val al = almacen(res)
-        val l = ArrayList<TipoPincel>()
+        val l = ArrayList<DefPincel>()
         Procreate.dir(recursos).listFiles()?.sortedBy { it.name }?.forEach { d ->
-            val j = runCatching { org.json.JSONObject(java.io.File(d, "pincel.json").readText()) }.getOrNull() ?: return@forEach
+            val j = runCatching { JSONObject(File(d, "pincel.json").readText()) }.getOrNull() ?: return@forEach
             val id = d.name
-            android.graphics.BitmapFactory.decodeFile(java.io.File(d, "forma.png").path)?.let { al.addTexture("$id:forma", it) }
-            android.graphics.BitmapFactory.decodeFile(java.io.File(d, "grano.png").path)?.let { al.addTexture("$id:grano", it) }
-            val tam = (4.0 + j.optDouble("tam", 0.3) * 120.0).toFloat()
-            l += TipoPincel(id, j.optString("n", "Pincel"), "Importado de Procreate", tam, 1f) {
-                runCatching { Procreate.familia(id, j, true) }.getOrElse { Procreate.familia(id, j, false) }
-            }
+            android.graphics.BitmapFactory.decodeFile(File(d, "forma.png").path)?.let { al.addTexture("$id:forma", it) }
+            val conGrano = android.graphics.BitmapFactory.decodeFile(File(d, "grano.png").path)?.let { al.addTexture("$id:grano", it); true } ?: false
+            l += DefPincel(id, j.optString("n", "Pincel"), "Importados", forma = "$id:forma", tamano = (4.0 + j.optDouble("tam", 0.3) * 120.0).toFloat(),
+                presionTamano = 0.6f, espaciado = j.optDouble("esp", 0.1).toFloat().coerceIn(0.02f, 3f), acumula = true,
+                grano = if (conGrano) "$id:grano" else "", escalaGrano = (64.0 + j.optDouble("tex", 0.5) * 448.0).toFloat(), estabilizacion = 0.1f)
         }
         importados.clear(); importados.addAll(l)
         android.os.Handler(android.os.Looper.getMainLooper()).post { version++ }
     }
-
-    fun borraImportado(recursos: java.io.File, id: String, res: Resources) { java.io.File(Procreate.dir(recursos), id).deleteRecursively(); cargaImportados(recursos, res) }
 }

@@ -107,7 +107,8 @@ class EstadoApp(val ctx: Context) {
     var fichaPedida by mutableStateOf<String?>(null)
 
     init {
-        Thread { runCatching { com.gonzalo.atlas.lienzo.Pinceles.cargaImportados(bib.dirRecursos, ctx.resources) } }.start()
+        com.gonzalo.atlas.lienzo.Pinceles.raiz = bib.raiz
+        Thread { runCatching { com.gonzalo.atlas.lienzo.Pinceles.carga(bib.raiz, ctx.resources) } }.start()
         val ultimo = prefs.getString("ultimo", null)
         val m = ultimo?.let { bib.abre(it) } ?: bib.mapas().firstOrNull()?.let { bib.abre(it.id) }
         if (m != null) abreMapa(m, irAlMapa = false)
@@ -175,7 +176,7 @@ class EstadoApp(val ctx: Context) {
         m.papel = 0; m.granoPapel = false; m.verTerritorios = false
         m.capas += CapaInfo("c" + Biblioteca.id36(), "Dibujo")
         m.guardaMeta()
-        editorTaller = Editor(m, ctx.resources).also { it.tamano = 4f }
+        editorTaller = Editor(m, ctx.resources)
         recursoTaller = null
     }
 
@@ -231,9 +232,10 @@ val SECCIONES = listOf("portada" to "Portada", "mapa" to "Mapa", "cronica" to "C
 
 @Composable
 fun App(e: EstadoApp) {
-    Column(Modifier.fillMaxSize().background(T.PAPEL)) {
-        Cabecera(e)
-        Pestanas(e)
+    // Dibujando, el lienzo ocupa toda la pantalla (como en Procreate): «Galería» vuelve a la portada
+    val dibujando = (e.seccion == "mapa" && e.editor != null) || (e.seccion == "taller" && e.editorTaller != null)
+    Column(Modifier.fillMaxSize().background(if (dibujando) O.MESA else T.PAPEL)) {
+        if (!dibujando) { Cabecera(e); Pestanas(e) }
         Box(Modifier.fillMaxWidth().weight(1f)) {
             when (e.seccion) {
                 "portada" -> Portada(e)

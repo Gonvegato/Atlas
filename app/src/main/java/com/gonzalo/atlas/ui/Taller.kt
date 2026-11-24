@@ -68,16 +68,16 @@ fun CabezaTaller(e: EstadoApp) {
     var nombre by remember(id) { mutableStateOf(actual?.nombre ?: "Mi dibujo") }
     var cat by remember(id) { mutableStateOf(actual?.categoria ?: Recursos.CATEGORIAS.first()) }
     var cats by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().background(T.CRUDO).padding(horizontal = 12.dp, vertical = 6.dp)) {
+    Column(Modifier.fillMaxWidth().background(O.CRUDO).padding(horizontal = 12.dp, vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Enlace("← Biblioteca") { e.editorTaller?.guardaYa(); e.cierraDibujo() }
-            Campo(nombre, { nombre = it }, Modifier.weight(1f), "Nombre")
-            Ficha(cat, cats) { cats = !cats }
-            Boton("Guardar en la biblioteca", lleno = true) { e.guardaDibujo(nombre.ifBlank { "Dibujo" }, cat) }
+            EnlaceO("← Biblioteca") { e.editorTaller?.guardaYa(); e.cierraDibujo() }
+            CampoO(nombre, { nombre = it }, Modifier.weight(1f), "Nombre")
+            FichaO(cat, cats) { cats = !cats }
+            BotonO("Guardar en la biblioteca", lleno = true) { e.guardaDibujo(nombre.ifBlank { "Dibujo" }, cat) }
         }
         if (cats) FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 6.dp)) {
-            for (c in Recursos.CATEGORIAS) Ficha(c, c == cat) { cat = c; cats = false }
+            for (c in Recursos.CATEGORIAS) FichaO(c, c == cat) { cat = c; cats = false }
         }
-        if (e.mensaje.isNotBlank()) Text(e.mensaje, style = T.texto(12.sp, T.ACENTO))
+        if (e.mensaje.isNotBlank()) Text(e.mensaje, style = O.texto(12.sp, O.ACENTO))
     }
 }

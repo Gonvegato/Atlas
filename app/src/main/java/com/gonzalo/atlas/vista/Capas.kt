@@ -99,11 +99,13 @@ class Capas(private val ctx: Context) {
     )
 
     init { Letras.carga(ctx) }
+    private var cuadriculaVisible = false
 
     fun dibuja(c: Canvas, mapa: Mapa, v: Vista, centros: List<Centro>, superficies: LongArray, recurso: (String) -> Bitmap?, op: Opciones) {
         val z = v.zoom
         c.save()
         c.concat(v.m)
+        cuadriculaVisible = op.cuadricula
         if (op.cuadricula) cuadricula(c, mapa, v)
         for (k in mapa.rutas) camino(c, k, z, op.seleccion === k)
         op.borrador?.let { b ->
@@ -391,7 +393,8 @@ class Capas(private val ctx: Context) {
         val km = casillaKm(mapa, v)
         val px = (km / mapa.kmPorPx).toFloat()
         val r = v.visible()
-        pLinea.color = 0x33000000; pLinea.strokeWidth = 1f / v.zoom; pLinea.pathEffect = null
+        if (!mapa.infinito && !r.intersect(0f, 0f, mapa.ancho.toFloat(), mapa.alto.toFloat())) return
+        pLinea.color = if (android.graphics.Color.luminance(mapa.papel) < 0.4f && android.graphics.Color.alpha(mapa.papel) > 0) 0x44FFFFFF else 0x38000000; pLinea.strokeWidth = 1.2f * dens / v.zoom; pLinea.pathEffect = null
         var x = floor(r.left / px) * px
         while (x <= r.right) { c.drawLine(x, r.top, x, r.bottom, pLinea); x += px }
         var y = floor(r.top / px) * px
@@ -412,6 +415,11 @@ class Capas(private val ctx: Context) {
         pTexto.textAlign = Paint.Align.LEFT; pTexto.typeface = Letras.interSemi; pTexto.textSize = 11 * dens; pTexto.letterSpacing = 0.05f; pTexto.color = TINTA
         pHalo.textAlign = Paint.Align.LEFT; pHalo.typeface = Letras.interSemi; pHalo.textSize = 11 * dens; pHalo.strokeWidth = 3 * dens; pHalo.letterSpacing = 0.05f; pHalo.color = PAPEL
         val t = Medidas.formatoKm(km).uppercase() + if (!mapa.escalaPuesta) " (SIN FIJAR)" else ""
+        if (cuadriculaVisible) {
+            val ck = casillaKm(mapa, v)
+            val tc = "CASILLA " + Medidas.formatoKm(ck).uppercase() + " · " + Medidas.formatoKm2(ck * ck).uppercase()
+            c.drawText(tc, x0, y0 - 22 * dens, pHalo); c.drawText(tc, x0, y0 - 22 * dens, pTexto)
+        }
         c.drawText(t, x0, y0 - 5 * dens, pHalo); c.drawText(t, x0, y0 - 5 * dens, pTexto)
     }
 

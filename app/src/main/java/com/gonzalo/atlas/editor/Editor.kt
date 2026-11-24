@@ -33,7 +33,7 @@ import kotlin.random.Random
 
 /** Qué hace el lápiz (o el dedo) sobre el mapa. */
 enum class Herramienta(val nombre: String) {
-    PINCEL("Pincel"), GOMA("Goma"), RELLENO("Relleno"), CUENTAGOTAS("Cuentagotas"), TERRITORIO("Territorios"),
+    PINCEL("Pintar"), DIFUMINAR("Difuminar"), GOMA("Borrar"), TRANSFORMAR("Transformar"), RELLENO("Relleno"), CUENTAGOTAS("Cuentagotas"), TERRITORIO("Territorios"),
     LUGAR("Lugares"), ROTULO("Rótulos"), RUTA("Rutas"), SELLO("Tus dibujos"), ELEGIR("Elegir"), REGLA("Regla"), MANO("Mover"), CALCO("Calco"),
 }
 
@@ -48,9 +48,16 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     val lienzo = Lienzo(mapa, res).also { it.carga(enSegundoPlano = true) }
 
     var herramienta by mutableStateOf(Herramienta.PINCEL)
-    var pincel by mutableStateOf("pluma")
-    var goma by mutableStateOf("goma")
+    var pincel by mutableStateOf("lapiz6b")
+    /** El pincel de cada herramienta (como en Procreate: pintar, difuminar y borrar eligen pincel por separado). */
+    var goma by mutableStateOf("aerosuave")
+    var pincelDifuminar by mutableStateOf("redondo")
+    var tamanoDifuminar by mutableStateOf(40f)
+    var fuerzaDifuminar by mutableStateOf(0.6f)
+    /** Transformando la capa activa: la matriz que se le va a aplicar (null si no se está transformando). */
+    var transformacion by mutableStateOf<android.graphics.Matrix?>(null)
     var tamano by mutableStateOf(6f)
+    var opacidadGoma by mutableStateOf(1f)
     var tamanoGoma by mutableStateOf(30f)
     var opacidad by mutableStateOf(1f)
     /** Estabilización del trazo (0: nada, 1: mucha), como la StreamLine de Procreate. */
@@ -88,8 +95,43 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
         programaCentros(0)
     }
 
-    fun tipoPincel() = Pinceles.de(if (herramienta == Herramienta.GOMA) goma else pincel)
-    fun tamanoActual() = if (herramienta == Herramienta.GOMA) tamanoGoma else tamano
+    fun tipoPincel() = Pinceles.de(when (herramienta) { Herramienta.GOMA -> goma; Herramienta.DIFUMINAR -> pincelDifuminar; else -> pincel })
+    fun tamanoActual() = when (herramienta) { Herramienta.GOMA -> tamanoGoma; Herramienta.DIFUMINAR -> tamanoDifuminar; else -> tamano }
+    fun opacidadActual() = when (herramienta) { Herramienta.GOMA -> opacidadGoma; Herramienta.DIFUMINAR -> fuerzaDifuminar; else -> opacidad }
+    fun ponTamano(v: Float) { when (herramienta) { Herramienta.GOMA -> tamanoGoma = v; Herramienta.DIFUMINAR -> tamanoDifuminar = v; else -> tamano = v } }
+    fun ponOpacidad(v: Float) { when (herramienta) { Herramienta.GOMA -> opacidadGoma = v; Herramienta.DIFUMINAR -> fuerzaDifuminar = v; else -> opacidad = v } }
+
+    /** Elige un pincel para la herramienta actual (pintar, difuminar o borrar), con su tamaño y su estabilización. */
+    fun eligePincel(id: String) {
+        val d = Pinceles.def(id)
+        when (herramienta) {
+            Herramienta.GOMA -> { goma = id; tamanoGoma = d.tamano * 3f }
+            Herramienta.DIFUMINAR -> { pincelDifuminar = id; tamanoDifuminar = d.tamano * 2f }
+            else -> { herramienta = Herramienta.PINCEL; pincel = id; tamano = d.tamano; opacidad = d.opacidad }
+        }
+        estabilizacion = d.estabilizacion
+    }
+
+    // ---------------------------------------------------------------- difuminar (trazo en la CPU)
+
+    private var difumino: com.gonzalo.atlas.lienzo.Difumino? = null
+    fun empiezaDifuminar() { val c = lienzo.capaActiva() ?: return; difumino = com.gonzalo.atlas.lienzo.Difumino(lienzo, c, tamanoDifuminar / 2f, fuerzaDifuminar) }
+    fun difumina(xs: FloatArray, ys: FloatArray, ps: FloatArray, alPintar: (android.graphics.RectF) -> Unit) {
+        val d = difumino ?: return
+        lienzo.enHilo { var z: android.graphics.RectF? = null; for (i in xs.indices) d.punto(xs[i], ys[i], ps[i])?.let { r -> if (z == null) z = r else z!!.union(r) }; z?.let { principal.post { alPintar(it) } } }
+    }
+    fun terminaDifuminar() { val d = difumino ?: return; difumino = null; lienzo.enHilo { d.termina()?.let { lienzo.apunta(it) } } }
+
+    // ---------------------------------------------------------------- ajustes y transformar
+
+    fun ajustaColor(tono: Float, sat: Float, brillo: Float) = lienzo.capaActiva()?.let { c -> trabajo("Ajustando…") { com.gonzalo.atlas.lienzo.Ajustes.color(lienzo, c, tono, sat, brillo)?.let { lienzo.apunta(it) } } }
+    fun desenfoca(r: Int) = lienzo.capaActiva()?.let { c -> trabajo("Desenfocando…") { com.gonzalo.atlas.lienzo.Ajustes.desenfoca(lienzo, c, r)?.let { lienzo.apunta(it) } } }
+    fun aplicaTransformacion() {
+        val m = transformacion ?: return; val c = lienzo.capaActiva() ?: return
+        transformacion = null
+        trabajo("Transformando…") { com.gonzalo.atlas.lienzo.Ajustes.transforma(lienzo, c, m)?.let { lienzo.apunta(it) } }
+        herramienta = Herramienta.PINCEL
+    }
 
     fun ponColor(c: Int) {
         color = c

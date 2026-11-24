@@ -12,8 +12,8 @@ android {
         applicationId = "com.gonzalo.atlas"
         minSdk = 29
         targetSdk = 35
-        versionCode = 31
-        versionName = "1.1.0"
+        versionCode = 32
+        versionName = "1.2.0"
     }
     signingConfigs {
         // La firma la pone la familia (Familia-Revista vuelve a firmar con familia.keystore). Aquí, una clave provisional:
@@ -65,6 +65,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("androidx.lifecycle:lifecycle-process:2.8.3")
