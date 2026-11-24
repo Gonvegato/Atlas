@@ -74,7 +74,10 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     fun encuadra(usarGuardada: Boolean = true) {
         val g = mapa.vista
         if (usarGuardada && !g[0].isNaN()) { vista.cx = g[0]; vista.cy = g[1]; vista.zoom = g[2]; vista.giro = if (g[3].isNaN()) 0f else g[3] }
-        else {
+        else if (usarGuardada && mapa.infinito && lz.capas.all { it.teselas.isEmpty() } && lz.terr.isEmpty()) {
+            // Un lienzo infinito recién hecho: a tamaño real (un píxel del lienzo, un píxel de la pantalla), que es como mejor se dibuja
+            vista.cx = 0f; vista.cy = 0f; vista.giro = 0f; vista.zoom = 1f
+        } else {
             val l = lz.limites()
             vista.cx = l.exactCenterX(); vista.cy = l.exactCenterY(); vista.giro = 0f
             vista.zoom = min(width / l.width().toFloat(), height / l.height().toFloat()) * 0.9f
@@ -363,7 +366,8 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 if (esLapiz(e, 0)) lapizVisto = true
                 bajoX = e.x; bajoY = e.y; bajoT = e.eventTime; movido = false; previo = null
                 val h = editor.herramienta
-                val goma = e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
+                // La goma del lápiz (su otro extremo) o su botón apretado: se borra
+                val goma = e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER || (esLapiz(e, 0) && (e.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0)
                 maxDedos = 1; bajoMulti = e.eventTime; multiMovido = false
                 if (!esLapiz(e, 0)) programaCuentagotas(e.x, e.y)
                 gesto = when {

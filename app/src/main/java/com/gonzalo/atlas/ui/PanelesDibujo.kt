@@ -49,8 +49,9 @@ internal fun PanelMarco(ed: Editor) {
     Text("Rodea una zona del lienzo: desde entonces solo se pinta, se borra, se rellena y se ajusta dentro de ella.", style = O.texto(13.sp, O.GRIS))
     EtiquetaO("Forma", tam = 11.sp, color = O.ACENTO)
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        for ((k, n) in listOf("lazo" to "A mano", "rect" to "Rectángulo", "elipse" to "Elipse")) FichaO(n, ed.formaSeleccion == k) { ed.formaSeleccion = k; ed.herramienta = Herramienta.SELECCION }
+        for ((k, n) in listOf("lazo" to "A mano", "rect" to "Rectángulo", "elipse" to "Elipse", "zona" to "Automática")) FichaO(n, ed.formaSeleccion == k) { ed.formaSeleccion = k; ed.herramienta = Herramienta.SELECCION }
     }
+    if (ed.formaSeleccion == "zona") Text("Toca dentro de una zona cerrada por tus líneas (un reino, un lago, una isla): queda seleccionada entera.", style = O.texto(12.sp, O.GRIS))
     EtiquetaO("Lo que rodees", tam = 11.sp, color = O.ACENTO)
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         for ((k, n) in listOf("nueva" to "Sustituye", "sumar" to "Se suma", "restar" to "Se resta")) FichaO(n, ed.operSeleccion == k) { ed.operSeleccion = k; ed.herramienta = Herramienta.SELECCION }

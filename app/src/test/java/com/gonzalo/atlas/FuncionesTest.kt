@@ -69,6 +69,15 @@ class FuncionesTest {
         assertEquals(mar, lz.colorEn(-880, -580)); assertEquals(tierra, Color.rgb(Color.red(lz.colorEn(0, 0)), Color.green(lz.colorEn(0, 0)), Color.blue(lz.colorEn(0, 0))))
         png(Lamina.pinta(ed, 1400, null), "continente_mapa.png")
         png(lz.nitidez.construye(lineas, 3, lineas.fondo.keys.first().let { Lienzo.tx(it) * 8 + 3 }, lineas.fondo.keys.first().let { Lienzo.ty(it) * 8 + 3 }), "continente_cerca.png")
+        // Selección automática: tocar la tierra la selecciona entera (y no el mar)
+        val isla = lz.seleccionZona(0, 0)!!
+        assertTrue(isla.caja.width() > 600f && isla.caja.width() < 1790f)
+        val prueba = android.graphics.Region().apply { setPath(isla.path, android.graphics.Region(-2000, -2000, 2000, 2000)) }
+        assertTrue(prueba.contains(0, 0)); assertTrue(!prueba.contains(-880, -580))
+        // El estado del dibujo se recuerda
+        ed.eligePincel("acuarela"); ed.ponColor(0xFF112233.toInt())
+        val otro = editor(); otro.ponEstado(ed.estado())
+        assertEquals("acuarela", otro.pincel); assertEquals(0xFF112233.toInt(), otro.color); assertEquals(0xFF112233.toInt(), otro.recientes[0])
         lz.deshacer(); espera(lz)
         assertTrue(lz.capa(lineas.info.id)!!.trazos.isEmpty()); assertTrue(lz.capa(color.info.id)!!.teselas.isEmpty())
     }

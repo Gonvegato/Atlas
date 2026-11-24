@@ -125,8 +125,8 @@ object Catalogo2 {
         DefPincel("resaltador", "Resaltador", "Entintado", forma = "plana", tamano = 26f, opacidad = 0.45f, presionTamano = 0f, achatado = 0.4f, angulo = 60f),
         // ---- Pintura
         DefPincel("redondo", "Pincel redondo", "Pintura", dureza = 0.9f, tamano = 30f, presionTamano = 0.6f, presionOpacidad = 0.15f, afiladoFin = 1.5f),
-        DefPincel("plano", "Pincel plano", "Pintura", forma = "t_cerdas", tamano = 40f, presionTamano = 0.3f, presionOpacidad = 0.25f, espaciado = 0.03f, sigueDireccion = true, estabilizacion = 0.05f),
-        DefPincel("oleo", "Óleo", "Pintura", forma = "t_cerdas", tamano = 44f, flujo = 0.9f, presionTamano = 0.35f, presionOpacidad = 0.2f, espaciado = 0.03f, sigueDireccion = true, grano = "g_lienzo", escalaGrano = 150f, profGrano = 0.3f, mezcla = 0.55f, acumula = true, estabilizacion = 0f),
+        DefPincel("plano", "Pincel plano", "Pintura", forma = "t_cerdas", tamano = 40f, presionTamano = 0.3f, presionOpacidad = 0.25f, espaciado = 0.05f, sigueDireccion = true, estabilizacion = 0.05f),
+        DefPincel("oleo", "Óleo", "Pintura", forma = "t_cerdas", tamano = 44f, flujo = 0.9f, presionTamano = 0.35f, presionOpacidad = 0.2f, espaciado = 0.05f, sigueDireccion = true, grano = "g_lienzo", escalaGrano = 150f, profGrano = 0.3f, mezcla = 0.55f, acumula = true, estabilizacion = 0f),
         DefPincel("acrilico", "Acrílico", "Pintura", forma = "t_aspera", tamano = 36f, presionTamano = 0.4f, espaciado = 0.05f, giroAzar = 0.15f, sigueDireccion = true, grano = "g_lienzo", escalaGrano = 160f, profGrano = 0.25f, estabilizacion = 0f),
         DefPincel("gouache", "Gouache", "Pintura", dureza = 0.92f, tamano = 34f, presionTamano = 0.4f, presionOpacidad = 0.35f, grano = "g_papel", escalaGrano = 190f, profGrano = 0.2f),
         DefPincel("mezclador", "Pincel húmedo", "Pintura", dureza = 0.6f, tamano = 40f, opacidad = 0.9f, flujo = 0.5f, presionTamano = 0.3f, presionOpacidad = 0.4f, mezcla = 0.85f, acumula = true, estabilizacion = 0f),

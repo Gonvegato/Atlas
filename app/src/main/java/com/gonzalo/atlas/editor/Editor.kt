@@ -258,6 +258,23 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
 
     fun ponCapa(id: String) { lienzo.activa = id; capaActiva = id }
 
+    // ---------------------------------------------------------------- recordar cómo se estaba dibujando
+
+    /** Lo que se recuerda de una vez para otra: pinceles, tamaños, color, historial de colores y preferencias. */
+    fun estado(): org.json.JSONObject = org.json.JSONObject().put("pincel", pincel).put("goma", goma).put("difuminar", pincelDifuminar)
+        .put("tam", tamano.toDouble()).put("op", opacidad.toDouble()).put("tamGoma", tamanoGoma.toDouble()).put("opGoma", opacidadGoma.toDouble())
+        .put("tamDif", tamanoDifuminar.toDouble()).put("fzaDif", fuerzaDifuminar.toDouble()).put("est", estabilizacion.toDouble()).put("color", color)
+        .put("recientes", org.json.JSONArray(recientes.toList())).put("formas", formasRapidas)
+
+    fun ponEstado(o: org.json.JSONObject) {
+        pincel = o.optString("pincel", pincel); goma = o.optString("goma", goma); pincelDifuminar = o.optString("difuminar", pincelDifuminar)
+        tamano = o.optDouble("tam", tamano.toDouble()).toFloat(); opacidad = o.optDouble("op", opacidad.toDouble()).toFloat()
+        tamanoGoma = o.optDouble("tamGoma", tamanoGoma.toDouble()).toFloat(); opacidadGoma = o.optDouble("opGoma", opacidadGoma.toDouble()).toFloat()
+        tamanoDifuminar = o.optDouble("tamDif", tamanoDifuminar.toDouble()).toFloat(); fuerzaDifuminar = o.optDouble("fzaDif", fuerzaDifuminar.toDouble()).toFloat()
+        estabilizacion = o.optDouble("est", estabilizacion.toDouble()).toFloat(); color = o.optInt("color", color); formasRapidas = o.optBoolean("formas", true)
+        o.optJSONArray("recientes")?.let { a -> if (a.length() > 0) { recientes.clear(); for (i in 0 until a.length()) recientes += a.optInt(i) } }
+    }
+
     // ---------------------------------------------------------------- trazos
 
     /** Formas rápidas: dejar el lápiz quieto al final de un trazo lo convierte en una recta, un arco, una elipse… */
@@ -279,6 +296,11 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
             Herramienta.RELLENO -> trabajo("Rellenando…") {
                 val e = lienzo.rellena(x.toInt(), y.toInt(), color, opacidad)
                 if (e == null) aviso("Ahí hay una línea: toca dentro de una zona") else lienzo.apunta(e)
+            }
+            Herramienta.SELECCION -> if (formaSeleccion == "zona") trabajo("Seleccionando…") {
+                val z = lienzo.seleccionZona(x.toInt(), y.toInt())
+                if (z == null) aviso("Ahí hay una línea, o la zona es demasiado grande: toca dentro de una zona cerrada")
+                else { val actual = marco; val oper = operSeleccion; principal.post { ponMarco(if (oper == "nueva" || actual == null) z else actual.con(z, oper == "restar")) } }
             }
             Herramienta.CUENTAGOTAS -> lienzo.enHilo { val c = lienzo.colorEn(x.toInt(), y.toInt()); principal.post { ponColor(c or (0xFF shl 24)); herramienta = Herramienta.PINCEL } }
             Herramienta.TERRITORIO -> when (modoTerritorio) {
@@ -417,7 +439,8 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     }
 
     fun arrastra(): Boolean = when (herramienta) {
-        Herramienta.RUTA, Herramienta.REGLA, Herramienta.SECCION, Herramienta.SELECCION -> true
+        Herramienta.RUTA, Herramienta.REGLA, Herramienta.SECCION -> true
+        Herramienta.SELECCION -> formaSeleccion != "zona"
         Herramienta.TERRITORIO -> modoTerritorio != ModoTerritorio.ZONA
         Herramienta.ELEGIR -> seleccion != null
         else -> false

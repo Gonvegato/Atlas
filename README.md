@@ -4,6 +4,18 @@ App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma fir
 Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
 etiqueta `v0.15.0`.
 
+## 2.1.0
+
+- **Selección automática**: en Selección → Automática, toca dentro de una zona cerrada por tus líneas (un reino, una isla,
+  un lago) y queda seleccionada entera, para pintarla por dentro con cualquier pincel sin salirte. Se suma y se resta
+  como las demás.
+- **Se acuerda de cómo dibujabas**: el pincel, la goma, los tamaños, el color y su historial, la estabilización y las
+  preferencias (dibujar con el dedo, girar el lienzo) se conservan de un mapa a otro y al volver a abrir la app.
+- El botón del lápiz, apretado, borra. Un lienzo infinito nuevo se abre a tamaño real (un píxel del lienzo, uno de la
+  pantalla). En los lienzos con tamaño ya no se pinta fuera del borde.
+- Medido en las pruebas: lo que se ve con el lápiz apoyado y lo que queda al soltarlo son la misma imagen (solo se
+  completa la punta final del trazo).
+
 ## 2.0.0 — motor de dibujo propio
 
 - **Motor de pinceles nuevo, hecho para ATLAS** (se quita androidx.ink). Un trazo es una fila de estampas de la punta del

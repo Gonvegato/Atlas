@@ -398,6 +398,25 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         return n
     }
 
+    /**
+     * Selección automática: la zona cerrada por tus líneas que contiene (x, y), como selección (para pintarla por dentro con
+     * cualquier pincel sin salirse). Null si ahí hay una línea o la zona es demasiado grande.
+     */
+    fun seleccionZona(x: Int, y: Int): Seleccion? {
+        val m = zona(x, y, 110, limitesRelleno(x, y), 2) ?: return null
+        var x0 = Int.MAX_VALUE; var y0 = Int.MAX_VALUE; var x1 = Int.MIN_VALUE; var y1 = Int.MIN_VALUE
+        for (k in m.keys) { x0 = min(x0, tx(k)); y0 = min(y0, ty(k)); x1 = max(x1, tx(k)); y1 = max(y1, ty(k)) }
+        val w = (x1 - x0 + 1) * L; val h = (y1 - y0 + 1) * L
+        if (w.toLong() * h > 6000L * 6000L) return null
+        val campo = FloatArray(w * h) { -1f }
+        for ((k, mask) in m) { val ox = (tx(k) - x0) * L; val oy = (ty(k) - y0) * L; for (i in mask.indices) if (mask[i]) campo[(oy + i / L) * w + ox + i % L] = 1f }
+        val contornos = com.gonzalo.atlas.motor.Continente.costas(campo, w, h).map { c ->
+            val n = com.gonzalo.atlas.motor.Continente.puntos(c)
+            FloatArray(n * 2) { i -> c[i] + 0.5f + (if (i % 2 == 0) x0 * L else y0 * L) }
+        }
+        return Seleccion(contornos).takeIf { !it.vacia }
+    }
+
     /** Borra de la capa lo que cae dentro de la selección. */
     fun borraSeleccion(c: CapaPx): Edicion? {
         val sel = seleccion?.takeIf { !it.vacia } ?: return null
@@ -463,7 +482,10 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     /** Empieza un trazo en la capa activa (o null si no se puede pintar en ella). [nivel]: ver [Motor.nivel]. */
     fun empiezaTrazo(def: DefPincel, color: Int, tam: Float, opacidad: Float, modo: Int, u: Float, lapiz: Boolean, nivel: Int, espejos: List<Matrix> = listOf(Matrix())): TrazoVivo? {
         val c = capaActiva() ?: return null
-        val v = TrazoVivo(this, c, def, color, tam, opacidad, modo, (System.nanoTime() and 0x7fffffff).toInt(), u, lapiz, nivel, mapa.seccionActivaRect(), seleccion?.takeIf { !it.vacia }, espejos)
+        // Solo se pinta dentro de la sección activa y, si el lienzo tiene tamaño, dentro de él
+        var rec = mapa.seccionActivaRect()
+        if (!mapa.infinito) { val l = RectF(0f, 0f, mapa.ancho.toFloat(), mapa.alto.toFloat()); if (rec == null) rec = l else if (!rec.intersect(l)) rec.setEmpty() }
+        val v = TrazoVivo(this, c, def, color, tam, opacidad, modo, (System.nanoTime() and 0x7fffffff).toInt(), u, lapiz, nivel, rec, seleccion?.takeIf { !it.vacia }, espejos)
         vivos += v
         return v
     }

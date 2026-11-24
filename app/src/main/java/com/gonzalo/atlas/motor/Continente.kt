@@ -35,14 +35,14 @@ object Continente {
             var x = (i + 0.5f - w / 2f) / lado * 2f; var y = (j + 0.5f - h / 2f) / lado * 2f
             // Deformar el espacio da penínsulas, golfos y costas que no parecen manchas redondas
             val dx = deforma.fbm(x * 1.3f + 11.3f, y * 1.3f - 7.1f, 3); val dy = deforma.fbm(x * 1.3f - 3.7f, y * 1.3f + 19.9f, 3)
-            x += dx * 0.32f; y += dy * 0.32f
+            x += dx * 0.26f; y += dy * 0.26f
             val cu = (u - 0.5f) * 2f + dx * 0.25f; val cv = (v - 0.5f) * 2f + dy * 0.25f
             val base = r.fbm(x * 1.9f, y * 1.9f, 6, gan)
             val detalle = fino.fbm(x * 7.5f, y * 7.5f, 4, 0.5f)
             val forma: Float
             val peso: Float
             when (p.tipo) {
-                "dos" -> { val a1 = 1f - hypot(cu + 0.5f, (cv - d1y) * 0.9f) * 2.1f; val a2 = 1f - hypot(cu - 0.5f, (cv - d2y) * 0.9f) * 2.1f; forma = max(a1, a2); peso = 0.5f }
+                "dos" -> { val a1 = 1f - hypot(cu + 0.5f, (cv - d1y) * 0.9f) * 2.1f; val a2 = 1f - hypot(cu - 0.5f, (cv - d2y) * 0.9f) * 2.1f; forma = max(a1, a2); peso = 0.62f }
                 "archipielago" -> { forma = 0.15f - hypot(cu, cv) * 0.3f; peso = 0.9f }
                 "interior" -> { forma = 1f - abs(hypot(cu, cv) - 0.6f) * 3.2f; peso = 0.42f }
                 "costa" -> { val g = when (lado0) { 0 -> cu; 1 -> -cu; 2 -> cv; else -> -cv }; forma = g * 1.1f; peso = 0.5f }

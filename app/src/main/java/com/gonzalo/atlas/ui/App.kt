@@ -121,19 +121,26 @@ class EstadoApp(val ctx: Context) {
     /** La mesa de un editor (con el contexto de la actividad: la de la pantalla). Se rehace si cambia la actividad. */
     fun mesaDe(ed: Editor, actividad: Context): Mesa {
         mesas[ed]?.let { if (it.context === actividad) return it; it.cierra() }
-        return Mesa(actividad, ed) { recursos.bitmap(it) }.also { mesas[ed] = it }
+        return Mesa(actividad, ed) { recursos.bitmap(it) }.also { mesas[ed] = it; it.dedoDibuja = prefs.getBoolean("dedo", false); it.girar = prefs.getBoolean("girar", true) }
     }
     fun mesaAbierta(ed: Editor): Mesa? = mesas[ed]
 
     fun abreMapa(m: Mapa, irAlMapa: Boolean = true) {
         editor?.let { if (it.mapa.id == m.id) { if (irAlMapa) { seccion = "mapa"; dibujando = true }; return }; cierraEditor(it) }
-        editor = Editor(m, ctx.resources) { listas++; cuenta.programaSubida(this) }
+        editor = Editor(m, ctx.resources) { listas++; cuenta.programaSubida(this) }.also { recuerda(it) }
         prefs.edit().putString("ultimo", m.id).apply()
         if (irAlMapa) { seccion = "mapa"; dibujando = true }
         listas++
     }
 
-    private fun cierraEditor(ed: Editor) { mesas.remove(ed)?.cierra(); ed.cierra() }
+    private fun cierraEditor(ed: Editor) { apunta(ed); mesas.remove(ed)?.cierra(); ed.cierra() }
+
+    /** Los pinceles, tamaños y colores con los que se estaba dibujando: se recuerdan de un mapa a otro y al volver a abrir la app. */
+    private fun recuerda(ed: Editor) { prefs.getString("dibujo", null)?.let { t -> runCatching { ed.ponEstado(org.json.JSONObject(t)) } } }
+    private fun apunta(ed: Editor) {
+        val m = mesas[ed]
+        prefs.edit().putString("dibujo", ed.estado().toString()).apply { if (m != null) { putBoolean("dedo", m.dedoDibuja); putBoolean("girar", m.girar) } }.apply()
+    }
 
     fun abreMapa(id: String, irAlMapa: Boolean = true) { bib.abre(id)?.let { pila.clear(); abreMapa(it, irAlMapa) } }
 
@@ -178,14 +185,14 @@ class EstadoApp(val ctx: Context) {
         m.papel = 0; m.granoPapel = false; m.verTerritorios = false
         m.capas += CapaInfo("c" + Biblioteca.id36(), "Dibujo")
         m.guardaMeta()
-        editorTaller = Editor(m, ctx.resources)
+        editorTaller = Editor(m, ctx.resources).also { recuerda(it) }
         recursoTaller = null
     }
 
     fun abreDibujo(id: String) {
         editorTaller?.let { cierraEditor(it) }
         val m = Mapa.lee(dirTaller(id)) ?: run { mensaje = "Ese dibujo no tiene sus capas guardadas: solo se puede usar."; return }
-        editorTaller = Editor(m, ctx.resources)
+        editorTaller = Editor(m, ctx.resources).also { recuerda(it) }
         recursoTaller = id
     }
 
@@ -227,7 +234,7 @@ class EstadoApp(val ctx: Context) {
         }
     }
 
-    fun alSalir() { mesas.values.forEach { it.recuerdaVista() }; editor?.guardaYa(); editorTaller?.guardaYa() }
+    fun alSalir() { mesas.values.forEach { it.recuerdaVista() }; (editorTaller ?: editor)?.let { apunta(it) }; editor?.guardaYa(); editorTaller?.guardaYa() }
 }
 
 val SECCIONES = listOf("portada" to "Portada", "mapa" to "Mapas", "cronica" to "Crónica", "taller" to "Taller", "mundo" to "Mundo")

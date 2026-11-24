@@ -105,6 +105,18 @@ class PantallaMapaTest {
         pulsa("Mundo"); captura("mapa_mundo.png")
         ed.herramienta = com.gonzalo.atlas.editor.Herramienta.TERRITORIO
         captura("mapa_territorios.png")
+        // De cerca (4×): las teselas nítidas y un trazo a medio dibujar (aún sin soltar), con simetría
+        ed.herramienta = com.gonzalo.atlas.editor.Herramienta.PINCEL
+        pulsa("Mundo")
+        val mesa = e.mesaAbierta(ed)!!
+        compose.runOnUiThread { mesa.irA(1010f, 900f, 4f); ed.ponSimetria("vertical", 1010f, 900f) }
+        val vivo = lz.empiezaTrazo(com.gonzalo.atlas.lienzo.Pinceles.def("lapiz6b"), 0xFF7A1F1F.toInt(), 5f, 1f, 0, 0.5f, true, com.gonzalo.atlas.lienzo.Motor.nivel(4f), ed.espejos())!!
+        vivo.agrega(FloatArray(20 * 6) { i -> val k = i / 6; when (i % 6) { 0 -> 900f + k * 5f; 1 -> 860f + kotlin.math.sin(k * 0.5f) * 14f; 2 -> 0.3f + k * 0.03f; 5 -> k * 16f; else -> 0.3f } })
+        espera(lz)
+        repeat(4) { captura("mapa_cerca.png") }
+        vivo.termina { ed2, _ -> ed2?.let { lz.apunta(it) } }; espera(lz)
+        repeat(3) { captura("mapa_cerca2.png") }
+        org.junit.Assert.assertTrue(lz.capaActiva()!!.trazos.any { it.datos.ramas.size == 2 })
     }
 }
 

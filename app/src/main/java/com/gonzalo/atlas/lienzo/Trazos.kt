@@ -272,13 +272,14 @@ class Nitidez(private val lz: Lienzo) {
         en.uso = ++reloj
         if (en.sucia && !en.encolada) {
             en.encolada = true
-            hilos.execute {
+            // (Si el mapa ya se ha cerrado, los hilos no aceptan más trabajo: no pasa nada)
+            runCatching { hilos.execute {
                 en.sucia = false
                 val b = runCatching { construye(c, e, tx, ty) }.getOrNull()
                 if (b != null) en.bmp = b
                 en.encolada = false
                 alListo.forEach { it() }
-            }
+            } }.onFailure { en.encolada = false }
         }
         if (cache.size > 520) recorta()
         return en.bmp

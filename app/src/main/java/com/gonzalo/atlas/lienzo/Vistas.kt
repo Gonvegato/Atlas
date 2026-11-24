@@ -97,12 +97,13 @@ class Piramide(private val lz: Lienzo, private val velo: VeloTerritorios, privat
         val e = cache.getOrPut(k) { E(null, true, false) }
         if ((e.sucia || e.bmp == null) && !e.encolada) {
             e.encolada = true
-            hilo.execute {
+            runCatching { hilo.execute {
                 e.sucia = false
                 val b = runCatching { construye(n, tx, ty) }.getOrNull()
-                e.bmp = b; e.encolada = false
+                if (b != null) e.bmp = b
+                e.encolada = false
                 principal.post(alListo)
-            }
+            } }.onFailure { e.encolada = false }
         }
         if (cache.size > 900) recorta()
         return e.bmp
