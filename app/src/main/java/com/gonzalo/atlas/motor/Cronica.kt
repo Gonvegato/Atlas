@@ -2,7 +2,6 @@ package com.gonzalo.atlas.motor
 
 import org.json.JSONObject
 import java.io.File
-import kotlin.math.abs
 
 /**
  * La crónica de un mundo: su enciclopedia (reinos e imperios, personajes, ciudades, regiones, pueblos, historia, fe…). Cada
@@ -66,28 +65,8 @@ class Cronica(private val archivo: File) {
     }
 }
 
-/** Cuentas sobre el mapa: superficies, lo que hay dentro de cada reino… */
+/** Cuentas: superficies y formato de distancias. */
 object Medidas {
-    class Reinos(val pixeles: LongArray, val tierra: Long)
-
-    /** Píxeles de cada reino (índice = id) en todo el mapa (finito) o en lo tocado (infinito). */
-    fun reinos(m: Mapa): Reinos {
-        val px = LongArray(256); var tierra = 0L
-        val l = m.limites()
-        for (cy in (l[1] shr Trozo.BITS) until ((l[3] + Trozo.LADO - 1) shr Trozo.BITS)) for (cx in (l[0] shr Trozo.BITS) until ((l[2] + Trozo.LADO - 1) shr Trozo.BITS)) {
-            // Para no generar trozos enteros solo para contar: se cuenta en el nivel 2 (1 de cada 16 píxeles) si no está tocado
-            val t = m.trozoSiEsta(cx, cy)
-            if (t != null || Trozo.clave(cx, cy) in m.clavesEnDisco()) {
-                val tt = t ?: m.trozo(cx, cy)!!
-                for (i in 0 until Trozo.N) { if (tt.alt[i] >= 0f) { tierra++; px[tt.reino[i].toInt() and 255]++ } }
-            } else {
-                val mm = m.mip(cx, cy, 2) ?: continue
-                for (i in mm.alt.indices) if (mm.alt[i] >= 0f) { tierra += 16; px[mm.reino[i].toInt() and 255] += 16 }
-            }
-        }
-        return Reinos(px, tierra)
-    }
-
     fun km2(m: Mapa, pixeles: Long): Double = pixeles.toDouble() * m.kmPorPx * m.kmPorPx
 
     fun formatoKm2(v: Double): String = when {
@@ -105,12 +84,4 @@ object Medidas {
         val f = v / e
         return e * when { f < 1.5 -> 1.0; f < 3.5 -> 2.0; f < 7.5 -> 5.0; else -> 10.0 }
     }
-
-    /** Los lugares dentro de un reino. */
-    fun lugaresDe(m: Mapa, reino: Int) = m.lugares.filter { m.dentroPx(it.x.toInt(), it.y.toInt()) && m.reino(it.x.toInt(), it.y.toInt()) == reino }
-
-    /** El reino más cercano en el que está un punto (0 si ninguno). */
-    fun reinoEn(m: Mapa, x: Float, y: Float) = if (m.dentroPx(x.toInt(), y.toInt())) m.reino(x.toInt(), y.toInt()) else 0
-
-    @Suppress("unused") private fun nada() = abs(0)
 }

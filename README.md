@@ -1,6 +1,49 @@
-# ATLAS. — Cartografía fantástica 2D y 3D (Godot 4)
+# ATLAS. — Tus mapas de fantasía, dibujados por ti
 
-Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
+App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma firma y se actualiza sola como las demás.
+Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
+etiqueta `v0.15.0`.
+
+## 1.0.0 — la nueva ATLAS
+
+ATLAS no genera nada: **tú dibujas el mapa** y ATLAS te da las herramientas de dibujo y todo lo de un mapa encima.
+
+- **Dibujo.** Trazo de baja latencia con la biblioteca Ink de Google: el trazo en curso se pinta en el búfer delantero de la
+  pantalla y se predice por dónde va el lápiz. Pinceles con presión: pluma, rotulador, lápiz con grano, carboncillo,
+  pincel, acuarela, aerógrafo, tiza, resaltador, línea discontinua y de puntos; goma y goma suave (también la goma del
+  lápiz). La opacidad es por trazo (no se oscurece donde se cruza). Relleno por zonas cerradas por tus líneas,
+  cuentagotas, color (tono, saturación y brillo, recientes y paletas de mapa).
+- **Capas.** Tantas como quieras, con opacidad, modos de fusión (multiplicar, pantalla, superponer, luz suave…), bloqueo de
+  transparencia, capa de referencia (el relleno y los territorios miran sus líneas), ordenar, duplicar, combinar, vaciar
+  e importar una imagen (un boceto, una foto, un mapa de otra app).
+- **Lienzo.** Grande (4.096), apaisado, vertical, enorme (8.192), pequeño o **infinito**; papeles (pergamino, papel,
+  crudo, viejo, gris, noche, transparente) con grano. Mover, acercar y girar con dos dedos; con el lápiz, el lápiz dibuja y
+  los dedos mueven (la palma no pinta). Barra de tamaño y opacidad a la izquierda, deshacer y rehacer (60 pasos).
+- **Territorios.** Dibujas las fronteras y tocas dentro de cada zona para decir de quién es (o lo pintas, o lo quitas).
+  Imperios, reinos, principados, ducados, condados, marcas, provincias, repúblicas, ciudades-estado, tribus…, cada uno
+  con nombre, color y de quién depende. Se ven con un velo de su color y su borde; se puede colorear por imperios, por
+  reinos o todo. Su nombre se escribe solo en su sitio (más grande cuanto más grande y más alto en la jerarquía) y se
+  puede mover, girar, curvar y escalar. Su superficie en km².
+- **Encima del dibujo.** Lugares (capital, ciudad, villa, aldea, puerto, castillo, fortaleza, templo, mina, ruinas…),
+  rótulos (con letra, tamaño, espaciado, giro y curva), rutas (camino, calzada, sendero, ruta por mar, frontera, viaje con
+  flecha) con su largo, la leyenda (imperios y reinos, tipos de lugar y escala), escala, norte, cuadrícula en km y regla.
+- **Taller.** Dibujas un elemento suelto (una montaña, un árbol, un castillo, una rosa de los vientos), lo guardas en tu
+  biblioteca y lo pones en el mapa tantas veces como quieras (y lo mueves, giras, escalas y volteas).
+- **Mundos.** La portada, como en la familia: el mapa en el que estás y tus mundos, cada uno con varios mapas
+  independientes que luego se pueden **unir** (a la derecha, izquierda, encima o debajo; capas, territorios, lugares y
+  rótulos van a su sitio).
+- **Crónica.** La enciclopedia de cada mundo: reinos e imperios, personajes, ciudades y lugares, regiones, pueblos,
+  historia, religiones y otros, con sus campos. Los territorios y lugares del mapa salen solos; su ficha enseña lo que el
+  mapa sabe (superficie, de quién dependen, qué tienen dentro) y lleva al mapa.
+- **Familia.** La cuenta de siempre: si ya has entrado en otra app de la familia, ATLAS entra sola (y si entras aquí, se la
+  da a las demás). Los mapas se suben a la cuenta (ligados a tus novelas de Nova, con la lámina para el visor de los
+  escritos) y se bajan en otro dispositivo. Se actualiza sola desde «versiones» de tu Google Drive.
+- **Exportar** el mapa entero en PNG (a Imágenes/ATLAS).
+
+Compilar: `./gradlew :app:assembleRelease` (JDK 17, SDK 35). Pruebas: `./gradlew :app:testDebugUnitTest` (Robolectric;
+`-Dcapturas=<carpeta>` guarda capturas de las pantallas y del mapa).
+
+# Historia de la versión de Godot (hasta la 0.15.0)
 
 ## 0.15.0
 

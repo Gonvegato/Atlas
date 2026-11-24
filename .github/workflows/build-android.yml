@@ -1,158 +1,84 @@
-name: Compilar ATLAS. Android APK
+name: Compilar ATLAS. (Android)
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
+  pull_request:
   workflow_dispatch:
 
-env:
-  GODOT_VERSION: 4.7.2-stable
-  TEMPLATE_VERSION: 4.7.2.stable
-
 jobs:
-  build-android:
+  android:
     runs-on: ubuntu-latest
     # Para publicar cada versión como «release» (dirección fija del APK, que Familia-Revista descarga y firma).
     permissions:
       contents: write
-
     steps:
-      - name: Descargar código del repositorio
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configurar Java 17 (requerido para firmar APK)
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Instalar Godot 4.7.2 y plantillas de exportación
-        run: |
-          wget -q "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip"
-          unzip -q "Godot_v${GODOT_VERSION}_linux.x86_64.zip"
-          sudo mv "Godot_v${GODOT_VERSION}_linux.x86_64" /usr/local/bin/godot
-          sudo chmod +x /usr/local/bin/godot
+      - uses: android-actions/setup-android@v3
 
-          wget -q "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz"
-          mkdir -p "$HOME/.local/share/godot/export_templates/${TEMPLATE_VERSION}"
-          unzip -q "Godot_v${GODOT_VERSION}_export_templates.tpz" -d /tmp/godot_templates
-          mv /tmp/godot_templates/templates/* "$HOME/.local/share/godot/export_templates/${TEMPLATE_VERSION}/"
+      - uses: gradle/actions/setup-gradle@v4
 
-      - name: Preparar la firma (clave fija de los secretos o, si no hay, una de depuración)
+      - name: Preparar la firma provisional (o la de la familia, si hay FIRMA_B64)
         env:
           FIRMA_B64: ${{ secrets.FIRMA_B64 }}
-          KS_B64: ${{ secrets.ATLAS_KEYSTORE_BASE64 }}
-          KS_PASS: ${{ secrets.ATLAS_KEYSTORE_PASSWORD }}
-          KS_ALIAS: ${{ secrets.ATLAS_KEY_ALIAS }}
-          KEY_PASS: ${{ secrets.ATLAS_KEY_PASSWORD }}
         run: |
-          mkdir -p "$HOME/.config/godot"
-          # Opción 1 (la más cómoda): el mismo secreto FIRMA_B64 que usa Familia-Revista (un .zip o .tar.gz en base64 con
-          # familia.keystore y claves.properties, alias «familia»).
+          # Opción 1: el secreto FIRMA_B64 de la familia (un .zip o .tar.gz en base64 con familia.keystore y claves.properties)
           if [ -n "$FIRMA_B64" ]; then
-            printf '%s' "$FIRMA_B64" | tr -d '\r\n ' | base64 -d > "${RUNNER_TEMP}/firma.bin"
-            mkdir -p "${RUNNER_TEMP}/firma_ext"
-            TIPO=$(file -b "${RUNNER_TEMP}/firma.bin")
-            if echo "$TIPO" | grep -qi "Zip archive"; then
-              unzip -qo "${RUNNER_TEMP}/firma.bin" -d "${RUNNER_TEMP}/firma_ext"
-            else
-              tar -xf "${RUNNER_TEMP}/firma.bin" -C "${RUNNER_TEMP}/firma_ext"
+            printf '%s' "$FIRMA_B64" | tr -d '\r\n ' | base64 -d > "$RUNNER_TEMP/firma.bin"
+            mkdir -p "$RUNNER_TEMP/firma"
+            if file -b "$RUNNER_TEMP/firma.bin" | grep -qi zip; then unzip -qo "$RUNNER_TEMP/firma.bin" -d "$RUNNER_TEMP/firma"; else tar -xf "$RUNNER_TEMP/firma.bin" -C "$RUNNER_TEMP/firma"; fi
+            KS=$(find "$RUNNER_TEMP/firma" -name familia.keystore | head -n1); PROPS=$(find "$RUNNER_TEMP/firma" -name claves.properties | head -n1)
+            if [ -n "$KS" ] && [ -n "$PROPS" ]; then
+              PASS=$(grep '^familia.pass=' "$PROPS" | head -n1 | cut -d= -f2- | tr -d '\r'); echo "::add-mask::$PASS"
+              { echo "ATLAS_KS=$KS"; echo "ATLAS_KS_PASS=$PASS"; echo "ATLAS_KS_ALIAS=familia"; } >> "$GITHUB_ENV"
+              echo "Firma: la de la familia."
+              exit 0
             fi
-            KS_FILE=$(find "${RUNNER_TEMP}/firma_ext" -name familia.keystore | head -n 1)
-            PROPS=$(find "${RUNNER_TEMP}/firma_ext" -name claves.properties | head -n 1)
-            if [ -n "$KS_FILE" ] && [ -n "$PROPS" ]; then
-              KS_PASS=$(grep '^familia.pass=' "$PROPS" | head -n 1 | cut -d= -f2- | tr -d '\r')
-              echo "::add-mask::$KS_PASS"
-              KS_ALIAS=familia
-              KEY_PASS="$KS_PASS"
-              KS_B64=$(base64 -w0 "$KS_FILE")
-            else
-              echo "::warning::FIRMA_B64 no trae familia.keystore y claves.properties."
-            fi
-            rm -rf "${RUNNER_TEMP}/firma.bin" "${RUNNER_TEMP}/firma_ext"
           fi
-          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ] && [ -n "$KS_ALIAS" ]; then
-            # Firma fija: la misma en cada compilación, así las versiones nuevas se instalan encima sin perder los mapas.
-            echo "$KS_B64" | base64 -d > "${RUNNER_TEMP}/origen.keystore"
-            # Godot exige que la contraseña del almacén y la de la clave sean la misma: se copia la clave a un PKCS12 nuevo
-            # (solo en esta máquina, que se borra al terminar) con una sola contraseña.
-            keytool -importkeystore -noprompt \
-              -srckeystore "${RUNNER_TEMP}/origen.keystore" -srcstorepass "$KS_PASS" \
-              -srcalias "$KS_ALIAS" -srckeypass "${KEY_PASS:-$KS_PASS}" \
-              -destkeystore "${RUNNER_TEMP}/release.p12" -deststoretype PKCS12 \
-              -deststorepass "$KS_PASS" -destkeypass "$KS_PASS" -destalias "$KS_ALIAS"
-            rm -f "${RUNNER_TEMP}/origen.keystore"
-            echo "ATLAS_MODO=release" >> "$GITHUB_ENV"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=${RUNNER_TEMP}/release.p12" >> "$GITHUB_ENV"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=${KS_ALIAS}" >> "$GITHUB_ENV"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=${KS_PASS}" >> "$GITHUB_ENV"
-            echo "Firma: clave fija de los secretos (release)."
-          else
-            # Sin la clave de la familia aquí: versión final (no de depuración) firmada con una clave de usar y tirar.
-            # Familia-Revista, que sí tiene la clave de la familia, la vuelve a firmar (apksigner sustituye la firma).
-            KS_PASS="$(openssl rand -hex 16)"
-            echo "::add-mask::$KS_PASS"
-            keytool -genkey -noprompt -keystore "${RUNNER_TEMP}/release.p12" -storetype PKCS12 -storepass "$KS_PASS" \
-              -alias atlas -keypass "$KS_PASS" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=ATLAS sin firmar"
-            echo "ATLAS_MODO=release" >> "$GITHUB_ENV"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=${RUNNER_TEMP}/release.p12" >> "$GITHUB_ENV"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=atlas" >> "$GITHUB_ENV"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=${KS_PASS}" >> "$GITHUB_ENV"
-            echo "::notice::Sin FIRMA_B64: APK final con clave provisional (Familia-Revista lo firma con la de la familia)."
-          fi
-          cat <<EOF > "$HOME/.config/godot/editor_settings-4.tres"
-          [gd_resource type="EditorSettings" format=3]
+          # Si no: una clave de usar y tirar. Familia-Revista, que tiene la clave de la familia, la vuelve a firmar.
+          PASS="$(openssl rand -hex 16)"; echo "::add-mask::$PASS"
+          keytool -genkey -noprompt -keystore "$RUNNER_TEMP/provisional.p12" -storetype PKCS12 -storepass "$PASS" \
+            -alias atlas -keypass "$PASS" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=ATLAS sin firmar"
+          { echo "ATLAS_KS=$RUNNER_TEMP/provisional.p12"; echo "ATLAS_KS_PASS=$PASS"; echo "ATLAS_KS_ALIAS=atlas"; } >> "$GITHUB_ENV"
+          echo "::notice::APK con clave provisional (Familia-Revista lo firma con la de la familia)."
 
-          [resource]
-          export/android/java_sdk_path = "${JAVA_HOME}"
-          export/android/android_sdk_path = "${ANDROID_HOME}"
-          EOF
-          cp "$HOME/.config/godot/editor_settings-4.tres" "$HOME/.config/godot/editor_settings-4.7.tres"
+      - name: Pruebas
+        run: ./gradlew --no-daemon :app:testDebugUnitTest
 
-      - name: Pre-importar y verificar scripts (headless)
+      - name: Compilar el APK final
         run: |
-          godot --headless --path . --import --quit || true
-          godot --headless --path . --quit-after 3 > smoke.log 2>&1 || true
-          cat smoke.log
-          if grep -E "Parse Error|SCRIPT ERROR" smoke.log; then
-            echo "ERROR: Se detectaron errores en los scripts GDScript."
-            exit 1
-          fi
-
-      - name: Exportar ATLAS-android.apk
-        run: |
-          mkdir -p build
-          if [ "$ATLAS_MODO" = "release" ]; then
-            godot --headless --verbose --path . --export-release "Android" "build/ATLAS-android.apk"
-          else
-            godot --headless --verbose --path . --export-debug "Android" "build/ATLAS-android.apk"
-          fi
-          # La huella del certificado (para comprobar que es la de la familia).
+          ./gradlew --no-daemon :app:assembleRelease
+          APK=app/build/outputs/apk/release/app-release.apk
           BT="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)"
-          "${BT}apksigner" verify --print-certs build/ATLAS-android.apk | grep -i "SHA-256" || true
-          ls -lh build/ATLAS-android.apk
+          "${BT}apksigner" verify --print-certs "$APK" | grep -i "SHA-256" || true
+          mkdir -p salida && cp "$APK" salida/ATLAS.apk
+          ls -lh salida/ATLAS.apk
 
-      - name: Subir APK descargable
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ATLAS-android-apk
-          path: build/ATLAS-android.apk
+          name: ATLAS-apk
+          path: salida/ATLAS.apk
           retention-days: 30
 
       - name: Publicar la versión (releases/latest/download/ATLAS.apk)
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VER=$(grep -m1 '^config/version=' project.godot | cut -d'"' -f2)
-          CODE=$(grep -m1 '^version/code=' export_presets.cfg | cut -d= -f2)
-          cp build/ATLAS-android.apk build/ATLAS.apk
-          APK_SHA=$(sha256sum build/ATLAS.apk | cut -d' ' -f1)
+          VER=$(grep -m1 'versionName = ' app/build.gradle.kts | cut -d'"' -f2)
+          CODE=$(grep -m1 'versionCode = ' app/build.gradle.kts | tr -dc '0-9')
+          APK_SHA=$(sha256sum salida/ATLAS.apk | cut -d' ' -f1)
           # sha: el commit de git; apk_sha256: la huella del APK publicado (para comprobar la descarga).
-          printf '{"version": "%s", "code": %s, "sha": "%s", "apk_sha256": "%s"}\n' "$VER" "$CODE" "$GITHUB_SHA" "$APK_SHA" > build/ATLAS.json
+          printf '{"version": "%s", "code": %s, "sha": "%s", "apk_sha256": "%s"}\n' "$VER" "$CODE" "$GITHUB_SHA" "$APK_SHA" > salida/ATLAS.json
           if gh release view "v$VER" >/dev/null 2>&1; then
-            gh release upload "v$VER" build/ATLAS.apk build/ATLAS.json --clobber
+            gh release upload "v$VER" salida/ATLAS.apk salida/ATLAS.json --clobber
           else
-            gh release create "v$VER" build/ATLAS.apk build/ATLAS.json --title "ATLAS $VER" --latest \
-              --notes "ATLAS $VER (versionCode $CODE). APK sin la firma de la familia: Familia-Revista lo firma y lo sube a Drive."
+            gh release create "v$VER" salida/ATLAS.apk salida/ATLAS.json --title "ATLAS $VER" --latest \
+              --notes "ATLAS $VER (versionCode $CODE). APK con firma provisional: Familia-Revista lo firma con la de la familia y lo sube a Drive."
           fi

@@ -3,77 +3,65 @@ package com.gonzalo.atlas.motor
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
-import kotlin.math.floor
-import kotlin.math.max
-import kotlin.math.min
 
-/** Un trozo cuadrado del mapa, con todas sus capas (las ráster). */
-class Trozo(val cx: Int, val cy: Int) {
-    /** Altura: 0 es el nivel del mar; 1, la cumbre más alta (unos 5.000 m); −1, la fosa más honda. */
-    val alt = FloatArray(N)
-    /** Bioma pintado (0: el que toque por la altura). */
-    val bio = ByteArray(N)
-    val reino = ByteArray(N)
-    val region = ByteArray(N)
-    val zona = ByteArray(N)
-
-    /** Sube con cada cambio (el render y las miniaturas miran esto para saber si lo que tienen está viejo). */
-    @Volatile var version = 0
-    /** Cambiado desde la última vez que se guardó. */
-    @Volatile var sucio = false
-    /** Lo tiene guardado el disco (o el mapa entero se ha materializado): si no, se puede volver a generar. */
-    @Volatile var editado = false
-
-    fun copia(): Trozo = Trozo(cx, cy).also { t ->
-        alt.copyInto(t.alt); bio.copyInto(t.bio); reino.copyInto(t.reino); region.copyInto(t.region); zona.copyInto(t.zona)
-        t.editado = editado
-    }
-
-    fun copiaDe(o: Trozo) {
-        o.alt.copyInto(alt); o.bio.copyInto(bio); o.reino.copyInto(reino); o.region.copyInto(region); o.zona.copyInto(zona)
-    }
-
-    companion object {
-        const val LADO = 256
-        const val BITS = 8
-        const val N = LADO * LADO
-        fun clave(cx: Int, cy: Int): Long = (cx.toLong() shl 32) or (cy.toLong() and 0xffffffffL)
-        fun cx(clave: Long) = (clave shr 32).toInt()
-        fun cy(clave: Long) = clave.toInt()
-    }
-}
-
-/** Una versión reducida de un trozo (para ver el mapa de lejos): lado = 256 >> nivel. */
-class Mip(val nivel: Int, val version: Int) {
-    val lado = Trozo.LADO shr nivel
-    val alt = FloatArray(lado * lado)
-    val bio = ByteArray(lado * lado)
-    val reino = ByteArray(lado * lado)
-    val region = ByteArray(lado * lado)
-    val zona = ByteArray(lado * lado)
-}
-
-// ==================================================================== lo que no es ráster
-
-class Reino(
+/**
+ * Un territorio: un imperio, un reino, una provincia… Se marca en el mapa tocando dentro de las fronteras que dibujas (o
+ * pintándolo). [padre]: el territorio del que depende (una provincia de un reino, un reino de un imperio); 0 si ninguno.
+ * La posición, tamaño y giro del nombre son automáticos mientras [lx] sea NaN.
+ */
+class Territorio(
     var id: Int,
     var nombre: String,
-    var color: Int,
     var tipo: String = "Reino",
-    /** El reino del que depende (un imperio, un reino…); 0 si es independiente. */
+    var color: Int = Catalogo.COLORES[0],
     var padre: Int = 0,
     var capital: String = "",
+    var lx: Float = Float.NaN, var ly: Float = Float.NaN,
+    var tam: Float = 0f, var giro: Float = 0f, var curva: Float = 0f,
+    var verNombre: Boolean = true,
 ) {
-    fun json() = JSONObject().put("id", id).put("n", nombre).put("c", color).put("t", tipo).put("p", padre).put("cap", capital)
-    companion object { fun de(o: JSONObject) = Reino(o.optInt("id"), o.optString("n"), o.optInt("c"), o.optString("t", "Reino"), o.optInt("p"), o.optString("cap")) }
+    fun json() = JSONObject().put("id", id).put("n", nombre).put("t", tipo).put("c", color).put("p", padre).put("cap", capital)
+        .put("lx", if (lx.isNaN()) JSONObject.NULL else lx.toDouble()).put("ly", if (ly.isNaN()) JSONObject.NULL else ly.toDouble())
+        .put("s", tam.toDouble()).put("g", giro.toDouble()).put("cv", curva.toDouble()).put("vn", verNombre)
+    companion object {
+        fun de(o: JSONObject) = Territorio(o.optInt("id"), o.optString("n"), o.optString("t", "Reino"), o.optInt("c"), o.optInt("p"), o.optString("cap"),
+            if (o.isNull("lx")) Float.NaN else o.optDouble("lx").toFloat(), if (o.isNull("ly")) Float.NaN else o.optDouble("ly").toFloat(),
+            o.optDouble("s").toFloat(), o.optDouble("g").toFloat(), o.optDouble("cv").toFloat(), o.optBoolean("vn", true))
+    }
 }
 
-/** Una región con nombre (una sierra, un bosque, una comarca): se pinta como los reinos, sin color de fondo. */
-class Region(var id: Int, var nombre: String, var tipo: String = "Comarca") {
-    fun json() = JSONObject().put("id", id).put("n", nombre).put("t", tipo)
-    companion object { fun de(o: JSONObject) = Region(o.optInt("id"), o.optString("n"), o.optString("t", "Comarca")) }
+/** Los datos de una capa de dibujo (sus píxeles los lleva el lienzo, en teselas). */
+class CapaInfo(
+    val id: String,
+    var nombre: String,
+    var visible: Boolean = true,
+    var opacidad: Float = 1f,
+    /** normal, multiplicar, pantalla, superponer, aclarar, oscurecer, añadir */
+    var fusion: String = "normal",
+    var bloqueoAlfa: Boolean = false,
+    /** Capa de referencia: el relleno y los territorios miran sus líneas aunque dibujes en otra. */
+    var referencia: Boolean = false,
+) {
+    fun json() = JSONObject().put("id", id).put("n", nombre).put("v", visible).put("o", opacidad.toDouble()).put("f", fusion).put("a", bloqueoAlfa).put("r", referencia)
+    companion object { fun de(o: JSONObject) = CapaInfo(o.optString("id"), o.optString("n"), o.optBoolean("v", true), o.optDouble("o", 1.0).toFloat(), o.optString("f", "normal"), o.optBoolean("a"), o.optBoolean("r")) }
+}
+
+/** La leyenda del mapa: un cuadro que se mueve y escala como un objeto más. */
+class Leyenda(
+    var visible: Boolean = false, var x: Float = Float.NaN, var y: Float = Float.NaN, var escala: Float = 1f,
+    var titulo: String = "Leyenda", var territorios: Boolean = true, var lugares: Boolean = true, var escalaKm: Boolean = true,
+    /** Entradas tuyas: «símbolo|texto» (el símbolo es un tipo de lugar o «color:#rrggbb»). */
+    val extra: MutableList<String> = ArrayList(),
+) {
+    fun json() = JSONObject().put("v", visible).put("x", if (x.isNaN()) JSONObject.NULL else x.toDouble()).put("y", if (y.isNaN()) JSONObject.NULL else y.toDouble())
+        .put("s", escala.toDouble()).put("t", titulo).put("te", territorios).put("lu", lugares).put("km", escalaKm).put("ex", JSONArray(extra))
+    companion object {
+        fun de(o: JSONObject?) = if (o == null) Leyenda() else Leyenda(o.optBoolean("v"), if (o.isNull("x")) Float.NaN else o.optDouble("x").toFloat(),
+            if (o.isNull("y")) Float.NaN else o.optDouble("y").toFloat(), o.optDouble("s", 1.0).toFloat(), o.optString("t", "Leyenda"),
+            o.optBoolean("te", true), o.optBoolean("lu", true), o.optBoolean("km", true),
+            (o.optJSONArray("ex") ?: JSONArray()).let { a -> (0 until a.length()).map { a.optString(it) }.toMutableList() })
+    }
 }
 
 class Lugar(
@@ -134,175 +122,66 @@ class Sello(val id: String, var recurso: String, var x: Float, var y: Float, var
 // ==================================================================== el mapa
 
 /**
- * Un mapa: capas ráster por trozos de 256 px (se generan solos a partir de la semilla hasta que los tocas) y lo vectorial.
- * Finito ([anchoTrozos] × [altoTrozos]) o infinito (0 × 0: los trozos van de −∞ a +∞).
+ * Un mapa: lo que dibujas (capas en teselas de 256 px, las lleva [com.gonzalo.atlas.lienzo.Lienzo]) y lo que pones encima:
+ * territorios, lugares, rótulos, rutas, tus dibujos sueltos y la leyenda. Finito ([ancho] × [alto] px) o infinito (0 × 0).
  */
-class Mapa(
-    val id: String,
-    var mundo: String,
-    var nombre: String,
-    val semilla: Long,
-    val estilo: Generador.Estilo,
-    val anchoTrozos: Int,
-    val altoTrozos: Int,
-    val tierra: Float = 0.42f,
-    val dir: File?,
-) {
-    val infinito get() = anchoTrozos == 0
-    val ancho get() = anchoTrozos * Trozo.LADO
-    val alto get() = altoTrozos * Trozo.LADO
-    val generador = Generador(semilla, estilo, ancho, alto, tierra)
-
+class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int, val alto: Int, val dir: File?) {
+    val infinito get() = ancho == 0
     var kmPorPx = 1.0f
     var escalaPuesta = false
-    /** Las obras (novelas de Nova) en las que sale este mapa. */
     val obras = CopyOnWriteArrayList<String>()
     var creado = System.currentTimeMillis()
     var modificado = creado
-    /** Dónde se estaba mirando (para volver al mismo sitio). */
-    var vista = floatArrayOf(Float.NaN, Float.NaN, 1f)
+    var vista = floatArrayOf(Float.NaN, Float.NaN, 1f, 0f)
+    /** El papel de fondo. */
+    var papel: Int = 0xFFF1E6C8.toInt()
+    var granoPapel = true
+    var verTerritorios = true
+    /** Cuánto se nota el color de los territorios (0..1). */
+    var tinteTerritorios = 0.28f
+    /** Qué nivel se colorea: 0 el más alto (imperios), 1 reinos, 2 lo pintado. */
+    var colorPorNivel = 2
 
-    val reinos = CopyOnWriteArrayList<Reino>()
-    val regiones = CopyOnWriteArrayList<Region>()
+    val capas = CopyOnWriteArrayList<CapaInfo>()
+    val territorios = CopyOnWriteArrayList<Territorio>()
     val lugares = CopyOnWriteArrayList<Lugar>()
-    val rios = CopyOnWriteArrayList<Linea>()
-    val caminos = CopyOnWriteArrayList<Linea>()
+    val rutas = CopyOnWriteArrayList<Linea>()
     val rotulos = CopyOnWriteArrayList<Rotulo>()
     val sellos = CopyOnWriteArrayList<Sello>()
-
-    private val trozos = ConcurrentHashMap<Long, Trozo>()
-    private val mips = ConcurrentHashMap<Long, Mip>()
-    /** Trozos que están en el disco (se leen al necesitarlos). */
-    private val enDisco: MutableSet<Long> = ConcurrentHashMap.newKeySet()
-
-    /** Se llama al cambiar una zona del mapa (en píxeles): el render repinta eso. */
-    val alCambiar = CopyOnWriteArrayList<(Int, Int, Int, Int) -> Unit>()
-    /** Al cambiar lo vectorial (lugares, ríos, rótulos…). */
-    val alCambiarVector = CopyOnWriteArrayList<() -> Unit>()
+    var leyenda = Leyenda()
 
     @Volatile var vectorVersion = 0
-
-    fun dentro(cx: Int, cy: Int) = infinito || (cx in 0 until anchoTrozos && cy in 0 until altoTrozos)
-    fun dentroPx(x: Int, y: Int) = infinito || (x in 0 until ancho && y in 0 until alto)
-
-    // ---------------------------------------------------------------- trozos
-
-    /** El trozo (lo crea, lo lee del disco o lo genera si hace falta). Null fuera de un mapa finito. */
-    fun trozo(cx: Int, cy: Int): Trozo? {
-        if (!dentro(cx, cy)) return null
-        val k = Trozo.clave(cx, cy)
-        trozos[k]?.let { return it }
-        synchronized(this) {
-            trozos[k]?.let { return it }
-            val t = (if (k in enDisco) Formato.leeTrozo(archivoTrozo(cx, cy), cx, cy) else null) ?: generador.genera(cx, cy)
-            trozos[k] = t
-            return t
-        }
-    }
-
-    fun trozoSiEsta(cx: Int, cy: Int): Trozo? = trozos[Trozo.clave(cx, cy)]
-    fun trozosEnMemoria(): Collection<Trozo> = trozos.values
-    fun clavesEnDisco(): Set<Long> = enDisco
-
-    internal fun archivoTrozo(cx: Int, cy: Int) = File(dir, "trozos/${cx}_${cy}.bin")
-    internal fun apuntaEnDisco(cx: Int, cy: Int) { enDisco += Trozo.clave(cx, cy) }
-
-    /** Un trozo cambiado: lo marca, quita sus miniaturas y avisa al render. */
-    fun tocado(t: Trozo) {
-        t.version++; t.sucio = true; t.editado = true
-        modificado = System.currentTimeMillis()
-    }
-
-    fun avisa(x0: Int, y0: Int, x1: Int, y1: Int) { alCambiar.forEach { it(x0, y0, x1, y1) } }
+    val alCambiarVector = CopyOnWriteArrayList<() -> Unit>()
     fun avisaVector() { vectorVersion++; modificado = System.currentTimeMillis(); alCambiarVector.forEach { it() } }
 
-    /** La versión reducida de un trozo, para el nivel [nivel] (1: la mitad … 6: 4×4). */
-    fun mip(cx: Int, cy: Int, nivel: Int): Mip? {
-        if (!dentro(cx, cy)) return null
-        val k = Trozo.clave(cx, cy) * 8 + nivel
-        val t = trozos[Trozo.clave(cx, cy)]
-        val m = mips[k]
-        if (t == null) {
-            // Sin tocar y sin leer: si está en el disco hay que leerlo; si no, el generador lo da directamente a esta escala
-            if (m != null) return m
-            if (Trozo.clave(cx, cy) in enDisco) return mipDe(trozo(cx, cy)!!, nivel).also { mips[k] = it }
-            return generador.mip(cx, cy, nivel).also { mips[k] = it }
-        }
-        if (m != null && m.version == t.version && m.version >= 0) return m
-        return mipDe(t, nivel).also { mips[k] = it }
-    }
-
-    private fun mipDe(t: Trozo, nivel: Int): Mip {
-        val m = Mip(nivel, t.version)
-        val l = m.lado; val f = 1 shl nivel
-        val inv = 1f / (f * f)
-        for (y in 0 until l) for (x in 0 until l) {
-            var s = 0f
-            val bx = x * f; val by = y * f
-            for (j in 0 until f) { val o = (by + j) * Trozo.LADO + bx; for (i in 0 until f) s += t.alt[o + i] }
-            val i = y * l + x
-            m.alt[i] = s * inv
-            val c = (by + f / 2) * Trozo.LADO + bx + f / 2
-            m.bio[i] = t.bio[c]; m.reino[i] = t.reino[c]; m.region[i] = t.region[c]; m.zona[i] = t.zona[c]
-        }
-        return m
-    }
-
-    /** Olvida lo que no hace falta tener en memoria (lo que está guardado y no se ve). */
-    fun aligera(mantener: (Int, Int) -> Boolean) {
-        for ((k, t) in trozos) if (!t.sucio && (t.editado && k in enDisco || !t.editado) && !mantener(t.cx, t.cy)) trozos.remove(k)
-        if (mips.size > 6000) mips.clear()
-    }
-
-    // ---------------------------------------------------------------- lectura punto a punto
-
-    fun alt(x: Int, y: Int): Float {
-        val t = trozo(x shr Trozo.BITS, y shr Trozo.BITS) ?: return -0.3f
-        return t.alt[(y and 0xff) * Trozo.LADO + (x and 0xff)]
-    }
-
-    fun bio(x: Int, y: Int): Int { val t = trozo(x shr Trozo.BITS, y shr Trozo.BITS) ?: return 0; return t.bio[(y and 0xff) * Trozo.LADO + (x and 0xff)].toInt() and 0xff }
-    fun reino(x: Int, y: Int): Int { val t = trozo(x shr Trozo.BITS, y shr Trozo.BITS) ?: return 0; return t.reino[(y and 0xff) * Trozo.LADO + (x and 0xff)].toInt() and 0xff }
-    fun region(x: Int, y: Int): Int { val t = trozo(x shr Trozo.BITS, y shr Trozo.BITS) ?: return 0; return t.region[(y and 0xff) * Trozo.LADO + (x and 0xff)].toInt() and 0xff }
-    fun zona(x: Int, y: Int): Int { val t = trozo(x shr Trozo.BITS, y shr Trozo.BITS) ?: return 0; return t.zona[(y and 0xff) * Trozo.LADO + (x and 0xff)].toInt() and 0xff }
-
-    /** Altura con interpolación (x, y en píxeles, con decimales). */
-    fun altSuave(x: Float, y: Float): Float {
-        val fx = floor(x - 0.5f); val fy = floor(y - 0.5f)
-        val ix = fx.toInt(); val iy = fy.toInt(); val tx = x - 0.5f - fx; val ty = y - 0.5f - fy
-        val a = alt(ix, iy); val b = alt(ix + 1, iy); val c = alt(ix, iy + 1); val d = alt(ix + 1, iy + 1)
-        return (a + (b - a) * tx) * (1 - ty) + (c + (d - c) * tx) * ty
-    }
-
-    // ---------------------------------------------------------------- ids y nombres
-
-    fun reino(id: Int) = reinos.firstOrNull { it.id == id }
-    fun region(id: Int) = regiones.firstOrNull { it.id == id }
-    fun idLibreReino(): Int = (1..255).firstOrNull { i -> reinos.none { it.id == i } } ?: 255
-    fun idLibreRegion(): Int = (1..255).firstOrNull { i -> regiones.none { it.id == i } } ?: 255
+    fun territorio(id: Int) = territorios.firstOrNull { it.id == id }
+    fun idLibre(): Int = (1..255).firstOrNull { i -> territorios.none { it.id == i } } ?: 255
     fun nuevoId(prefijo: String) = prefijo + java.lang.Long.toString(System.nanoTime() xor (Math.random() * 1e15).toLong(), 36).takeLast(9)
 
-    /** Los límites de lo que hay que mirar (para un mapa infinito, los trozos tocados más un margen). */
-    fun limites(): IntArray {
-        if (!infinito) return intArrayOf(0, 0, ancho, alto)
-        var x0 = Int.MAX_VALUE; var y0 = Int.MAX_VALUE; var x1 = Int.MIN_VALUE; var y1 = Int.MIN_VALUE
-        val todas = HashSet<Long>(enDisco); trozos.values.filter { it.editado }.forEach { todas += Trozo.clave(it.cx, it.cy) }
-        for (k in todas) { val cx = Trozo.cx(k); val cy = Trozo.cy(k); x0 = min(x0, cx); y0 = min(y0, cy); x1 = max(x1, cx + 1); y1 = max(y1, cy + 1) }
-        lugares.forEach { x0 = min(x0, floor(it.x / Trozo.LADO).toInt()); y0 = min(y0, floor(it.y / Trozo.LADO).toInt()); x1 = max(x1, floor(it.x / Trozo.LADO).toInt() + 1); y1 = max(y1, floor(it.y / Trozo.LADO).toInt() + 1) }
-        if (x0 > x1) return intArrayOf(-4 * Trozo.LADO, -3 * Trozo.LADO, 4 * Trozo.LADO, 3 * Trozo.LADO)
-        return intArrayOf(x0 * Trozo.LADO, y0 * Trozo.LADO, x1 * Trozo.LADO, y1 * Trozo.LADO)
+    /** La cadena de un territorio hasta arriba (él, su padre, el padre de su padre…). */
+    fun linaje(id: Int): List<Territorio> {
+        val l = ArrayList<Territorio>(); var t = territorio(id); val vistos = HashSet<Int>()
+        while (t != null && vistos.add(t.id)) { l += t; t = if (t.padre != 0) territorio(t.padre) else null }
+        return l
     }
 
-    // ---------------------------------------------------------------- lo vectorial en JSON (para guardar y para deshacer)
+    /** El territorio que da el color a [id] según [colorPorNivel]. */
+    fun colorDe(id: Int): Int {
+        val l = linaje(id); if (l.isEmpty()) return 0
+        return when (colorPorNivel) { 0 -> l.last().color; 1 -> l.getOrElse(l.size - 2) { l.last() }.color; else -> l.first().color }
+    }
+
+    /** Los hijos directos de un territorio (0: los de arriba del todo). */
+    fun hijos(id: Int) = territorios.filter { it.padre == id && it.id != id }
 
     fun vectorJson(): JSONObject = JSONObject()
-        .put("reinos", JSONArray().also { a -> reinos.forEach { a.put(it.json()) } })
-        .put("regiones", JSONArray().also { a -> regiones.forEach { a.put(it.json()) } })
+        .put("territorios", JSONArray().also { a -> territorios.forEach { a.put(it.json()) } })
         .put("lugares", JSONArray().also { a -> lugares.forEach { a.put(it.json()) } })
-        .put("rios", JSONArray().also { a -> rios.forEach { a.put(it.json()) } })
-        .put("caminos", JSONArray().also { a -> caminos.forEach { a.put(it.json()) } })
+        .put("rutas", JSONArray().also { a -> rutas.forEach { a.put(it.json()) } })
         .put("rotulos", JSONArray().also { a -> rotulos.forEach { a.put(it.json()) } })
         .put("sellos", JSONArray().also { a -> sellos.forEach { a.put(it.json()) } })
+        .put("leyenda", leyenda.json())
+        .put("capas", JSONArray().also { a -> capas.forEach { a.put(it.json()) } })
 
     fun ponVector(o: JSONObject) {
         fun <T> lista(n: String, dst: MutableList<T>, f: (JSONObject) -> T) {
@@ -310,17 +189,37 @@ class Mapa(
             for (i in 0 until a.length()) a.optJSONObject(i)?.let { l += f(it) }
             dst.clear(); dst.addAll(l)
         }
-        lista("reinos", reinos, Reino::de); lista("regiones", regiones, Region::de); lista("lugares", lugares, Lugar::de)
-        lista("rios", rios, Linea::de); lista("caminos", caminos, Linea::de); lista("rotulos", rotulos, Rotulo::de); lista("sellos", sellos, Sello::de)
+        lista("territorios", territorios, Territorio::de); lista("lugares", lugares, Lugar::de); lista("rutas", rutas, Linea::de)
+        lista("rotulos", rotulos, Rotulo::de); lista("sellos", sellos, Sello::de)
+        leyenda = Leyenda.de(o.optJSONObject("leyenda"))
+        if (o.has("capas")) lista("capas", capas, CapaInfo::de)
     }
 
-    fun metaJson(): JSONObject = JSONObject().put("v", 1).put("id", id).put("mundo", mundo).put("nombre", nombre).put("semilla", semilla)
-        .put("estilo", estilo.name).put("w", anchoTrozos).put("h", altoTrozos).put("tierra", tierra.toDouble()).put("gen", Generador.VERSION)
+    fun metaJson(): JSONObject = JSONObject().put("v", 2).put("id", id).put("mundo", mundo).put("nombre", nombre).put("w", ancho).put("h", alto)
         .put("km", kmPorPx.toDouble()).put("kmPuesta", escalaPuesta).put("obras", JSONArray(obras.toList())).put("creado", creado).put("modificado", modificado)
+        .put("papel", papel).put("grano", granoPapel).put("verT", verTerritorios).put("tinte", tinteTerritorios.toDouble()).put("nivel", colorPorNivel)
         .put("vista", JSONArray().also { a -> vista.forEach { a.put(if (it.isNaN()) JSONObject.NULL else it.toDouble()) } })
 
+    fun guardaMeta() {
+        val d = dir ?: return
+        d.mkdirs()
+        val tmp = File(d, "mapa.json.tmp"); tmp.writeText(metaJson().put("vector", vectorJson()).toString())
+        val f = File(d, "mapa.json"); if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f) }
+    }
+
     companion object {
-        /** Lee un mapa de su carpeta (solo lo de arriba; los trozos se leen al mirarlos). */
-        fun lee(dir: File): Mapa? = Formato.leeMapa(dir)
+        fun lee(dir: File): Mapa? = runCatching {
+            val o = JSONObject(File(dir, "mapa.json").readText())
+            if (o.optInt("v") < 2) return null
+            val m = Mapa(o.getString("id"), o.optString("mundo"), o.optString("nombre"), o.optInt("w"), o.optInt("h"), dir)
+            m.kmPorPx = o.optDouble("km", 1.0).toFloat(); m.escalaPuesta = o.optBoolean("kmPuesta")
+            o.optJSONArray("obras")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotBlank() }?.let { m.obras += it } }
+            m.creado = o.optLong("creado", m.creado); m.modificado = o.optLong("modificado", m.modificado)
+            m.papel = o.optInt("papel", m.papel); m.granoPapel = o.optBoolean("grano", true); m.verTerritorios = o.optBoolean("verT", true)
+            m.tinteTerritorios = o.optDouble("tinte", 0.28).toFloat(); m.colorPorNivel = o.optInt("nivel", 2)
+            o.optJSONArray("vista")?.let { a -> for (i in 0 until minOf(4, a.length())) m.vista[i] = if (a.isNull(i)) Float.NaN else a.optDouble(i).toFloat() }
+            o.optJSONObject("vector")?.let { m.ponVector(it) }
+            m
+        }.getOrNull()
     }
 }

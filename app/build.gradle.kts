@@ -21,7 +21,7 @@ android {
         create("provisional") {
             val ks = System.getenv("ATLAS_KS")
             if (!ks.isNullOrBlank()) {
-                storeFile = file(ks); storePassword = System.getenv("ATLAS_KS_PASS"); keyAlias = "atlas"; keyPassword = System.getenv("ATLAS_KS_PASS")
+                storeFile = file(ks); storePassword = System.getenv("ATLAS_KS_PASS"); keyAlias = System.getenv("ATLAS_KS_ALIAS") ?: "atlas"; keyPassword = System.getenv("ATLAS_KS_PASS")
             } else {
                 val dbg = File(System.getProperty("user.home"), ".android/debug.keystore")
                 storeFile = dbg; storePassword = "android"; keyAlias = "androiddebugkey"; keyPassword = "android"
@@ -46,6 +46,8 @@ android {
             all {
                 it.maxHeapSize = "4g"
                 it.systemProperty("robolectric.offline", "true")
+                it.systemProperty("robolectric.pixelCopyRenderMode", "hardware")
+                it.systemProperty("roborazzi.test.record", "true")
                 it.systemProperty("robolectric.dependency.dir", layout.buildDirectory.dir("robolectric-deps").get().asFile.absolutePath)
                 System.getProperty("capturas")?.let { c -> it.systemProperty("capturas", c) }
                 it.dependsOn("copyRobolectricDeps")
@@ -78,6 +80,8 @@ dependencies {
     testImplementation("org.json:json:20240303")
     testImplementation("org.robolectric:robolectric:4.13")
     testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.20.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.20.0")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
