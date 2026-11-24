@@ -46,7 +46,12 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     val capas = Capas(ctx)
     val opciones = Capas.Opciones(cuadricula = mapa.mundo.isNotBlank())
     val velo = VeloTerritorios(lz)
-    private val dibujo = object : View(ctx) { override fun onDraw(c: Canvas) = pinta(c) }
+    private val dibujo = object : View(ctx) {
+        override fun onDraw(c: Canvas) {
+            if (!com.gonzalo.atlas.lienzo.Medidor.activo) { pinta(c); return }
+            val t0 = System.nanoTime(); pinta(c); com.gonzalo.atlas.lienzo.Medidor.imagen(System.nanoTime() - t0)
+        }
+    }
     val piramide = Piramide(lz, velo) { dibujo.postInvalidateOnAnimation() }
     private val dens = resources.displayMetrics.density
     var lapizVisto = false
@@ -583,6 +588,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
 
     private fun mueveTinta(e: MotionEvent) {
         if (trazo == null) return
+        com.gonzalo.atlas.lienzo.Medidor.evento(e.eventTime, e.historySize + 1)
         val i = e.findPointerIndex(punteroTrazo); if (i < 0) return
         if (forma != null) { ajustaForma(e.getX(i), e.getY(i)); return }
         for (h in 0 until e.historySize) punto(e.getHistoricalX(i, h), e.getHistoricalY(i, h), e.getHistoricalPressure(i, h), e.getHistoricalAxisValue(MotionEvent.AXIS_TILT, i, h), e.getHistoricalOrientation(i, h), e.getHistoricalEventTime(h))

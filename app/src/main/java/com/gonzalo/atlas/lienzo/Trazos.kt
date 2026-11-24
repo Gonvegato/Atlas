@@ -311,8 +311,10 @@ class TrazoVivo(
         if (n == 0) return
         lz.enVivo {
             if (estado != VIVO) return@enVivo
+            val t0 = System.nanoTime()
             for (k in espejos.indices) meteRama(k, pts, n)
             humedo.sella(raster, sellos); sellos.limpia()
+            Medidor.estampa(System.nanoTime() - t0)
             lz.avisaVivo()
         }
     }

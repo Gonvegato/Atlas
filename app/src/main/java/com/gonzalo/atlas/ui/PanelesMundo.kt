@@ -217,3 +217,49 @@ private fun frase(ed: Editor, c: CambioTerritorio): String {
         else -> "Desaparece $t"
     }
 }
+
+// ---------------------------------------------------------------- medir el trazo
+
+/**
+ * Medir el trazo en la tableta: se enciende, se dibuja como siempre en el mapa (un rato, rápido y despacio) y se ven las
+ * cifras al momento; «Compartir el informe» lo manda (con el modelo de la tableta) para arreglar lo que salga lento.
+ */
+@Composable
+internal fun MedirTrazo(ed: Editor, mesa: Mesa) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val med = com.gonzalo.atlas.lienzo.Medidor
+    var activo by remember { mutableStateOf(med.activo) }
+    var r by remember { mutableStateOf(med.resultado()) }
+    androidx.compose.runtime.LaunchedEffect(activo) { while (activo) { r = med.resultado(); kotlinx.coroutines.delay(400) } }
+    EtiquetaO("Medir el trazo", tam = 11.sp, color = O.ACENTO)
+    if (!activo && r.muestras == 0) Text("Mide lo que tarda el trazo en tu tableta: enciéndelo, cierra este panel y dibuja como siempre un rato (rápido y despacio, largo y corto; también con un pincel grande y muy de cerca). Luego vuelve aquí y comparte el informe.", style = O.texto(12.sp, O.GRIS))
+    if (activo || r.muestras > 0) {
+        fun f(v: Double) = String.format(java.util.Locale("es"), "%.1f", v)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Cifra("Del lápiz al dibujo", "${f(r.latenciaMediana)} ms", "peor 5 %: ${f(r.latenciaP95)} ms", Modifier.weight(1f))
+            Cifra("Imágenes por segundo", f(r.fps), "dibujando", Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Cifra("Pintar cada imagen", "${f(r.pintarMedia)} ms", "peor 5 %: ${f(r.pintarP95)} ms", Modifier.weight(1f))
+            Cifra("Estampar", "${f(r.estamparMedia)} ms", "peor 5 %: ${f(r.estamparP95)} ms", Modifier.weight(1f))
+        }
+        Text("${f(r.puntosPorSegundo)} puntos del lápiz por segundo · ${f(r.segundos)} s dibujando · ${r.muestras} medidas. No cuenta el retraso de la propia pantalla (eso solo se ve grabando a cámara lenta).", style = O.texto(11.sp, O.GRIS))
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!activo) BotonO(if (r.muestras > 0) "Volver a medir" else "Empezar a medir", lleno = true) { med.empieza(); activo = true; r = med.resultado(); ed.avisa("Midiendo: dibuja como siempre") }
+        else BotonO("Terminar", lleno = true) { med.para(); activo = false; r = med.resultado() }
+        if (!activo && r.muestras > 0) BotonO("Compartir el informe") {
+            val hz = runCatching { (ctx as? android.app.Activity)?.display?.refreshRate }.getOrNull() ?: 60f
+            val texto = med.informe(com.gonzalo.atlas.BuildConfig.VERSION_NAME, ed.pincel, ed.tamano, mesa.vista.zoom, ed.lienzo.capas.size, hz)
+            ctx.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(android.content.Intent.EXTRA_SUBJECT, "ATLAS: medir el trazo").putExtra(android.content.Intent.EXTRA_TEXT, texto), "Compartir el informe"))
+        }
+    }
+}
+
+@Composable
+private fun Cifra(t: String, v: String, nota: String, mod: Modifier) {
+    Column(mod.clip(RoundedCornerShape(10.dp)).background(O.CRUDO).padding(10.dp)) {
+        Text(t, style = O.texto(11.sp, O.GRIS)); Text(v, style = O.titular(20.sp, O.TINTA)); Text(nota, style = O.texto(10.sp, O.GRIS))
+    }
+}

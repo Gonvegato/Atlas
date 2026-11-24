@@ -694,6 +694,7 @@ private fun rellenaCapa(lz: Lienzo, c: CapaPx, color: Int) {
 private fun PanelAcciones(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean) {
     @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
     val m = ed.mapa
+    MedirTrazo(ed, mesa)
     EtiquetaO("Lienzo", tam = 11.sp, color = O.ACENTO)
     if (!taller) {
         InterruptorO("Cuadrícula (casillas en km; de cerca, en metros)", mesa.opciones.cuadricula) { mesa.opciones.cuadricula = it; mesa.refresca(); ed.cambios++ }

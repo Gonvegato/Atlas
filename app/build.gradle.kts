@@ -12,8 +12,8 @@ android {
         applicationId = "com.gonzalo.atlas"
         minSdk = 29
         targetSdk = 35
-        versionCode = 42
-        versionName = "2.3.1"
+        versionCode = 43
+        versionName = "2.4.0"
     }
     signingConfigs {
         // La firma la pone la familia (Familia-Revista vuelve a firmar con familia.keystore). Aquí, una clave provisional:

@@ -17,6 +17,32 @@ etiqueta `v0.15.0`.
 - Las tierras generadas con la 2.3.0 o antes quedaron dibujadas en «Líneas» y «Color»: esas no se mueven ni se funden
   con las nuevas.
 
+## 2.4.0 — capas de verdad y el mundo en el tiempo
+
+- **Grupos de capas.** «+ Grupo» mete la capa elegida en un grupo nuevo; desde las opciones de cada capa («⋯» → Grupo) se mete
+  en uno que ya existe o se saca. El grupo se ve o se esconde entero, se pliega en la lista, se sube y se baja junto, se
+  deshace (sus capas quedan sueltas) o se borra con sus capas. Las capas de un grupo van siempre seguidas.
+- **Máscaras de capa.** «⋯» → Máscara → «Añadir una máscara»: lo que pintas en ella esconde la capa y borrar la vuelve a
+  enseñar, sin perder nada de la capa. Se elige tocando su miniatura (al lado de la de la capa), se apaga y se enciende, se
+  invierte, se aplica (borra de la capa lo escondido) o se quita. Se ve igual de lejos, de cerca y al exportar. Combinar abajo
+  aplica antes las máscaras. Límite: transformar mueve la capa, no su máscara.
+- **Acabado de la costa** (Mundo → Acabado de la costa): líneas de agua alrededor de las tierras generadas (de 2 a 5, cada vez
+  más lejos y más apagadas) y una sombra suave en el mar pegada a la costa, en su propia capa sobre el mar. Se rehace sola al
+  mover o cambiar una tierra. Solo con tierras generadas: una costa dibujada a mano no dice dónde está la tierra.
+- **Tiempos de viaje.** Al elegir una ruta, además de su largo, los días a pie, a caballo y en carro (por mar, en barco), con
+  las velocidades del mundo (Mundo → Viajes; la calzada es la referencia, por camino se va a un 85 % y por sendero a un 65 %).
+  «Apuntarlo en la Crónica» lo deja escrito.
+- **Línea del tiempo** (Mundo → Línea del tiempo): cambios de los territorios con su año (pasa a ser de otro, se hace
+  independiente, aparece, desaparece; una ocupación se ve rayada con el color de antes) y el mapa de cada año, con las
+  guerras de Guerras en sus años («Empieza» y «Termina») y el año de ahora del mundo. Mientras se ve un año, abajo sale
+  «AÑO 341 · Sin año». Lo dibujado no tiene año: vale siempre.
+- **Medir el trazo** (Acciones → Medir el trazo): con él encendido se dibuja como siempre y da, al momento, el retraso del
+  lápiz al dibujo (mediana y peor 5 %), las imágenes por segundo, lo que tarda en pintarse cada imagen, lo que tarda el
+  motor en estampar y los puntos por segundo del lápiz; «Compartir el informe» lo manda con el modelo de la tableta. No mide
+  el retraso propio de la pantalla.
+- La ficha de cada mapa en la cuenta lleva de qué es (mundo, continente, región, ciudad…), para el visor de mapas de Nova,
+  Lyra y Polaris.
+
 ## 2.3.0 — hasta el metro
 
 - **Acercarse hasta 262.144 aumentos.** Antes, 32. Con un mapa a 1 km por píxel, un metro mide entonces 262 px de pantalla;
