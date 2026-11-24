@@ -52,6 +52,7 @@ object MuestrasPincel {
  * se mezcla con lo que encuentra a cada paso. Se hace en la CPU, sobre copias de las teselas (para deshacer).
  */
 class Difumino(private val lz: Lienzo, private val capa: CapaPx, private val radio: Float, private val fuerza: Float) {
+    init { capa.aplana() }
     private val antes = HashMap<Long, Bitmap?>()
     private val trabajo = HashMap<Long, Bitmap>()
     private var parche: FloatArray? = null
@@ -180,6 +181,7 @@ object Ajustes {
     }
 
     private fun cadaTesela(lz: Lienzo, capa: CapaPx, nombre: String, f: (Bitmap) -> Bitmap): Edicion? {
+        capa.aplana()
         val antes = HashMap<Long, Bitmap?>(); val despues = HashMap<Long, Bitmap?>()
         for ((k, v) in capa.teselas.toMap()) { val n = f(v); antes[k] = v; despues[k] = n; capa.teselas[k] = n; capa.sucias += k }
         if (antes.isEmpty()) return null
@@ -190,6 +192,7 @@ object Ajustes {
     /** Desenfoque gaussiano (tres cajas) de [radio] px, sin cortes entre teselas. */
     fun desenfoca(lz: Lienzo, capa: CapaPx, radio: Int): Edicion? {
         if (capa.teselas.isEmpty() || radio < 1) return null
+        capa.aplana()
         val L = Lienzo.L
         val origen = capa.teselas.toMap()
         // Las teselas que hay y sus vecinas (el desenfoque se sale un poco)
@@ -238,6 +241,7 @@ object Ajustes {
         val L = Lienzo.L
         val origen = capa.teselas.toMap()
         if (origen.isEmpty()) return null
+        capa.aplana()
         val caja = RectF(Float.MAX_VALUE, Float.MAX_VALUE, -Float.MAX_VALUE, -Float.MAX_VALUE)
         for (k in origen.keys) caja.union(Lienzo.tx(k) * L.toFloat(), Lienzo.ty(k) * L.toFloat(), (Lienzo.tx(k) + 1) * L.toFloat(), (Lienzo.ty(k) + 1) * L.toFloat())
         val dest = RectF(); m.mapRect(dest, caja)

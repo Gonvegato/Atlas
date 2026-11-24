@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -124,7 +125,7 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
         }
         panel?.let { p ->
             val ancho = if (p == "pinceles" || p == "estudio") 520.dp else 380.dp
-            Column(Modifier.align(Alignment.TopEnd).padding(top = 58.dp, end = 10.dp, bottom = 10.dp).width(ancho).heightIn(max = 760.dp)
+            Column(Modifier.align(Alignment.TopEnd).padding(top = 110.dp, start = 10.dp, end = 10.dp, bottom = 10.dp).widthIn(max = ancho).fillMaxWidth().heightIn(max = 760.dp)
                 .shadow(16.dp, RoundedCornerShape(14.dp)).clip(RoundedCornerShape(14.dp)).background(O.PAPEL)) {
                 Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(titulos[p] ?: p, Modifier.weight(1f), style = O.titular(20.sp))
@@ -177,25 +178,37 @@ private fun Icono(i: ImageVector, desc: String, activo: Boolean = false, alPulsa
 private fun BarraSuperior(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean, panel: String?, abre: (String) -> Unit) {
     val h = ed.herramienta
     fun herramienta(x: Herramienta, p: String) { if (ed.herramienta == x) abre(p) else { ed.herramienta = x; ed.seleccion = null; ed.regla = null; if (panel != null && panel != p) abre(p) } }
-    Row(Modifier.fillMaxWidth().background(O.CABECERA.copy(alpha = 0.96f)).statusBarsPadding().height(54.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Galería", Modifier.pulsableO { ed.guardaYa(); if (taller) e.cierraDibujo() else e.dibujando = false }.padding(horizontal = 12.dp, vertical = 8.dp), style = O.texto(17.sp, O.TINTA))
-        Icono(Icons.Outlined.Build, "Acciones", panel == "acciones") { abre("acciones") }
-        Icono(Icons.Outlined.AutoFixHigh, "Ajustes", panel == "ajustes") { abre("ajustes") }
-        Icono(Icons.Outlined.NearMe, "Transformar", h == Herramienta.TRANSFORMAR) { ed.herramienta = if (h == Herramienta.TRANSFORMAR) Herramienta.PINCEL else Herramienta.TRANSFORMAR; if (h == Herramienta.TRANSFORMAR) ed.transformacion = null }
-        Icono(Icons.Outlined.Wallpaper, "Calco", panel == "calco" || h == Herramienta.CALCO) { abre("calco") }
-        if (!taller) {
-            Spacer(Modifier.width(6.dp)); Box(Modifier.width(1.dp).height(26.dp).background(O.GRIS_CLARO)); Spacer(Modifier.width(6.dp))
-            Icono(Icons.Outlined.Public, "Mundo", panel == "mundo" || h in herramientasMundo) { abre("mundo") }
-            if (h in herramientasMundo) Text(h.nombre, Modifier.padding(start = 4.dp), style = O.versalitas(11.sp, O.ACENTO))
+    // En un móvil no cabe todo en una fila: las herramientas de dibujo van en una segunda
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val estrecho = maxWidth < 640.dp
+        @Composable fun Izquierda() {
+            Text("Galería", Modifier.pulsableO { ed.guardaYa(); if (taller) e.cierraDibujo() else e.dibujando = false }.padding(horizontal = 10.dp, vertical = 8.dp), style = O.texto(17.sp, O.TINTA))
+            Icono(Icons.Outlined.Build, "Acciones", panel == "acciones") { abre("acciones") }
+            Icono(Icons.Outlined.AutoFixHigh, "Ajustes", panel == "ajustes") { abre("ajustes") }
+            Icono(Icons.Outlined.NearMe, "Transformar", h == Herramienta.TRANSFORMAR) { ed.herramienta = if (h == Herramienta.TRANSFORMAR) Herramienta.PINCEL else Herramienta.TRANSFORMAR; if (h == Herramienta.TRANSFORMAR) ed.transformacion = null }
+            Icono(Icons.Outlined.Wallpaper, "Calco", panel == "calco" || h == Herramienta.CALCO) { abre("calco") }
+            if (!taller) {
+                Spacer(Modifier.width(4.dp)); Box(Modifier.width(1.dp).height(26.dp).background(O.GRIS_CLARO)); Spacer(Modifier.width(4.dp))
+                Icono(Icons.Outlined.Public, "Mundo", panel == "mundo" || h in herramientasMundo) { abre("mundo") }
+                if (h in herramientasMundo && !estrecho) Text(h.nombre, Modifier.padding(start = 4.dp), style = O.versalitas(11.sp, O.ACENTO))
+            }
         }
-        Spacer(Modifier.weight(1f))
-        Icono(Icons.Outlined.Brush, "Pintar", h == Herramienta.PINCEL) { herramienta(Herramienta.PINCEL, "pinceles") }
-        Icono(Icons.Outlined.TouchApp, "Difuminar", h == Herramienta.DIFUMINAR) { herramienta(Herramienta.DIFUMINAR, "pinceles") }
-        Box(Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).background(if (h == Herramienta.GOMA) O.CRUDO else Color.Transparent).pulsableO { herramienta(Herramienta.GOMA, "pinceles") }, contentAlignment = Alignment.Center) { IconoGoma(if (h == Herramienta.GOMA) O.ACENTO else O.TINTA) }
-        Icono(Icons.Outlined.Layers, "Capas", panel == "capas") { abre("capas") }
-        Spacer(Modifier.width(6.dp))
-        Box(Modifier.size(32.dp).clip(CircleShape).background(Color(ed.color)).border(2.dp, if (panel == "color") O.ACENTO else O.TINTA, CircleShape).pulsableO { abre("color") })
-        Spacer(Modifier.width(6.dp))
+        @Composable fun Derecha() {
+            Icono(Icons.Outlined.Brush, "Pintar", h == Herramienta.PINCEL) { herramienta(Herramienta.PINCEL, "pinceles") }
+            Icono(Icons.Outlined.TouchApp, "Difuminar", h == Herramienta.DIFUMINAR) { herramienta(Herramienta.DIFUMINAR, "pinceles") }
+            Box(Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).background(if (h == Herramienta.GOMA) O.CRUDO else Color.Transparent).pulsableO { herramienta(Herramienta.GOMA, "pinceles") }, contentAlignment = Alignment.Center) { IconoGoma(if (h == Herramienta.GOMA) O.ACENTO else O.TINTA) }
+            Icono(Icons.Outlined.Layers, "Capas", panel == "capas") { abre("capas") }
+            Spacer(Modifier.width(6.dp))
+            Box(Modifier.size(32.dp).clip(CircleShape).background(Color(ed.color)).border(2.dp, if (panel == "color") O.ACENTO else O.TINTA, CircleShape).pulsableO { abre("color") })
+            Spacer(Modifier.width(6.dp))
+        }
+        Column(Modifier.fillMaxWidth().background(O.CABECERA.copy(alpha = 0.96f)).statusBarsPadding()) {
+            Row(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Izquierda()
+                if (!estrecho) { Spacer(Modifier.weight(1f)); Derecha() }
+            }
+            if (estrecho) Row(Modifier.fillMaxWidth().height(50.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) { Derecha() }
+        }
     }
 }
 
@@ -457,10 +470,10 @@ private fun PanelCapas(e: EstadoApp, ed: Editor, mesa: Mesa) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     BotonO("Subir") { lz.cambiaCapas("Ordenar") { val i = lz.capas.indexOf(c); if (i < lz.capas.size - 1) { lz.capas.removeAt(i); lz.capas.add(i + 1, c) } } }
                     BotonO("Bajar") { lz.cambiaCapas("Ordenar") { val i = lz.capas.indexOf(c); if (i > 0) { lz.capas.removeAt(i); lz.capas.add(i - 1, c) } } }
-                    BotonO("Duplicar") { lz.cambiaCapas("Duplicar") { val n = CapaPx(CapaInfo.de(c.info.json().put("id", "c" + System.nanoTime().toString(36)).put("n", c.info.nombre + " (copia)"))); n.teselas.putAll(c.teselas); lz.capas.add(lz.capas.indexOf(c) + 1, n) } }
+                    BotonO("Duplicar") { lz.cambiaCapas("Duplicar") { val n = CapaPx(CapaInfo.de(c.info.json().put("id", "c" + System.nanoTime().toString(36)).put("n", c.info.nombre + " (copia)"))); n.teselas.putAll(c.teselas); n.trazos = c.trazos; n.sinTrazos.putAll(c.sinTrazos); n.trazosSucios = true; lz.capas.add(lz.capas.indexOf(c) + 1, n) } }
                     BotonO("Combinar abajo") { combinaAbajo(lz, c) }
-                    BotonO("Rellenar capa") { lz.cambiaCapas("Rellenar capa") { rellenaCapa(lz, c, ed.color) } }
-                    BotonO("Vaciar") { lz.cambiaCapas("Vaciar capa") { c.teselas.clear() } }
+                    BotonO("Rellenar capa") { lz.cambiaCapas("Rellenar capa") { c.aplana(); rellenaCapa(lz, c, ed.color) } }
+                    BotonO("Vaciar") { lz.cambiaCapas("Vaciar capa") { c.aplana(); c.teselas.clear() } }
                     if (lz.capas.size > 1) BotonO("Borrar", color = O.ROJO) { lz.cambiaCapas("Borrar capa") { lz.capas.remove(c); lz.activa = lz.capas.last().info.id } }
                 }
             }
@@ -582,6 +595,7 @@ private fun combinaAbajo(lz: Lienzo, c: CapaPx) {
     lz.cambiaCapas("Combinar") {
         val i = lz.capas.indexOf(c); if (i <= 0) return@cambiaCapas
         val abajo = lz.capas[i - 1]
+        c.aplana(); abajo.aplana()
         val claves = (c.teselas.keys + abajo.teselas.keys).toSet()
         val nuevo = HashMap<Long, android.graphics.Bitmap>()
         for (k in claves) {

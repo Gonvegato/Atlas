@@ -4,6 +4,17 @@ App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma fir
 Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
 etiqueta `v0.15.0`.
 
+## 1.3.0
+
+- **Trazos nítidos a cualquier acercamiento.** Antes, al levantar el lápiz el trazo pasaba a los píxeles de la capa y, de
+  cerca, se veía borroso (un píxel del lienzo ocupaba varios de la pantalla). Ahora cada trazo de tinta se guarda también
+  como vector y, de cerca, se pinta a la resolución de la pantalla: queda igual que mientras lo dibujabas. Los píxeles de
+  la capa se siguen usando de lejos, para rellenar, exportar y subir. Se guardan con el mapa (siguen nítidos al volver a
+  abrirlo). Difuminar, los ajustes, transformar, rellenar o combinar una capa dejan sus trazos solo como píxeles. En
+  Android anterior al 14, los pinceles con textura se ven de cerca como píxeles (Ink no los sabe pintar ahí).
+- **En el móvil**: la barra de arriba no cabía (se salían la goma, las capas y el color). En pantallas estrechas, las
+  herramientas de dibujo van en una segunda fila y los paneles se ajustan al ancho. El norte, abajo a la derecha.
+
 ## 1.2.3
 
 - **Arreglado: el trazo se movía de sitio al levantar el lápiz.** Ink pinta ahora el trazo en curso en coordenadas de

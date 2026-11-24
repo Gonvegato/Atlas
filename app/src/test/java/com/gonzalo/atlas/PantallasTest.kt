@@ -81,3 +81,22 @@ class PantallaMapaTest {
         compose.onRoot().captureRoboImage(File(capturas, "mapa_territorios.png").path)
     }
 }
+
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [34], application = android.app.Application::class, qualifiers = "w411dp-h891dp-port-xxhdpi")
+class PantallaMovilTest {
+    @get:Rule val compose = createComposeRule()
+    private val capturas = File(System.getProperty("capturas") ?: "build/capturas")
+
+    @Test fun mapaEnElMovil() {
+        val ctx = ApplicationProvider.getApplicationContext<android.app.Application>()
+        File(ctx.filesDir, "atlas").deleteRecursively()
+        val e = EstadoApp(ctx)
+        e.nuevoMapa(e.bib.creaMundo("Ithria").id, "Norte", 0, 0, 0xFFF1E6C8.toInt())
+        compose.setContent { App(e) }
+        compose.waitForIdle()
+        capturas.mkdirs()
+        compose.onRoot().captureRoboImage(File(capturas, "mapa_movil.png").path)
+    }
+}

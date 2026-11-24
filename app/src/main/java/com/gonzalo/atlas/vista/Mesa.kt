@@ -1,3 +1,5 @@
+@file:OptIn(androidx.ink.brush.ExperimentalInkCustomBrushApi::class)
+
 package com.gonzalo.atlas.vista
 
 import android.annotation.SuppressLint
@@ -215,11 +217,37 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 continue
             }
             val g = c.saveLayer(r, pCapa)
-            for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) capa.teselas[Lienzo.clave(tx, ty)]?.let { c.drawBitmap(it, tx * L, ty * L, pFiltro) }
+            // De cerca, los trazos se pintan como vectores (nítidos) sobre lo que había debajo de ellos
+            val hd = vista.zoom > 1.1f && capa.trazos.isNotEmpty() && (android.os.Build.VERSION.SDK_INT >= 34 || capa.trazos.none { it.texturado })
+            for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) {
+                val k = Lienzo.clave(tx, ty)
+                val b = (if (hd) capa.sinTrazos[k] ?: capa.teselas[k] else capa.teselas[k]) ?: continue
+                if (b !== com.gonzalo.atlas.lienzo.TESELA_VACIA) c.drawBitmap(b, tx * L, ty * L, pFiltro)
+            }
+            if (hd) dibujaTrazos(c, capa, r)
             c.restoreToCount(g)
         }
         if (tm == null) vistaTransf = null
         if (mapa.verTerritorios) for (ty in t[1]..t[3]) for (tx in t[0]..t[2]) velo.tesela(Lienzo.clave(tx, ty))?.let { c.drawBitmap(it, tx * L, ty * L, pFiltro) }
+    }
+
+    private val rendererVista by lazy { androidx.ink.rendering.android.canvas.CanvasStrokeRenderer.create(Pinceles.almacen(resources)) }
+    private val identidad = Matrix()
+    private val pTrazo = Paint()
+
+    private fun dibujaTrazos(c: Canvas, capa: com.gonzalo.atlas.lienzo.CapaPx, r: RectF) {
+        for (tr in capa.trazos) {
+            if (!RectF.intersects(tr.caja, r)) continue
+            val capaPropia = tr.goma || tr.opacidad < 0.999f
+            var g = -1
+            if (capaPropia) {
+                pTrazo.alpha = (tr.opacidad * 255).toInt().coerceIn(0, 255)
+                pTrazo.xfermode = if (tr.goma) android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT) else null
+                g = c.saveLayer(tr.caja, pTrazo)
+            }
+            runCatching { rendererVista.draw(c, tr.stroke, identidad, 0f) }
+            if (g >= 0) c.restoreToCount(g)
+        }
     }
 
     private val rr = RectF()

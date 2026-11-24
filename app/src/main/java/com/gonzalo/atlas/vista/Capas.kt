@@ -455,7 +455,7 @@ class Capas(private val ctx: Context) {
     }
 
     private fun norte(c: Canvas, v: Vista) {
-        val x = v.ancho - 30 * dens; val y = 34 * dens; val s = 13 * dens
+        val x = v.ancho - 30 * dens; val y = v.alto - 40 * dens; val s = 13 * dens
         c.save(); c.rotate(v.giro, x, y)
         path.reset(); path.moveTo(x, y - s); path.lineTo(x + s * 0.45f, y + s * 0.6f); path.lineTo(x, y + s * 0.3f); path.lineTo(x - s * 0.45f, y + s * 0.6f); path.close()
         pRelleno.color = TINTA; c.drawPath(path, pRelleno)
