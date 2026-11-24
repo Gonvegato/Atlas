@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Atlas" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/papel</item>
+        <item name="android:statusBarColor">@color/tinta</item>
+        <item name="android:navigationBarColor">@color/papel</item>
+    </style>
+    <color name="papel">#F8F0D4</color>
+    <color name="tinta">#0C0A09</color>
+</resources>

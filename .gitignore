@@ -1,7 +1,10 @@
-.godot/
-/android/
+.gradle/
 build/
+/local.properties
 *.apk
 *.aab
 *.keystore
-*.translation
+*.jks
+.idea/
+*.iml
+captures/
