@@ -146,6 +146,7 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
                         "rutas" -> PanelRutas(ed)
                         "dibujos" -> PanelDibujos(e, ed)
                         "calco" -> PanelCalco(e, ed, mesa)
+                        "secciones" -> PanelSecciones(ed, mesa)
                         "sel" -> PanelSeleccion(e, ed, mesa)
                     }
                 }
@@ -156,7 +157,7 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
 
 private val titulos = mapOf("pinceles" to "Biblioteca de pinceles", "estudio" to "Estudio del pincel", "color" to "Color", "capas" to "Capas",
     "acciones" to "Acciones", "ajustes" to "Ajustes", "transformar" to "Transformar", "mundo" to "Mundo", "territorios" to "Territorios",
-    "lugares" to "Lugares", "rutas" to "Rutas", "dibujos" to "Tus dibujos", "calco" to "Imagen para calcar", "sel" to "Lo elegido")
+    "lugares" to "Lugares", "rutas" to "Rutas", "dibujos" to "Tus dibujos", "calco" to "Imagen para calcar", "secciones" to "Secciones del terreno", "sel" to "Lo elegido")
 
 private fun nuevaCapa(ed: Editor) {
     val lz = ed.lienzo
@@ -198,7 +199,7 @@ private fun BarraSuperior(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean,
     }
 }
 
-private val herramientasMundo = setOf(Herramienta.TERRITORIO, Herramienta.LUGAR, Herramienta.ROTULO, Herramienta.RUTA, Herramienta.SELLO, Herramienta.REGLA, Herramienta.ELEGIR, Herramienta.MANO)
+private val herramientasMundo = setOf(Herramienta.SECCION, Herramienta.TERRITORIO, Herramienta.LUGAR, Herramienta.ROTULO, Herramienta.RUTA, Herramienta.SELLO, Herramienta.REGLA, Herramienta.ELEGIR, Herramienta.MANO)
 
 /** La goma (las librerías de iconos no traen una que se parezca). */
 @Composable
@@ -565,6 +566,7 @@ private fun PanelMundo(ed: Editor, abre: (String) -> Unit) {
             Column { Text(t, style = O.texto(15.sp, O.TINTA)); Text(d, style = O.texto(12.sp, if (ed.herramienta == h) O.TINTA else O.GRIS)) }
         }
     }
+    F(Herramienta.SECCION, "Secciones del terreno", "Marcos con su tamaño en km: dibujas solo dentro", "secciones")
     F(Herramienta.TERRITORIO, "Territorios", "Imperios, reinos, provincias: toca dentro de tus fronteras", "territorios")
     F(Herramienta.LUGAR, "Lugares", "Ciudades, castillos, templos… con su mapa propio", "lugares")
     F(Herramienta.ROTULO, "Rótulos", "Nombres de mares, sierras, lo que quieras", null)
@@ -853,6 +855,41 @@ private fun MapaVinculado(e: EstadoApp, ed: Editor, actual: String, nombre: Stri
             ed.guardaYa()
             e.listas++
             e.abreVinculado(m.id)
+        }
+    }
+}
+
+/** Las secciones del terreno: marcos con su tamaño real; con una activa, lo que dibujas no se sale de ella. */
+@Composable
+private fun PanelSecciones(ed: Editor, mesa: Mesa) {
+    val m = ed.mapa
+    Text("Arrastra en el lienzo para hacer una sección (verás sus km mientras), o escribe su tamaño. Con una activa, lo que dibujes y rellenes se queda dentro: sabes que mide eso como mucho.", style = O.texto(12.sp, O.GRIS))
+    if (!m.escalaPuesta) Text("Antes, fija la escala en Mundo → Escala (ahora 1 px = ${m.kmPorPx.toString().replace('.', ',')} km).", style = O.texto(12.sp, O.ACENTO))
+    var ancho by remember { mutableStateOf("500") }; var alto by remember { mutableStateOf("300") }
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        CampoO(ancho, { ancho = it.filter { c -> c.isDigit() || c == ',' || c == '.' } }, Modifier.width(90.dp), "Ancho")
+        Text("×", style = O.texto(16.sp, O.TINTA))
+        CampoO(alto, { alto = it.filter { c -> c.isDigit() || c == ',' || c == '.' } }, Modifier.width(90.dp), "Alto")
+        Text("km", style = O.texto(14.sp, O.GRIS))
+        BotonO("Crear", lleno = true, color = O.ACENTO) {
+            val w = (ancho.replace(',', '.').toFloatOrNull() ?: 0f) / m.kmPorPx; val h = (alto.replace(',', '.').toFloatOrNull() ?: 0f) / m.kmPorPx
+            if (w > 1f && h > 1f) { val v = mesa.vista.visible(); ed.nuevaSeccion(v.centerX() - w / 2, v.centerY() - h / 2, w, h); mesa.refresca() }
+        }
+    }
+    InterruptorO("Dibujar en todo el lienzo (ninguna activa)", m.seccionActiva.isBlank()) { if (it) { ed.cambiaVector("Sección") { m.seccionActiva = "" }; mesa.refresca() } }
+    for (s in m.secciones) {
+        val activa = s.id == m.seccionActiva
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (activa) O.ACENTO else O.CRUDO).pulsableO { ed.cambiaVector("Sección") { m.seccionActiva = if (activa) "" else s.id }; mesa.refresca() }.padding(10.dp)) {
+            Text(s.nombre, style = O.texto(15.sp, O.TINTA))
+            Text(Medidas.formatoKm(s.w.toDouble() * m.kmPorPx) + " × " + Medidas.formatoKm(s.h.toDouble() * m.kmPorPx) + " · " + Medidas.formatoKm2(s.w.toDouble() * s.h * m.kmPorPx * m.kmPorPx) + if (activa) " · dibujas aquí" else "", style = O.texto(12.sp, if (activa) O.TINTA else O.GRIS))
+            if (activa) {
+                var nombre by remember(s.id) { mutableStateOf(s.nombre) }
+                CampoO(nombre, { nombre = it; s.nombre = it; m.avisaVector() }, Modifier.fillMaxWidth().padding(top = 6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 6.dp)) {
+                    BotonO("Ir a ella") { val k = minOf(mesa.width / s.w, mesa.height / s.h) * 0.85f; mesa.irA(s.x + s.w / 2, s.y + s.h / 2, k) }
+                    BotonO("Borrar", color = O.ROJO) { ed.cambiaVector("Borrar sección") { m.secciones.remove(s); if (m.seccionActiva == s.id) m.seccionActiva = "" }; mesa.refresca() }
+                }
+            }
         }
     }
 }

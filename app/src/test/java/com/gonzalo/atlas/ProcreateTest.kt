@@ -50,4 +50,22 @@ class ProcreateTest {
         assertTrue(m2.calco!!.encima)
         assertTrue(m2.infinito)
     }
+
+    @Test fun seccionesLimitanElRelleno() {
+        val ctx = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val bib = com.gonzalo.atlas.motor.Biblioteca(Files.createTempDirectory("b").toFile())
+        val m = bib.creaMapa(bib.creaMundo("W").id, "S", 0, 0)
+        m.secciones += com.gonzalo.atlas.motor.Seccion("s1", "Reino", 100f, 100f, 300f, 200f)
+        m.seccionActiva = "s1"
+        val lz = com.gonzalo.atlas.lienzo.Lienzo(m, ctx.resources).also { it.carga() }
+        lz.activa = m.capas.first().id
+        val e = lz.rellena(200, 200, 0xFF336699.toInt(), 1f)
+        org.junit.Assert.assertNotNull(e)
+        assertEquals(0x33, Color.red(lz.colorEn(390, 290)))
+        assertTrue("fuera de la sección no", lz.colorEn(450, 200) == m.papel)
+        m.guardaMeta()
+        val m2 = Mapa.lee(m.dir!!)!!
+        assertEquals("s1", m2.seccionActiva)
+        assertEquals(300f, m2.secciones.single().w, 0f)
+    }
 }

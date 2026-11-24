@@ -235,20 +235,24 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         // El trazo se pinta de una vez en la GPU por bloques de hasta 8×8 teselas (con texturas y partículas, igual que en
         // pantalla); si la GPU no está disponible, tesela a tesela en la CPU (sin texturas)
         val bloque = 8
+        // La sección activa: lo que caiga fuera de ella no se pinta
+        val rec = mapa.seccionActivaRect()
         var by = y0
         while (by <= y1) {
             var bx = x0
             while (bx <= x1) {
                 val bw = min(bloque, x1 - bx + 1); val bh = min(bloque, y1 - by + 1)
-                val img = Rasterizador.pinta(renderer, st, bx * L, by * L, bw * L, bh * L)
+                // En la GPU (como en pantalla, con texturas); si sale vacío o no se puede, con nuestro propio pintor
+                val img = Rasterizador.pinta(renderer, st, bx * L, by * L, bw * L, bh * L)?.takeIf { !vacio(it) }
+                    ?: RasterPropio.pinta(st, tipo, res, bx * L, by * L, bw * L, bh * L)
                 for (ty in by until by + bh) for (tx in bx until bx + bw) {
                     if (!dentro(tx, ty)) continue
                     val k = clave(tx, ty)
                     val viejo = c.teselas[k]
                     if (viejo == null && (tipo.goma || c.info.bloqueoAlfa)) continue
                     tmp.eraseColor(Color.TRANSPARENT)
-                    if (img != null) tmpC.drawBitmap(img, Rect((tx - bx) * L, (ty - by) * L, (tx - bx + 1) * L, (ty - by + 1) * L), Rect(0, 0, L, L), null)
-                    else { mTrazo.setTranslate(-tx * L.toFloat(), -ty * L.toFloat()); renderer.draw(tmpC, st, mTrazo, 0f) }
+                    tmpC.drawBitmap(img, Rect((tx - bx) * L, (ty - by) * L, (tx - bx + 1) * L, (ty - by + 1) * L), Rect(0, 0, L, L), null)
+                    if (rec != null) recorta(tmp, rec, tx, ty)
                     if (estaVacia(tmp)) continue
                     val nuevo = viejo?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
                     Canvas(nuevo).drawBitmap(tmp, 0f, 0f, pComp)
@@ -265,6 +269,19 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         if (antes.isEmpty()) return null
         avisaTeselas(antes.keys)
         return Edicion.Teselas(tipo.nombre, c.info.id, antes, despues)
+    }
+
+    /** Borra de [b] (la tesela tx, ty) lo que cae fuera de [r] (píxeles del lienzo). */
+    private fun recorta(b: Bitmap, r: RectF, tx: Int, ty: Int) {
+        val c = Canvas(b)
+        c.translate(-tx * L.toFloat(), -ty * L.toFloat())
+        c.clipOutRect(r)
+        c.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+    }
+
+    private fun vacio(b: Bitmap): Boolean {
+        val px = IntArray(b.width); for (y in 0 until b.height step 2) { b.getPixels(px, 0, b.width, 0, y, b.width, 1); if (px.any { (it ushr 24) != 0 }) return false }
+        return true
     }
 
     private fun estaVacia(b: Bitmap): Boolean {
@@ -413,6 +430,7 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
     }
 
     private fun limitesRelleno(x: Int, y: Int): Rect {
+        mapa.seccionActivaRect()?.let { r -> return Rect(r.left.toInt(), r.top.toInt(), r.right.toInt(), r.bottom.toInt()) }
         val l = limites()
         if (!mapa.infinito) return l
         // En un lienzo infinito se rellena como mucho en un cuadrado de 8.192 px alrededor (y dentro de lo dibujado + margen)
@@ -594,6 +612,68 @@ object Rasterizador {
         } catch (e: Throwable) {
             falla = true
             null
+        }
+    }
+}
+
+/**
+ * Nuestro propio pintor de trazos, para cuando la GPU no lo puede pasar a la capa: el contorno del trazo relleno (con el
+ * grano del pincel encima) o, en los pinceles de sellos, los sellos uno a uno a lo largo del trazo con su presión.
+ */
+object RasterPropio {
+    fun pinta(st: Stroke, tipo: TipoPincel, res: Resources, x: Int, y: Int, w: Int, h: Int): Bitmap {
+        val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val c = Canvas(b)
+        c.translate(-x.toFloat(), -y.toFloat())
+        val d = Pinceles.def(tipo.clave)
+        val color = st.brush.colorIntArgb or (0xFF shl 24)
+        val tam = st.brush.size
+        val sello = d.stock.isBlank() && d.forma != "redonda" && d.forma != "plana"
+        val textura = if (sello) runCatching { Pinceles.almacen(res).get(d.forma) }.getOrNull() else null
+        if (textura != null) sellos(c, st, d, textura, color, tam)
+        else {
+            val path = android.graphics.Path().apply { fillType = android.graphics.Path.FillType.WINDING }
+            val m = st.shape; val v = androidx.ink.geometry.MutableVec(0f, 0f)
+            for (g in 0 until m.getRenderGroupCount()) for (o in 0 until m.getOutlineCount(g)) {
+                val n = m.getOutlineVertexCount(g, o); if (n < 3) continue
+                for (i in 0 until n) { m.populateOutlinePosition(g, o, i, v); if (i == 0) path.moveTo(v.x, v.y) else path.lineTo(v.x, v.y) }
+                path.close()
+            }
+            c.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color })
+            // El grano del pincel: deja ver el trazo solo donde la textura pinta
+            if (d.grano.isNotBlank()) runCatching { Pinceles.almacen(res).get(d.grano) }.getOrNull()?.let { g ->
+                val sh = android.graphics.BitmapShader(g, android.graphics.Shader.TileMode.REPEAT, android.graphics.Shader.TileMode.REPEAT)
+                sh.setLocalMatrix(Matrix().apply { setScale(d.escalaGrano / g.width, d.escalaGrano / g.height) })
+                c.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), Paint().apply { shader = sh; xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) })
+            }
+        }
+        return b
+    }
+
+    private fun sellos(c: Canvas, st: Stroke, d: DefPincel, tex: Bitmap, color: Int, tam: Float) {
+        val ins = st.inputs; val n = ins.size; if (n == 0) return
+        val p = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply { colorFilter = android.graphics.PorterDuffColorFilter(color, PorterDuff.Mode.SRC_IN) }
+        val rnd = java.util.Random(ins.getNoiseSeed().toLong())
+        val paso = kotlin.math.max(1f, kotlin.math.max(0.02f, d.espaciado) * tam)
+        var resto = 0f
+        var ax = ins.get(0).x; var ay = ins.get(0).y; var ap = if (ins.hasPressure()) ins.get(0).pressure else 1f
+        fun sello(px: Float, py: Float, pr: Float) {
+            val s = tam * (if (d.presionTamano > 0.01f) (1f - d.presionTamano) + d.presionTamano * pr else 1f)
+            p.alpha = ((if (d.presionOpacidad > 0.01f) (1f - d.presionOpacidad) + d.presionOpacidad * pr else 1f) * 255).toInt().coerceIn(1, 255)
+            val lat = (rnd.nextFloat() * 2 - 1) * d.dispersion * s
+            val giro = (rnd.nextFloat() * 2 - 1) * d.giroAzar * 180f
+            c.save(); c.translate(px + lat * 0.7f, py + lat * 0.7f); c.rotate(giro)
+            c.drawBitmap(tex, null, RectF(-s / 2, -s / 2, s / 2, s / 2), p)
+            c.restore()
+        }
+        sello(ax, ay, ap)
+        for (i in 1 until n) {
+            val e = ins.get(i); val bp = if (ins.hasPressure()) e.pressure else 1f
+            val dd = kotlin.math.hypot(e.x - ax, e.y - ay)
+            var t = paso - resto
+            while (t <= dd) { val f = t / dd; sello(ax + (e.x - ax) * f, ay + (e.y - ay) * f, ap + (bp - ap) * f); t += paso }
+            resto = dd - (t - paso)
+            ax = e.x; ay = e.y; ap = bp
         }
     }
 }

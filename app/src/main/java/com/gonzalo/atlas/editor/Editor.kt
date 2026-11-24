@@ -34,7 +34,7 @@ import kotlin.random.Random
 /** Qué hace el lápiz (o el dedo) sobre el mapa. */
 enum class Herramienta(val nombre: String) {
     PINCEL("Pintar"), DIFUMINAR("Difuminar"), GOMA("Borrar"), TRANSFORMAR("Transformar"), RELLENO("Relleno"), CUENTAGOTAS("Cuentagotas"), TERRITORIO("Territorios"),
-    LUGAR("Lugares"), ROTULO("Rótulos"), RUTA("Rutas"), SELLO("Tus dibujos"), ELEGIR("Elegir"), REGLA("Regla"), MANO("Mover"), CALCO("Calco"),
+    LUGAR("Lugares"), ROTULO("Rótulos"), RUTA("Rutas"), SELLO("Tus dibujos"), ELEGIR("Elegir"), REGLA("Regla"), MANO("Mover"), CALCO("Calco"), SECCION("Secciones"),
 }
 
 /** Cómo se marca un territorio: tocando dentro de tus líneas, pintándolo o quitándolo. */
@@ -144,9 +144,14 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
 
     fun trazoTerminado(st: androidx.ink.strokes.Stroke, tipo: com.gonzalo.atlas.lienzo.TipoPincel, op: Float, capa: String, despues: () -> Unit) {
         lienzo.enHilo {
-            val e = lienzo.pintaTrazo(st, tipo, op, capa)
-            e?.let { lienzo.apunta(it) }
-            principal.post(despues)
+            val e = runCatching { lienzo.pintaTrazo(st, tipo, op, capa) }
+            e.getOrNull()?.let { lienzo.apunta(it) }
+            principal.post {
+                // Que no desaparezca sin decir nada: si el trazo no ha llegado a la capa, se avisa (y por qué)
+                if (e.isFailure) aviso = "El trazo no se ha podido pasar a la capa: ${e.exceptionOrNull()?.message ?: e.exceptionOrNull()?.javaClass?.simpleName}"
+                else if (e.getOrNull() == null && !tipo.goma && mapa.seccionActiva.isBlank()) aviso = "El trazo no ha llegado a la capa «${lienzo.capa(capa)?.info?.nombre}» (¿está oculta o bloqueada?)"
+                despues()
+            }
         }
     }
 
@@ -211,6 +216,7 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
             Herramienta.RUTA -> borrador = Linea("borrador", tipoRuta, floatArrayOf(x), floatArrayOf(y), null)
             Herramienta.TERRITORIO -> borrador = Linea("borrador", "territorio", floatArrayOf(x), floatArrayOf(y), null)
             Herramienta.REGLA -> regla = floatArrayOf(x, y, x, y)
+            Herramienta.SECCION -> seccionBorrador = floatArrayOf(x, y, x, y)
             Herramienta.ELEGIR -> { arrastre = floatArrayOf(x, y); antesArrastre = mapa.vectorJson().toString() }
             else -> {}
         }
@@ -224,6 +230,7 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
                 borrador = Linea("borrador", borrador?.tipo ?: "camino", bx.toFloatArray(), by.toFloatArray(), null)
             }
             Herramienta.REGLA -> regla = floatArrayOf(bx[0], by[0], x, y)
+            Herramienta.SECCION -> seccionBorrador = floatArrayOf(bx[0], by[0], x, y)
             Herramienta.ELEGIR -> {
                 val a = arrastre ?: return
                 val dx = x - a[0]; val dy = y - a[1]
@@ -257,6 +264,11 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
                     trabajo("Pintando el territorio…") { lienzo.territorioPincel(b.xs, b.ys, r, id)?.let { lienzo.apunta(it) } }
                 }
             }
+            Herramienta.SECCION -> {
+                val r = seccionBorrador ?: return; seccionBorrador = null
+                val x0 = minOf(r[0], r[2]); val y0 = minOf(r[1], r[3]); val w = kotlin.math.abs(r[2] - r[0]); val h = kotlin.math.abs(r[3] - r[1])
+                if (w > 16f && h > 16f) nuevaSeccion(x0, y0, w, h)
+            }
             Herramienta.ELEGIR -> {
                 if (arrastre != null && seleccion != null) antesArrastre?.let { lienzo.apunta(Edicion.Vector("Mover", it, mapa.vectorJson().toString())); mapa.avisaVector() }
                 arrastre = null
@@ -267,7 +279,7 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     }
 
     fun arrastra(): Boolean = when (herramienta) {
-        Herramienta.RUTA, Herramienta.REGLA -> true
+        Herramienta.RUTA, Herramienta.REGLA, Herramienta.SECCION -> true
         Herramienta.TERRITORIO -> modoTerritorio != ModoTerritorio.ZONA
         Herramienta.ELEGIR -> seleccion != null
         else -> false
@@ -289,6 +301,17 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
             when (s) { is Lugar -> mapa.lugares.remove(s); is Rotulo -> mapa.rotulos.remove(s); is Sello -> mapa.sellos.remove(s); is Linea -> mapa.rutas.remove(s); is com.gonzalo.atlas.motor.Leyenda -> s.visible = false }
             seleccion = null
         }
+    }
+
+    /** El rectángulo que se está dibujando para una sección nueva. */
+    var seccionBorrador by mutableStateOf<FloatArray?>(null)
+
+    /** Una sección nueva (y activa: desde ya se dibuja solo dentro). */
+    fun nuevaSeccion(x: Float, y: Float, w: Float, h: Float): com.gonzalo.atlas.motor.Seccion {
+        val s = com.gonzalo.atlas.motor.Seccion(mapa.nuevoId("s"), "Sección ${mapa.secciones.size + 1}", x, y, w, h)
+        cambiaVector("Sección") { mapa.secciones += s; mapa.seccionActiva = s.id }
+        aviso = "Dibujas dentro de «${s.nombre}»"
+        return s
     }
 
     fun nuevoTerritorio(tipo: String, padre: Int): Territorio? {

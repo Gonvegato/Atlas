@@ -171,6 +171,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         opciones.radioBorrador = editor.radioTerritorio
         opciones.seleccion = editor.seleccion
         opciones.regla = editor.regla
+        opciones.seccionBorrador = editor.seccionBorrador
         capas.dibuja(c, mapa, vista, editor.centros, editor.superficies, recurso, opciones)
     }
 

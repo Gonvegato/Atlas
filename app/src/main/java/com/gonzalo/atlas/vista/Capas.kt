@@ -93,6 +93,7 @@ class Capas(private val ctx: Context) {
         var borrador: Linea? = null,
         var seleccion: Any? = null,
         var regla: FloatArray? = null,
+        var seccionBorrador: FloatArray? = null,
         var radioBorrador: Float = 0f,
         var cursor: FloatArray? = null, // x, y (pantalla), radio (pantalla)
         var impresion: Boolean = false,
@@ -107,6 +108,7 @@ class Capas(private val ctx: Context) {
         c.concat(v.m)
         cuadriculaVisible = op.cuadricula
         if (op.cuadricula) cuadricula(c, mapa, v)
+        secciones(c, mapa, v, op)
         for (k in mapa.rutas) camino(c, k, z, op.seleccion === k)
         op.borrador?.let { b ->
             if (b.tipo == "territorio") {
@@ -218,6 +220,35 @@ class Capas(private val ctx: Context) {
         } else texto(c, texto, p[0], p[1] + tam * 0.35f, tam, tf, col, esp, 3f)
         if (t === sel) { pLinea.color = ACENTO; pLinea.strokeWidth = 2 * dens; pTexto.textSize = tam; val w = pTexto.measureText(texto) / 2 + 8 * dens; c.drawRect(p[0] - w, p[1] - tam * 0.75f, p[0] + w, p[1] + tam * 0.6f, pLinea) }
         c.restore()
+    }
+
+    // ---------------------------------------------------------------- secciones del terreno
+
+    private fun secciones(c: Canvas, mapa: Mapa, v: Vista, op: Opciones) {
+        val u = dens / v.zoom
+        val activa = mapa.secciones.firstOrNull { it.id == mapa.seccionActiva }
+        if (activa != null && !op.impresion) {
+            // Fuera de la sección activa, un velo: se ve dónde se puede dibujar
+            val vis = v.visible(); vis.inset(-10f, -10f)
+            c.save(); c.clipOutRect(activa.x, activa.y, activa.x + activa.w, activa.y + activa.h)
+            pRelleno.color = 0x66000000; c.drawRect(vis, pRelleno); c.restore()
+        }
+        for (s in mapa.secciones) marco(c, mapa, s.x, s.y, s.w, s.h, s.nombre, s === activa, u, v)
+        op.seccionBorrador?.let { r -> marco(c, mapa, minOf(r[0], r[2]), minOf(r[1], r[3]), kotlin.math.abs(r[2] - r[0]), kotlin.math.abs(r[3] - r[1]), "Nueva sección", true, u, v) }
+    }
+
+    private fun marco(c: Canvas, mapa: Mapa, x: Float, y: Float, w: Float, h: Float, nombre: String, activa: Boolean, u: Float, v: Vista) {
+        pLinea.pathEffect = if (activa) null else DashPathEffect(floatArrayOf(8 * u, 5 * u), 0f)
+        pLinea.color = if (activa) 0xFF3D8BFF.toInt() else 0xAA3D8BFF.toInt(); pLinea.strokeWidth = (if (activa) 2.5f else 1.5f) * u
+        c.drawRect(x, y, x + w, y + h, pLinea); pLinea.pathEffect = null
+        val km = Medidas.formatoKm(w.toDouble() * mapa.kmPorPx) + " × " + Medidas.formatoKm(h.toDouble() * mapa.kmPorPx) + " · " + Medidas.formatoKm2(w.toDouble() * h * mapa.kmPorPx * mapa.kmPorPx)
+        c.save(); c.translate(x, y); c.scale(u, u)
+        pTexto.typeface = Letras.interSemi; pTexto.textSize = 12f; pTexto.letterSpacing = 0.04f; pTexto.textAlign = Paint.Align.LEFT; pTexto.color = 0xFF3D8BFF.toInt()
+        pHalo.typeface = Letras.interSemi; pHalo.textSize = 12f; pHalo.letterSpacing = 0.04f; pHalo.textAlign = Paint.Align.LEFT; pHalo.strokeWidth = 3f; pHalo.color = PAPEL
+        val t = "${nombre.uppercase()} · $km"
+        c.drawText(t, 4f, -6f, pHalo); c.drawText(t, 4f, -6f, pTexto)
+        c.restore()
+        @Suppress("UNUSED_VARIABLE") val z = v.zoom
     }
 
     // ---------------------------------------------------------------- leyenda

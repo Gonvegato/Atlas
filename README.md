@@ -4,6 +4,16 @@ App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma fir
 Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
 etiqueta `v0.15.0`.
 
+## 1.2.1
+
+- **Arreglado: lo dibujado se borraba al levantar el lápiz.** El trazo en curso lo pinta Ink en pantalla; al terminar hay que
+  pasarlo a la capa, y en muchos dispositivos eso no salía (los pinceles con textura o grano solo se podían pasar en la GPU
+  y con Android 14 o más). Ahora, si la GPU no lo da, ATLAS pinta el trazo él mismo: su contorno con el grano del pincel, o
+  sus sellos uno a uno con la presión. Y si algún trazo no llegara a la capa, lo dice en pantalla en lugar de desaparecer.
+- **Secciones del terreno** (Mundo → Secciones): marcos con su tamaño en km, hechos arrastrando (se ven sus km mientras) o
+  escribiendo el ancho y el alto. Con una activa, lo que dibujas y rellenas no se sale de ella (fuera se ve un velo): lo de
+  dentro mide eso como mucho. Se puede ir a ella, renombrarla, borrarla o dibujar otra vez en todo el lienzo.
+
 ## 1.2.0 — una app de dibujo de verdad, vuelta hacia los mundos
 
 - **La mesa de dibujo como Procreate.** Al dibujar, el lienzo ocupa toda la pantalla (sin la cabecera de la familia): barra

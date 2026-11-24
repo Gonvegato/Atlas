@@ -57,6 +57,15 @@ class Calco(var visible: Boolean = true, var x: Float = 0f, var y: Float = 0f, v
     }
 }
 
+/**
+ * Una sección del terreno: un marco con su tamaño real (por ejemplo, 500 × 300 km). Con ella activa, lo que dibujas no se
+ * sale de ella: así sabes que lo de dentro mide eso como mucho.
+ */
+class Seccion(val id: String, var nombre: String, var x: Float, var y: Float, var w: Float, var h: Float) {
+    fun json() = JSONObject().put("id", id).put("n", nombre).put("x", x.toDouble()).put("y", y.toDouble()).put("w", w.toDouble()).put("h", h.toDouble())
+    companion object { fun de(o: JSONObject) = Seccion(o.optString("id"), o.optString("n"), o.optDouble("x").toFloat(), o.optDouble("y").toFloat(), o.optDouble("w").toFloat(), o.optDouble("h").toFloat()) }
+}
+
 /** La leyenda del mapa: un cuadro que se mueve y escala como un objeto más. */
 class Leyenda(
     var visible: Boolean = false, var x: Float = Float.NaN, var y: Float = Float.NaN, var escala: Float = 1f,
@@ -161,6 +170,10 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
     val rotulos = CopyOnWriteArrayList<Rotulo>()
     val sellos = CopyOnWriteArrayList<Sello>()
     var leyenda = Leyenda()
+    val secciones = CopyOnWriteArrayList<Seccion>()
+    /** La sección en la que se dibuja (lo de fuera no se pinta); "" ninguna. */
+    var seccionActiva = ""
+    fun seccionActivaRect(): android.graphics.RectF? = secciones.firstOrNull { it.id == seccionActiva }?.let { android.graphics.RectF(it.x, it.y, it.x + it.w, it.y + it.h) }
     /** La imagen para calcar (su archivo, calco.png en la carpeta del mapa); null si no hay. */
     var calco: Calco? = null
 
@@ -196,6 +209,7 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         .put("sellos", JSONArray().also { a -> sellos.forEach { a.put(it.json()) } })
         .put("leyenda", leyenda.json())
         .put("calco", calco?.json() ?: JSONObject.NULL)
+        .put("secciones", JSONArray().also { a -> secciones.forEach { a.put(it.json()) } }).put("seccionActiva", seccionActiva)
         .put("capas", JSONArray().also { a -> capas.forEach { a.put(it.json()) } })
 
     fun ponVector(o: JSONObject) {
@@ -208,6 +222,8 @@ class Mapa(val id: String, var mundo: String, var nombre: String, val ancho: Int
         lista("rotulos", rotulos, Rotulo::de); lista("sellos", sellos, Sello::de)
         leyenda = Leyenda.de(o.optJSONObject("leyenda"))
         calco = Calco.de(o.optJSONObject("calco"))
+        lista("secciones", secciones, Seccion::de)
+        seccionActiva = o.optString("seccionActiva")
         if (o.has("capas")) lista("capas", capas, CapaInfo::de)
     }
 
