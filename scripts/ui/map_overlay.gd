@@ -38,6 +38,10 @@ var selected_road: int = -1
 var road_draft: Array = []
 var road_draft_kind: String = "camino"
 var map_px: Vector2 = Vector2(2048, 2048)
+## Escala (km por píxel del mapa) y cuadrícula.
+var km_per_px: float = 1.0
+var scale_set: bool = false
+var show_grid: bool = false
 var selected_place: int = -1
 var show_place_names: bool = true
 var show_realm_names: bool = true
@@ -90,6 +94,8 @@ func _draw() -> void:
 	# Primero se decide qué rótulos de lugares caben (son lo más importante); luego reinos y regiones buscan hueco
 	# sin pisarlos y se pintan debajo.
 	var layout: Array = _layout_places()
+	if show_grid:
+		_draw_grid()
 	_draw_roads()
 	_draw_towns()
 	_draw_routes()
@@ -110,9 +116,11 @@ func _draw() -> void:
 	if print_mode:
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE * ui_scale())
 		_draw_north(Vector2(40, size.y / ui_scale() - 46))
+		_draw_scale_bar(Vector2(78, size.y / ui_scale() - 30), map_screen_size.x / ui_scale())
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	else:
 		_draw_north(Vector2(40, size.y - 46))
+		_draw_scale_bar(Vector2(78, size.y - 30), map_screen_size.x)
 		_draw_zoom_tag()
 
 # ---------------------------------------------------------------- regiones con nombre
@@ -289,6 +297,88 @@ func ui_scale() -> float:
 	return clampf(0.5 + 0.5 * map_zoom, 0.6, 1.25)
 
 ## [lugar, posición en pantalla, ¿lleva nombre?]; deja en _taken los símbolos y nombres que se pintarán.
+## Un número «redondo» (1, 2, 5 × 10ⁿ) cerca de [x].
+static func _nice(x: float) -> float:
+	if x <= 0.0:
+		return 1.0
+	var e: float = pow(10.0, floor(log(x) / log(10.0)))
+	var f: float = x / e
+	return (1.0 if f < 1.5 else (2.0 if f < 3.5 else (5.0 if f < 7.5 else 10.0))) * e
+
+## Km que caben en un píxel de pantalla con la vista actual (ancho del mapa en pantalla [screen_w]).
+func _km_per_screen_px(screen_w: float) -> float:
+	return map_px.x * km_per_px / maxf(screen_w, 1.0)
+
+## Lado de la casilla de la cuadrícula (km): redondo y de 70-170 px en pantalla.
+func grid_km() -> float:
+	return _nice(_km_per_screen_px(map_screen_size.x) * 110.0)
+
+static func fmt_km(km: float) -> String:
+	if km >= 10.0:
+		return Estilo.miles(int(round(km))) + " km"
+	if km >= 1.0:
+		return ("%.1f" % km).replace(".", ",").trim_suffix(",0") + " km"
+	return Estilo.miles(int(round(km * 1000.0))) + " m"
+
+## Corta, para listas: «4,2 M km²», «42 mil km²».
+static func fmt_km2_corto(a: float) -> String:
+	if a >= 1000000.0:
+		return ("%.1f" % (a / 1000000.0)).replace(".", ",").trim_suffix(",0") + " M km²"
+	if a >= 10000.0:
+		return Estilo.miles(int(round(a / 1000.0))) + " mil km²"
+	return fmt_km2(a)
+
+static func fmt_km2(a: float) -> String:
+	if a <= 0.0:
+		return "0 km²"
+	if a >= 10.0:
+		return Estilo.miles(int(round(a))) + " km²"
+	if a >= 0.01:
+		return ("%.2f" % a).replace(".", ",") + " km²"
+	return Estilo.miles(int(round(a * 1000000.0))) + " m²"
+
+## La cuadrícula sobre el mapa: casillas de grid_km() de lado (líneas finas de tinta, más marcadas cada 5).
+func _draw_grid() -> void:
+	var g: float = grid_km()
+	var px_per_km: float = map_screen_size.x / (map_px.x * km_per_px)
+	var step: float = g * px_per_km
+	if step < 8.0:
+		return
+	var r := Rect2(map_pos, map_screen_size).intersection(Rect2(Vector2.ZERO, size))
+	if r.size.x <= 0.0 or r.size.y <= 0.0:
+		return
+	var i0: int = int(floor((r.position.x - map_pos.x) / step))
+	var i1: int = int(ceil((r.end.x - map_pos.x) / step))
+	for i in range(i0, i1 + 1):
+		var x: float = map_pos.x + float(i) * step
+		if x < r.position.x or x > r.end.x:
+			continue
+		draw_line(Vector2(x, r.position.y), Vector2(x, r.end.y), Color(ink, 0.32 if i % 5 == 0 else 0.16), 1.5 if i % 5 == 0 else 1.0)
+	var j0: int = int(floor((r.position.y - map_pos.y) / step))
+	var j1: int = int(ceil((r.end.y - map_pos.y) / step))
+	for j in range(j0, j1 + 1):
+		var y: float = map_pos.y + float(j) * step
+		if y < r.position.y or y > r.end.y:
+			continue
+		draw_line(Vector2(r.position.x, y), Vector2(r.end.x, y), Color(ink, 0.32 if j % 5 == 0 else 0.16), 1.5 if j % 5 == 0 else 1.0)
+
+## Barra de escala clásica (cuatro tramos alternos) con su medida; «≈» si la escala no está ajustada.
+func _draw_scale_bar(at: Vector2, screen_w: float) -> void:
+	var kpp: float = _km_per_screen_px(screen_w)
+	var total_km: float = _nice(kpp * 150.0)
+	var w: float = total_km / kpp
+	var h: float = 7.0
+	var f: Font = Estilo.versalitas()
+	var fs: int = 11
+	var seg: float = w / 4.0
+	draw_rect(Rect2(at - Vector2(6, 22), Vector2(w + 12 + f.get_string_size(fmt_km(total_km), HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x + 14, 34)), Color(paper, 0.82))
+	for i in 4:
+		draw_rect(Rect2(at + Vector2(seg * i, 0), Vector2(seg, h)), ink if i % 2 == 0 else paper)
+	draw_rect(Rect2(at, Vector2(w, h)), ink, false, 1.5)
+	draw_string(f, at + Vector2(0, -6), "0", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, ink)
+	var lbl: String = ("≈ " if not scale_set else "") + fmt_km(total_km)
+	draw_string(f, at + Vector2(w + 8, h), lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, ink)
+
 ## Caminos como en un mapa grabado: sendero a trazos, camino de una línea, calzada de dos líneas con el papel
 ## dentro, calzada imperial ancha con su piedra y una línea de puntos en medio.
 func _draw_roads() -> void:
@@ -584,6 +674,9 @@ func _draw_zoom_tag() -> void:
 	var f: Font = Estilo.versalitas()
 	var fs: int = 12
 	var txt: String = "ZOOM %d %%" % zoom_pct
+	if show_grid:
+		var g: float = grid_km()
+		txt = "CASILLA %s · %s  ·  %s" % [fmt_km(g).to_upper(), fmt_km2(g * g).to_upper(), txt]
 	var tw: float = f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	var pad := Vector2(10, 7)
 	var box := Rect2(Vector2(size.x - tw - pad.x * 2.0 - 16.0, size.y - 16.0 - fs - pad.y * 2.0), Vector2(tw + pad.x * 2.0, fs + pad.y * 2.0))

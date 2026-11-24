@@ -833,6 +833,25 @@ func set_relation(a: int, b: int, kind: String) -> void:
 
 # ---------------------------------------------------------------- viajes
 
+## Kilómetros por píxel del mapa: la escala calibrada en Viajes o puesta en Mundo; sin ninguna, 1 km por píxel
+## (un mapa de 2.048 px mide unos 2.000 km de lado, como un continente).
+const DEFAULT_KM_PX := 1.0
+
+func km_per_px() -> float:
+	var k: float = float(travel.get("km_per_px", 0.0))
+	return k if k > 0.0 else DEFAULT_KM_PX
+
+func scale_is_set() -> bool:
+	return float(travel.get("km_per_px", 0.0)) > 0.0
+
+## Pone la escala (km por píxel). Un paso del historial; la usan también los viajes.
+func set_km_per_px(k: float) -> void:
+	if k <= 0.0:
+		return
+	var tr: Dictionary = travel.duplicate(true)
+	tr["km_per_px"] = k
+	set_travel(tr)
+
 func set_travel(data: Dictionary) -> void:
 	var before: Dictionary = _meta_snapshot()
 	travel = data.duplicate(true)
@@ -1656,25 +1675,40 @@ func _compute_area_shapes() -> void:
 		out[id] = {"uv": Vector2(mx / float(w), my / float(h)), "angle": angle, "length": length}
 	area_shapes_changed.emit(out)
 
+## Centro y extensión de cada reino. Se cuenta sobre el territorio reducido a 512 px (precisión de una parte en
+## 262.144 del mapa) en otro hilo; el resultado llega con realm_centroids_changed.
+var _centroid_gen: int = 0
+
 func _compute_centroids() -> void:
-	var small: Image = _small(realm, Image.INTERPOLATE_NEAREST)
-	var w: int = small.get_width()
-	var data: PackedByteArray = small.get_data()
-	var acc: Dictionary = {}
-	for i in data.size():
-		var id: int = data[i]
-		if id == 0:
-			continue
-		var x: int = i % w
-		var y: int = i / w
-		if not acc.has(id):
-			acc[id] = Vector3.ZERO
-		var a: Vector3 = acc[id]
-		acc[id] = a + Vector3(x + 0.5, y + 0.5, 1.0)
-	var out: Dictionary = {}
-	var total: float = float(maxi(data.size(), 1))
-	var h: int = small.get_height()
-	for id in acc.keys():
-		var a: Vector3 = acc[id]
-		out[id] = {"uv": Vector2(a.x / a.z / float(w), a.y / a.z / float(h)), "area": a.z / total}
+	if realm == null or realm.mirror == null:
+		return
+	var side: int = 512
+	var w: int = side if map_size.x >= map_size.y else maxi(int(round(side * float(map_size.x) / float(map_size.y))), 1)
+	var h: int = side if map_size.y >= map_size.x else maxi(int(round(side * float(map_size.y) / float(map_size.x))), 1)
+	var small: Image = realm.mirror.duplicate()
+	small.resize(w, h, Image.INTERPOLATE_NEAREST)
+	_centroid_gen += 1
+	var gen: int = _centroid_gen
+	WorkerThreadPool.add_task(func():
+		var data: PackedByteArray = small.get_data()
+		var acc: Dictionary = {}
+		for i in data.size():
+			var id: int = data[i]
+			if id == 0:
+				continue
+			if not acc.has(id):
+				acc[id] = Vector3.ZERO
+			var a: Vector3 = acc[id]
+			acc[id] = a + Vector3(float(i % w) + 0.5, float(i / w) + 0.5, 1.0)
+		var out: Dictionary = {}
+		var total: float = float(maxi(data.size(), 1))
+		for id in acc.keys():
+			var a: Vector3 = acc[id]
+			out[id] = {"uv": Vector2(a.x / a.z / float(w), a.y / a.z / float(h)), "area": a.z / total}
+		_centroids_done.call_deferred(gen, out)
+	)
+
+func _centroids_done(gen: int, out: Dictionary) -> void:
+	if gen != _centroid_gen:
+		return
 	realm_centroids_changed.emit(out)

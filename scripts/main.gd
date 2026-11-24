@@ -632,6 +632,8 @@ func _connect_signals() -> void:
 		_raw_centroids = c
 		overlay.centroids = _realm_aggregate(c)
 		overlay.queue_redraw()
+		if section == "politico":
+			_on_realms_changed()
 	)
 
 func _on_workspace_gui_input(event: InputEvent) -> void:
@@ -963,6 +965,9 @@ func _clamp_infinite_view() -> void:
 func _apply_2d_transform() -> void:
 	if engine != null and engine.infinite:
 		_clamp_infinite_view()
+	if engine != null and overlay != null:
+		overlay.km_per_px = engine.km_per_px()
+		overlay.scale_set = engine.scale_is_set()
 	map_canvas.scale = Vector2.ONE * map_zoom
 	map_canvas.position = map_offset
 	if engine != null and engine.infinite and _recenter_timer != null:
@@ -977,8 +982,32 @@ func _apply_2d_transform() -> void:
 		mat_2d.set_shader_parameter("symbol_cell", clampf(cell * 1.6, 8.0, 96.0))
 
 var _recenter_timer: Timer
+var grid_btn: Button
+var lbl_realm_extent: Label
+var map_km_edit: LineEdit
 var map_frame: Panel
 var _told_infinite: bool = false
+
+func _set_grid(on: bool) -> void:
+	overlay.show_grid = on
+	overlay.queue_redraw()
+	if on:
+		Estilo.pintar_boton(grid_btn, Estilo.SOBRE_ACENTO, Estilo.ACENTO, Estilo.ACENTO.darkened(0.15), 14, 10, Estilo.TINTA, 2)
+	else:
+		Estilo.pintar_boton(grid_btn, Estilo.TINTA, Estilo.PAPEL, Estilo.CRUDO, 14, 10, Estilo.TINTA, 2)
+	var c := ConfigFile.new()
+	c.load("user://atlas.cfg")
+	c.set_value("vista", "cuadricula", on)
+	c.save("user://atlas.cfg")
+
+func _refresh_map_km() -> void:
+	if map_km_edit != null and not map_km_edit.has_focus():
+		map_km_edit.text = Estilo.miles(int(round(engine.km_per_px() * float(engine.map_size.x))))
+
+## Superficie de un reino (fracción del mapa) en km².
+func _area_km2(frac: float) -> float:
+	var k: float = engine.km_per_px()
+	return frac * float(engine.map_size.x) * float(engine.map_size.y) * k * k
 
 ## Mundo infinito: si el centro de la vista se acerca al borde de la ventana, la ventana se recoloca (trozos
 ## enteros) y la vista se queda donde estaba.
@@ -1033,6 +1062,8 @@ func _toggle_3d() -> void:
 	var in_3d: bool = input_ctrl.is_3d_mode
 	view_3d_container.visible = in_3d
 	view_2d_root.visible = not in_3d
+	if grid_btn != null:
+		grid_btn.visible = not in_3d
 	subviewport_3d.render_target_update_mode = (
 		SubViewport.UPDATE_ALWAYS if in_3d else SubViewport.UPDATE_DISABLED
 	)
@@ -1294,6 +1325,7 @@ func _select_section(id: String) -> void:
 	if id == "mundo":
 		_refresh_maps_list()
 		_refresh_cuenta(false)
+		_refresh_map_km()
 	if id == "lugares":
 		_refresh_roads_ui()
 	mat_2d.set_shader_parameter("show_area_edges", id == "regiones")
@@ -1393,7 +1425,9 @@ func _on_realms_changed() -> void:
 		var depth: int = e[1]
 		var id: int = int(r["id"])
 		var col: Color = r["color"]
-		var b := Estilo.boton("%s%s · %s" % ["   ".repeat(depth) + ("└ " if depth > 0 else ""), str(r["name"]).to_upper(), str(r["kind"])], 12, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 9)
+		var agg: Dictionary = overlay.centroids.get(id, {})
+		var ext: String = (" · " + MapOverlay.fmt_km2_corto(_area_km2(float(agg["area"])))) if agg.has("area") else ""
+		var b := Estilo.boton("%s%s · %s%s" % ["   ".repeat(depth) + ("└ " if depth > 0 else ""), str(r["name"]).to_upper(), str(r["kind"]), ext.to_upper()], 12, Estilo.TINTA, Color(0, 0, 0, 0), Color(0, 0, 0, 0.08), 12, 9)
 		b.custom_minimum_size = Vector2(0, 40)
 		b.icon = _swatch(col)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -1448,6 +1482,16 @@ func _refresh_realm_editor() -> void:
 		return
 	if not realm_name_edit.has_focus():
 		realm_name_edit.text = str(r["name"])
+	var agg: Dictionary = overlay.centroids.get(current_realm, {})
+	if agg.has("area") and float(agg["area"]) > 0.0:
+		var own: Dictionary = _raw_centroids.get(current_realm, {})
+		var t: String = "EXTENSIÓN · " + MapOverlay.fmt_km2(_area_km2(float(agg["area"]))).to_upper()
+		if not engine.realm_children(current_realm).is_empty():
+			t += " CON LOS SUYOS · PROPIO " + MapOverlay.fmt_km2(_area_km2(float(own.get("area", 0.0)))).to_upper()
+		t += ("" if engine.scale_is_set() else " (ESCALA APROXIMADA: AJÚSTALA EN MUNDO)")
+		lbl_realm_extent.text = t
+	else:
+		lbl_realm_extent.text = "SIN TERRITORIO TODAVÍA: PÍNTALO EN EL MAPA"
 	var kind: String = r["kind"]
 	for i in realm_kind_chips.size():
 		_paint_filter(realm_kind_chips[i], Catalogo.TIPOS_REINO[i] == kind)
@@ -1645,6 +1689,16 @@ func _build_ui() -> void:
 		qb.pressed.connect(func(): _set_draw_mode("contorno" if qi == 1 else "pincel"))
 		quick_bar.add_child(qb)
 		quick_mode_chips.append(qb)
+	# La cuadrícula (km² por casilla) va en todas las secciones del mapa 2D.
+	var gcfg := ConfigFile.new()
+	gcfg.load("user://atlas.cfg")
+	var grid_on: bool = bool(gcfg.get_value("vista", "cuadricula", false))
+	grid_btn = Estilo.boton("CUADRÍCULA", 12, Estilo.TINTA, Estilo.PAPEL, Estilo.CRUDO, 14, 10, Estilo.TINTA, 2)
+	grid_btn.custom_minimum_size = Vector2(0, 44)
+	grid_btn.position = Vector2(16, 64)
+	workspace.add_child(grid_btn)
+	grid_btn.pressed.connect(func(): _set_grid(not overlay.show_grid))
+	_set_grid.call_deferred(grid_on)
 	toast_panel = PanelContainer.new()
 	toast_panel.add_theme_stylebox_override("panel", Estilo.caja(Estilo.TINTA, Estilo.ACENTO, 0, 16, 10))
 	toast_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2117,6 +2171,9 @@ func _build_section_politico(col: Control) -> void:
 	realm_editor.add_theme_constant_override("separation", 10)
 	v.add_child(realm_editor)
 	realm_editor.add_child(Estilo.filete(2))
+	lbl_realm_extent = Estilo.etiqueta("", 11, Estilo.ACENTO)
+	lbl_realm_extent.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	realm_editor.add_child(lbl_realm_extent)
 	realm_editor.add_child(Estilo.etiqueta("NOMBRE", 11, Estilo.GRIS))
 	realm_name_edit = _line_edit(realm_editor, func(t: String):
 		if t.strip_edges() != "":
@@ -3066,6 +3123,16 @@ func _build_section_mundo(col: Control) -> void:
 		_refresh_maps_list()
 	)
 	_note(v, "Se guarda solo unos segundos después de cada cambio y al salir de la app.")
+	v.add_child(_caption("ESCALA · ANCHO DEL MAPA EN KM"))
+	map_km_edit = _line_edit(v, func(t: String):
+		var km: float = t.replace(".", "").replace(",", ".").to_float()
+		if km > 0.0:
+			engine.set_km_per_px(km / float(engine.map_size.x))
+			_apply_2d_transform()
+			overlay.queue_redraw()
+			_on_realms_changed()
+	)
+	_note(v, "La barra de escala, la cuadrícula, la extensión de los reinos y los viajes usan esta medida (calibrar un viaje en Viajes también la cambia).")
 	var rrow := HFlowContainer.new()
 	v.add_child(rrow)
 	_accent_link(rrow, "QUITAR RAYAS DEL RELIEVE", func():

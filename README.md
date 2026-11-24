@@ -2,6 +2,16 @@
 
 Godot 4.7.2-stable · GL Compatibility (OpenGL ES 3) · Android `arm64-v8a`.
 
+## 0.14.1
+
+- **Escala.** Barra de escala en el mapa 2D (abajo a la izquierda, junto al norte), con una medida redonda según el zoom;
+  «≈» si la escala aún no está ajustada. Se ajusta en Mundo → ESCALA (el ancho del mapa en km) o calibrando un viaje en
+  Viajes (es la misma medida). Sin ajustar, 1 km por píxel.
+- **Cuadrícula.** Botón CUADRÍCULA sobre el mapa: casillas de un lado redondo (1, 2, 5… km) según el zoom, más marcadas
+  cada cinco, y abajo cuánto mide cada casilla y su superficie («CASILLA 200 KM · 40.000 KM²»). Se recuerda.
+- **Extensión de los reinos.** En Política, cada reino en la lista con su superficie y, en su ficha, la extensión (los
+  imperios, con la de sus reinos y la propia). Se cuenta en otro hilo sobre el territorio a 512 px.
+
 ## 0.14.0
 
 - **Mapas vinculados con escritos.** En Mundo → Cuenta de la familia, ESCRITOS DE ESTE MAPA: un mapa puede ir con varias
