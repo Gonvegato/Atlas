@@ -167,16 +167,22 @@ class Sello(val id: String, var recurso: String, var x: Double, var y: Double, v
 }
 
 /**
- * Una tierra generada (un continente, un archipiélago…) y dónde se puso: el recuadro en el lienzo, con cuántas muestras se
- * calculó ([gw] × [gh]) y su forma. Con esto, al generar otra que la toque, las dos se pueden unir en una sola.
+ * Una tierra generada (un continente, un archipiélago…) y dónde está: el recuadro en el lienzo, con cuántas muestras se
+ * calculó ([gw] × [gh]), su forma y sus colores (0: sin pintar). Las tierras [movible]s se dibujan solas en sus dos capas
+ * (la costa y el color) a partir de esta lista: por eso se pueden mover, borrar y fundir unas con otras. (Las generadas
+ * con versiones anteriores quedaron dibujadas en las capas del mapa: esas no se mueven.)
  */
-class Tierra(val x: Float, val y: Float, val w: Float, val h: Float, val gw: Int, val gh: Int, val forma: FormaTierra) {
+class Tierra(var x: Float, var y: Float, val w: Float, val h: Float, val gw: Int, val gh: Int, val forma: FormaTierra,
+             val id: String = "", val tinta: Int = 0xFF2A2118.toInt(), val colTierra: Int = 0, val colMar: Int = 0, val movible: Boolean = false) {
     val rect get() = android.graphics.RectF(x, y, x + w, y + h)
+    fun con(forma: FormaTierra) = Tierra(x, y, w, h, gw, gh, forma, id, tinta, colTierra, colMar, movible)
     fun json() = JSONObject().put("x", x.toDouble()).put("y", y.toDouble()).put("w", w.toDouble()).put("h", h.toDouble()).put("gw", gw).put("gh", gh)
         .put("s", forma.semilla).put("t", forma.tipo).put("ti", forma.tierra.toDouble()).put("r", forma.rugosidad.toDouble()).put("i", forma.islas.toDouble())
+        .put("id", id).put("ink", tinta).put("ct", colTierra).put("cm", colMar).put("mv", movible)
     companion object {
         fun de(o: JSONObject) = Tierra(o.optDouble("x").toFloat(), o.optDouble("y").toFloat(), o.optDouble("w").toFloat(), o.optDouble("h").toFloat(), o.optInt("gw"), o.optInt("gh"),
-            FormaTierra(o.optLong("s"), o.optString("t", "continente"), o.optDouble("ti", 0.36).toFloat(), o.optDouble("r", 0.5).toFloat(), o.optDouble("i", 0.35).toFloat()))
+            FormaTierra(o.optLong("s"), o.optString("t", "continente"), o.optDouble("ti", 0.36).toFloat(), o.optDouble("r", 0.5).toFloat(), o.optDouble("i", 0.35).toFloat()),
+            o.optString("id"), o.optInt("ink", 0xFF2A2118.toInt()), o.optInt("ct"), o.optInt("cm"), o.optBoolean("mv"))
     }
 }
 

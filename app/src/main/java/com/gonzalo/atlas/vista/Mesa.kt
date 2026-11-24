@@ -414,7 +414,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 if (!esLapiz(e, 0)) programaCuentagotas(e.x, e.y)
                 // Las herramientas que trabajan con los píxeles del mapa (o con medidas cortas) no sirven de muy cerca: se avisa y se mueve la vista
                 val soloPixeles = h == Herramienta.DIFUMINAR || h == Herramienta.LICUAR || h == Herramienta.TRANSFORMAR
-                val soloMapa = h == Herramienta.SELECCION || h == Herramienta.RUTA || h == Herramienta.SECCION || h == Herramienta.REGLA || h == Herramienta.TERRITORIO
+                val soloMapa = h == Herramienta.SELECCION || h == Herramienta.RUTA || h == Herramienta.SECCION || h == Herramienta.REGLA || h == Herramienta.TERRITORIO || h == Herramienta.TIERRA
                 val lejos = (soloPixeles && vista.zoom > 32f) || (soloMapa && vista.zoom > 2048f)
                 if (lejos && puedeDibujar(e, 0)) editor.avisa("${h.nombre} trabaja a la escala del mapa: desde tan cerca no se puede. Aléjate (a menos de ${if (soloPixeles) "32" else "2.000"} aumentos).")
                 gesto = when {

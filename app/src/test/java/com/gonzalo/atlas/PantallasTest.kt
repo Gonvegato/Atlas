@@ -108,7 +108,7 @@ class PantallaMapaTest {
             v.agrega(FloatArray(n * 6) { i -> when (i % 6) { 0 -> p[i / 6 * 2]; 1 -> p[i / 6 * 2 + 1]; 2 -> 0.8f; 5 -> (i / 6) * 30f; else -> 0.2f } })
             v.termina { ed2, _ -> ed2?.let { lz.apunta(it) } }; espera(lz)
         }
-        lz.activa = lz.capas.first { it.info.referencia }.info.id
+        lz.activa = lz.capas.first { it.info.nombre == "Líneas" }.info.id
         trazo("montanas", 0xFF2A2118.toInt(), 60f, 700f, 800f, 850f, 760f, 1000f, 820f, 1150f, 900f, 1250f, 1050f)
         trazo("pinos", 0xFF2F4A2A.toInt(), 34f, 800f, 1100f, 900f, 1200f, 1050f, 1250f, 1150f, 1350f, 1000f, 1400f)
         trazo("rio", 0xFF3E6A8A.toInt(), 9f, 1000f, 850f, 1050f, 1000f, 980f, 1150f, 1060f, 1300f, 1040f, 1500f)
@@ -123,9 +123,10 @@ class PantallaMapaTest {
         pulsa("Capas"); captura("mapa_capas.png")
         // Una capa nueva aparece al momento en la lista (sin salir del panel y volver a entrar), y la papelera la borra
         compose.onNodeWithText("+ Capa nueva").performClick(); espera(lz); captura("mapa_capas_nueva.png")
-        org.junit.Assert.assertEquals(3, lz.capas.size); compose.onNodeWithText("Capa 3").assertExists()
+        // (Con las dos capas de la tierra generada, que crea la app, ya había cuatro)
+        org.junit.Assert.assertEquals(5, lz.capas.size); compose.onNodeWithText("Capa 5").assertExists()
         compose.onAllNodesWithContentDescription("Borrar la capa")[0].performClick(); espera(lz); captura("mapa_capas.png")
-        org.junit.Assert.assertEquals(2, lz.capas.size); compose.onNodeWithText("Capa 3").assertDoesNotExist()
+        org.junit.Assert.assertEquals(4, lz.capas.size); compose.onNodeWithText("Capa 5").assertDoesNotExist()
         pulsa("Ajustes"); captura("mapa_ajustes.png")
         pulsa("Acciones"); captura("mapa_acciones.png")
         pulsa("Selección"); ed.ponMarco(com.gonzalo.atlas.lienzo.Seleccion.elipse(android.graphics.RectF(600f, 600f, 1400f, 1300f))); captura("mapa_seleccion.png")
@@ -139,6 +140,15 @@ class PantallaMapaTest {
         pulsa("Mundo"); captura("mapa_mundo.png")
         compose.onNodeWithText("Generar un continente").performClick(); repeat(3) { captura("mapa_continente.png") }
         pulsa("Mundo")
+        // Mover la tierra generada: se arrastra (se ve su forma donde va a quedar) y al soltar se redibuja en su sitio nuevo
+        compose.onNodeWithText("Tierras generadas").performClick()
+        compose.runOnUiThread { ed.empieza(1000f, 1000f); ed.mueve(1250f, 1120f) }
+        org.junit.Assert.assertNotNull(ed.vistaPrevia); org.junit.Assert.assertEquals(ed.mapa.tierras[0].id, ed.tierraElegida)
+        captura("mapa_tierras.png")
+        compose.runOnUiThread { ed.termina() }; espera(lz); captura("mapa_tierras2.png")
+        org.junit.Assert.assertEquals(450f, ed.mapa.tierras[0].x, 0.01f); org.junit.Assert.assertNull(ed.vistaPrevia)
+        lz.deshacer(); espera(lz)
+        org.junit.Assert.assertEquals(200f, ed.mapa.tierras[0].x, 0.01f)
         ed.herramienta = com.gonzalo.atlas.editor.Herramienta.TERRITORIO
         captura("mapa_territorios.png")
         // De cerca (4×): las teselas nítidas y un trazo a medio dibujar (aún sin soltar), con simetría
@@ -157,10 +167,10 @@ class PantallaMapaTest {
         // rellenada con el bote, con su rótulo y un lugar, todo en su sitio
         compose.runOnUiThread { ed.ponSimetria(null) }
         val z = 200000f
-        val lineas = lz.capas.first { it.info.referencia }; val color = lz.capas.first { !it.info.referencia }
+        val lineas = lz.capas.first { it.info.nombre == "Líneas" }; val color = lz.capas.first { it.info.nombre == "Color" }
         // (Un sitio donde no pase ya una línea: a esta escala una línea de las de antes tapa cien pantallas)
         val (cx, cy) = listOf(1010.123456 to 930.654321, 1300.123456 to 700.654321, 600.123456 to 1500.654321, 1500.123456 to 1300.654321).first { (x, y) ->
-            (-3..3).all { dx -> (-3..3).all { dy -> (lz.colorCapa(lineas, (x + dx).toFloat(), (y + dy).toFloat()) ushr 24) == 0 } } }
+            (-3..3).all { dx -> (-3..3).all { dy -> lz.capas.filter { it.info.referencia }.all { c -> (lz.colorCapa(c, (x + dx).toFloat(), (y + dy).toFloat()) ushr 24) == 0 } } } }
         compose.runOnUiThread { mesa.irA(cx, cy, z) }
         org.junit.Assert.assertEquals(z, mesa.vista.zoom, 0f)
         fun cerca(pincel: String, col: Int, tam: Float, vararg p: Float) {

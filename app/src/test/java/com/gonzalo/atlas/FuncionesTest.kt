@@ -78,8 +78,12 @@ class FuncionesTest {
         ed.eligePincel("acuarela"); ed.ponColor(0xFF112233.toInt())
         val otro = editor(); otro.ponEstado(ed.estado())
         assertEquals("acuarela", otro.pincel); assertEquals(0xFF112233.toInt(), otro.color); assertEquals(0xFF112233.toInt(), otro.recientes[0])
+        // Deshacer quita la tierra y, con ella, sus dos capas (las crea y las quita la app)
+        assertEquals(Editor.CAPA_COSTA, lineas.info.id); assertEquals(Editor.CAPA_TIERRA, color.info.id); assertEquals(4, lz.capas.size)
         lz.deshacer(); espera(lz)
-        assertTrue(lz.capa(lineas.info.id)!!.trazos.isEmpty()); assertTrue(lz.capa(color.info.id)!!.teselas.isEmpty())
+        assertTrue(ed.mapa.tierras.isEmpty()); assertTrue(lz.capa(Editor.CAPA_COSTA) == null && lz.capa(Editor.CAPA_TIERRA) == null); assertEquals(2, lz.capas.size)
+        lz.rehacer(); espera(lz)
+        assertEquals(1, ed.mapa.tierras.size); assertTrue(lz.capa(Editor.CAPA_COSTA)!!.trazos.isNotEmpty()); assertEquals(mar, lz.colorEn(-880, -580))
     }
 
     /** Dos continentes que se pisan, unidos: uno solo, sin costa tierra adentro y sin que el mar del segundo tape la tierra del primero. */
@@ -112,9 +116,42 @@ class FuncionesTest {
         // Las dos tierras se tocan de verdad en esta prueba (si no, no se prueba nada)
         var comun = 0; for (y in -300 until 400 step 5) for (x in -200 until 300 step 5) if (en(fa, ra, x, y) > 0f && en(fb, rb, x, y) > 0f) comun++
         assertTrue("en común: $comun", comun > 300)
-        // Deshacer quita la segunda y devuelve la costa de la primera
-        lz.deshacer(); espera(lz)
-        assertEquals(1, ed.mapa.tierras.size)
+        // Mover la segunda lejos: vuelven a ser dos, cada una con su costa entera, y donde estaba ya no queda nada suyo
+        fun cuenta(): Triple<Int, Int, Int> {
+            val l = lz.capa(Editor.CAPA_COSTA)!!; val c = lz.capa(Editor.CAPA_TIERRA)!!
+            var tintaEnA = 0; var tierraDeB = 0; var tierraLejos = 0
+            for (y in -600 until 700 step 3) for (x in -900 until 1000 step 3) {
+                if (adentro(fa, ra, x, y) && (lz.colorCapa(l, x.toFloat(), y.toFloat()) ushr 24) > 80) tintaEnA++
+                // (Donde era tierra solo de la segunda)
+                if (en(fb, rb, x, y) > 0f && !ra.contains(x.toFloat(), y.toFloat()) && lz.colorCapa(c, x.toFloat(), y.toFloat()) == tierra) tierraDeB++
+                if (en(fb, rb, x, y) > 0f && lz.colorCapa(c, x + 2000f, y.toFloat()) == tierra) tierraLejos++
+            }
+            return Triple(tintaEnA, tierraDeB, tierraLejos)
+        }
+        val (_, juntaB, juntaLejos) = cuenta()
+        assertTrue("antes de mover: $juntaB, $juntaLejos", juntaB > 5000 && juntaLejos == 0)
+        val segunda = ed.mapa.tierras[1].id
+        assertEquals(segunda, ed.tierraEn(700f, 300f)?.id)
+        ed.mueveTierra(segunda, 2000f, 0f); espera(lz)
+        assertEquals(1800f, ed.mapa.tierras[1].x, 0.01f)
+        png(Lamina.pinta(ed, 1800, null), "continentes_separados.png")
+        val (tintaA, quedaB, lejos) = cuenta()
+        // Tierra adentro de la primera sigue sin costa; de la segunda no queda nada en su sitio de antes y está entera 2.000 px más allá
+        assertTrue("separadas: tinta $tintaA, queda $quedaB, lejos $lejos", tintaA < 60 && quedaB == 0 && lejos > 20000)
+        // La costa de la primera vuelve a estar entera: tocando dentro, la zona es solo ella (no se cuela hacia donde estaba la otra)
+        val isla = lz.seleccionZona(-300, -100)!!
+        assertTrue("isla: ${isla.caja}", isla.caja.right < 320f)
+        // Volver a juntarlas las funde otra vez
+        ed.mueveTierra(segunda, -2000f, 0f); espera(lz)
+        val (_, otraVezB, otraVezLejos) = cuenta()
+        assertTrue(otraVezB == juntaB && otraVezLejos == 0)
+        // Deshacer: primero el volver, luego el mover, luego la segunda tierra
+        lz.deshacer(); espera(lz); assertEquals(1800f, ed.mapa.tierras[1].x, 0.01f)
+        lz.deshacer(); espera(lz); assertEquals(-200f, ed.mapa.tierras[1].x, 0.01f)
+        lz.deshacer(); espera(lz); assertEquals(1, ed.mapa.tierras.size)
+        // Borrar la que queda quita también sus capas
+        ed.borraTierra(ed.mapa.tierras[0].id); espera(lz)
+        assertTrue(ed.mapa.tierras.isEmpty() && lz.capa(Editor.CAPA_COSTA) == null && lz.capa(Editor.CAPA_TIERRA) == null)
     }
 
     private fun rellena(lz: Lienzo, c: CapaPx, r: RectF, color: Int) { lz.cambia(c, "x", HashMap<Long, Bitmap?>().also { m ->

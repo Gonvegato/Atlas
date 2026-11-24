@@ -16,6 +16,7 @@ import com.gonzalo.atlas.lienzo.Edicion
 import com.gonzalo.atlas.lienzo.Lienzo
 import com.gonzalo.atlas.lienzo.Papel
 import com.gonzalo.atlas.lienzo.Pinceles
+import com.gonzalo.atlas.motor.CapaInfo
 import com.gonzalo.atlas.motor.Catalogo
 import com.gonzalo.atlas.motor.Linea
 import com.gonzalo.atlas.motor.Lugar
@@ -35,7 +36,7 @@ import kotlin.random.Random
 enum class Herramienta(val nombre: String) {
     PINCEL("Pintar"), DIFUMINAR("Difuminar"), GOMA("Borrar"), TRANSFORMAR("Transformar"), RELLENO("Relleno"), CUENTAGOTAS("Cuentagotas"), TERRITORIO("Territorios"),
     LUGAR("Lugares"), ROTULO("Rótulos"), RUTA("Rutas"), SELLO("Tus dibujos"), ELEGIR("Elegir"), REGLA("Regla"), MANO("Mover"), CALCO("Calco"), SECCION("Secciones"),
-    SELECCION("Selección"), LICUAR("Licuar"),
+    SELECCION("Selección"), LICUAR("Licuar"), TIERRA("Tierras generadas"),
 }
 
 /** Cómo se marca un territorio: tocando dentro de tus líneas, pintándolo o quitándolo. */
@@ -95,6 +96,8 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
         lienzo.alCambiar += { _ -> programaGuardar(); if (lienzo.terrVersion != ultimaTerr) programaCentros() }
         mapa.alCambiarVector += { principal.post { cambios++; alCambiarVista() }; programaGuardar() }
         programaCentros(0)
+        // Los relieves de las tierras generadas, listos para cuando se toquen
+        lienzo.enHilo { runCatching { tierras.forEach { molde(it) } } }
     }
 
     fun defPincel() = Pinceles.def(when (herramienta) { Herramienta.GOMA -> goma; Herramienta.DIFUMINAR -> pincelDifuminar; else -> pincel })
@@ -187,137 +190,212 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     /** La forma que se está probando, dónde iría (se ve en el lienzo antes de ponerla). */
     var vistaPrevia by mutableStateOf<Pair<Bitmap, RectF>?>(null)
 
-    /** El relieve de una tierra generada, para mirarlo en cualquier punto del lienzo. */
-    private class Relieve(val rect: RectF, val campo: FloatArray, val w: Int, val h: Int) {
+    // ---------------------------------------------------------------- tierras generadas (continentes que se mueven y se funden)
+
+    /** El relieve de una forma, calculado una vez: sus muestras y su costa (en muestras). */
+    private class Molde(val campo: FloatArray, val w: Int, val h: Int) {
+        val costas: List<Pair<FloatArray, Boolean>> by lazy {
+            com.gonzalo.atlas.motor.Continente.costas(campo, w, h).map { com.gonzalo.atlas.motor.Continente.redondea(it, 2) }.map { l -> val n = com.gonzalo.atlas.motor.Continente.puntos(l); FloatArray(n * 2) { l[it] } to !com.gonzalo.atlas.motor.Continente.esAbierta(l) }
+        }
+    }
+    private val moldes = HashMap<String, Molde>()
+    private fun molde(t: com.gonzalo.atlas.motor.Tierra): Molde {
+        val k = "${t.forma.semilla}|${t.forma.tipo}|${t.forma.tierra}|${t.forma.rugosidad}|${t.forma.islas}|${t.gw}x${t.gh}"
+        synchronized(moldes) { moldes[k]?.let { return it } }
+        val m = Molde(com.gonzalo.atlas.motor.Continente.campo(t.forma, t.gw, t.gh), t.gw, t.gh)
+        synchronized(moldes) { if (moldes.size > 24) moldes.clear(); moldes[k] = m }
+        return m
+    }
+
+    /** El relieve de una tierra generada puesta en su sitio, para mirarlo en cualquier punto del lienzo. */
+    private class Relieve(val rect: RectF, val m: Molde) {
         /** El relieve en (x, y) del lienzo: positivo, tierra; negativo, mar (fuera del recuadro, mar). */
         fun en(x: Float, y: Float): Float {
             if (x < rect.left || y < rect.top || x > rect.right || y > rect.bottom) return -1f
+            val w = m.w; val h = m.h; val campo = m.campo
             val gx = ((x - rect.left) * w / rect.width() - 0.5f).coerceIn(0f, w - 1.001f); val gy = ((y - rect.top) * h / rect.height() - 0.5f).coerceIn(0f, h - 1.001f)
             val ix = gx.toInt(); val iy = gy.toInt(); val fx = gx - ix; val fy = gy - iy; val o = iy * w + ix
             return (campo[o] * (1 - fx) + campo[o + 1] * fx) * (1 - fy) + (campo[o + w] * (1 - fx) + campo[o + w + 1] * fx) * fy
         }
         /** La costa, como líneas de puntos del lienzo (x, y) y si cada una es cerrada. */
         fun costas(): List<Pair<FloatArray, Boolean>> {
-            val kx = rect.width() / w; val ky = rect.height() / h
-            return com.gonzalo.atlas.motor.Continente.costas(campo, w, h).map { com.gonzalo.atlas.motor.Continente.redondea(it, 2) }.map { l ->
-                val n = com.gonzalo.atlas.motor.Continente.puntos(l)
-                FloatArray(n * 2) { i -> if (i % 2 == 0) rect.left + (l[i] + 0.5f) * kx else rect.top + (l[i] + 0.5f) * ky } to !com.gonzalo.atlas.motor.Continente.esAbierta(l)
-            }
+            val kx = rect.width() / m.w; val ky = rect.height() / m.h
+            return m.costas.map { (l, cerrada) -> FloatArray(l.size) { i -> if (i % 2 == 0) rect.left + (l[i] + 0.5f) * kx else rect.top + (l[i] + 0.5f) * ky } to cerrada }
         }
         val grosor get() = (max(rect.width(), rect.height()) / 700f).coerceIn(1.6f, 6f)
     }
 
-    /** Los tramos seguidos de la línea ([p]: x, y; [cerrada]) en los que [vale] el punto, cada uno con un punto de más por cada lado ([solapa]) o de menos. */
-    private fun tramos(p: FloatArray, cerrada: Boolean, solapa: Boolean, vale: (Float, Float) -> Boolean): List<FloatArray> {
+    /** Los tramos seguidos de la línea ([p]: x, y; [cerrada]) en los que [vale] el punto, cada uno con un punto de más por cada lado (para que no quede hueco donde se juntan dos costas). */
+    private fun tramos(p: FloatArray, cerrada: Boolean, vale: (Float, Float) -> Boolean): List<FloatArray> {
         val n = p.size / 2; if (n < 2) return emptyList()
         val ok = BooleanArray(n) { vale(p[it * 2], p[it * 2 + 1]) }
         if (ok.all { it }) return listOf(if (cerrada) p + floatArrayOf(p[0], p[1]) else p)
         if (ok.none { it }) return emptyList()
         // (En una línea cerrada se empieza a contar en un punto que no vale, para no partir un tramo por la mitad)
         val ini = if (cerrada) ok.indexOfFirst { !it } else 0
-        val total = if (cerrada) n else n
         val out = ArrayList<FloatArray>()
         var i = 0
-        while (i < total) {
+        while (i < n) {
             if (!ok[(ini + i) % n]) { i++; continue }
-            var j = i; while (j + 1 < total && ok[(ini + j + 1) % n]) j++
-            // El tramo va de i a j; con [solapa] se alarga un punto por cada lado (para que no quede hueco donde se juntan dos costas)
+            var j = i; while (j + 1 < n && ok[(ini + j + 1) % n]) j++
             var a = i; var b = j
-            if (solapa) { if (cerrada || a > 0) a--; if (cerrada || b < total - 1) b++ } else { a++; b-- }
+            if (cerrada || a > 0) a--; if (cerrada || b < n - 1) b++
             if (b - a >= 1) out += FloatArray((b - a + 1) * 2) { q -> val k = Math.floorMod(ini + a + q / 2, n); p[k * 2 + q % 2] }
             i = j + 1
         }
         return out
     }
 
-    private fun trazoDe(p: FloatArray, def: com.gonzalo.atlas.lienzo.DefPincel, color: Int, tam: Float, modo: Int, semilla: Int): com.gonzalo.atlas.lienzo.TrazoDatos {
+    private fun trazoDe(p: FloatArray, def: com.gonzalo.atlas.lienzo.DefPincel, color: Int, tam: Float, semilla: Int): com.gonzalo.atlas.lienzo.TrazoDatos {
         val m = p.size / 2
         val pts = FloatArray(m * 6)
         for (i in 0 until m) { val o = i * 6; pts[o] = p[i * 2]; pts[o + 1] = p[i * 2 + 1]; pts[o + 2] = 1f; pts[o + 3] = 0.3f; pts[o + 4] = 0f; pts[o + 5] = i * 6f }
-        return com.gonzalo.atlas.lienzo.TrazoDatos(def, color, tam, 1f, modo, false, listOf(pts), semilla, 1f, true, null, null)
+        return com.gonzalo.atlas.lienzo.TrazoDatos(def, color, tam, 1f, com.gonzalo.atlas.lienzo.TrazoDatos.PINTAR, false, listOf(pts), semilla, 1f, true, null, null)
     }
 
+    /** Las tierras generadas que se pueden mover (las de esta versión en adelante). */
+    val tierras: List<com.gonzalo.atlas.motor.Tierra> get() = mapa.tierras.filter { it.movible && it.gw > 1 && it.gh > 1 }
+    /** La tierra elegida para moverla (su id). */
+    var tierraElegida by mutableStateOf<String?>(null)
+
     /**
-     * Genera una tierra (un continente, un archipiélago…) dentro del recuadro [rect] del lienzo: la costa, en la capa de
-     * líneas; y, si se pide, la tierra y el mar de color en la de color. [rect] mide [anchoKm] de ancho: si el mapa aún
-     * no tiene escala, queda fijada por el tamaño dado ([anchoKm]). [unir]: si toca a otras tierras generadas antes, se
-     * funden en una sola: se borra la costa de las otras que queda tierra adentro, la nueva no se dibuja donde ya era
-     * tierra y el mar no tapa la tierra que había.
+     * Vuelve a dibujar todas las tierras generadas en sus dos capas, que se crean solas: «Tierra y mar (generados)», abajo
+     * del todo, y «Costas (generadas)», de referencia, bajo tus líneas. Donde dos tierras se pisan quedan fundidas: no se
+     * dibuja la costa de una dentro de la otra y el mar de una no tapa la tierra de otra. Las capas nuevas se preparan
+     * aparte y se cambian por las viejas de golpe (en la pantalla no se ve a medias). En el hilo del lienzo.
      */
-    fun ponContinente(p: com.gonzalo.atlas.motor.FormaTierra, rect: RectF, anchoKm: Double, tinta: Int, tierra: Int?, mar: Int?, seccion: Boolean, unir: Boolean = true) {
-        vistaPrevia = null
-        trabajo("Dibujando la costa…") {
-            val asp = rect.width() / rect.height()
-            val g = (max(rect.width(), rect.height()) / 2.5f).toInt().coerceIn(256, 900)
-            val w = if (asp >= 1f) g else max(64, (g * asp).toInt()); val h = if (asp >= 1f) max(64, (g / asp).toInt()) else g
-            val nueva = Relieve(RectF(rect), com.gonzalo.atlas.motor.Continente.campo(p, w, h), w, h)
-            // Las tierras de antes que tocan a esta
-            val viejas = if (unir) mapa.tierras.filter { RectF.intersects(it.rect, rect) && it.gw > 1 && it.gh > 1 }.map { Relieve(it.rect, com.gonzalo.atlas.motor.Continente.campo(it.forma, it.gw, it.gh), it.gw, it.gh) } else emptyList()
-            fun eraTierra(x: Float, y: Float): Boolean { for (v in viejas) if (v.en(x, y) > 0f) return true; return false }
-            val capaLineas = lienzo.capas.firstOrNull { it.info.referencia } ?: lienzo.capaActiva() ?: return@trabajo
-            val capaColor = lienzo.capas.firstOrNull { !it.info.referencia } ?: capaLineas
-            val partes = ArrayList<Edicion>()
-            if (tierra != null || mar != null) pintaCampo(capaColor, rect, nueva.campo, w, h, tierra ?: 0, mar ?: 0, if (viejas.isEmpty()) null else ::eraTierra)?.let { partes += it }
+    private fun pintaTierras() {
+        val L = Lienzo.L
+        val ts = tierras
+        val rs = ts.map { Relieve(it.rect, molde(it)) }
+        val viejaColor = lienzo.capa(CAPA_TIERRA); val viejaCosta = lienzo.capa(CAPA_COSTA)
+        // El color: cada píxel, de la tierra que más «sube» ahí; si es mar, del mar de la tierra en cuyo recuadro cae
+        val color = if (ts.any { it.colTierra != 0 || it.colMar != 0 }) com.gonzalo.atlas.lienzo.CapaPx(viejaColor?.info ?: CapaInfo(CAPA_TIERRA, "Tierra y mar (generados)")) else null
+        if (color != null) {
+            val claves = HashSet<Long>()
+            for (t in ts) for (ty in Math.floorDiv(kotlin.math.floor(t.y).toInt(), L)..Math.floorDiv(kotlin.math.ceil(t.y + t.h).toInt() - 1, L)) for (tx in Math.floorDiv(kotlin.math.floor(t.x).toInt(), L)..Math.floorDiv(kotlin.math.ceil(t.x + t.w).toInt() - 1, L)) if (lienzo.dentro(tx, ty)) claves += Lienzo.clave(tx, ty)
+            for (k in claves) {
+                val tx = Lienzo.tx(k); val ty = Lienzo.ty(k)
+                val zona = RectF(tx * L.toFloat(), ty * L.toFloat(), (tx + 1) * L.toFloat(), (ty + 1) * L.toFloat())
+                val aqui = ts.indices.filter { RectF.intersects(rs[it].rect, zona) }
+                val px = IntArray(L * L); var algo = false
+                for (j in 0 until L) for (i in 0 until L) {
+                    val x = tx * L + i + 0.5f; val y = ty * L + j + 0.5f
+                    var tierra = false; var mejor = 0f; var col = 0; var mar = 0
+                    for (q in aqui) {
+                        val v = rs[q].en(x, y)
+                        if (v > 0f) { tierra = true; if (ts[q].colTierra != 0 && v > mejor) { mejor = v; col = ts[q].colTierra } }
+                        else if (ts[q].colMar != 0 && rs[q].rect.contains(x, y)) mar = ts[q].colMar
+                    }
+                    val c = if (tierra) col else mar
+                    if (c != 0) { px[j * L + i] = c; algo = true }
+                }
+                if (algo) color.teselas[k] = Bitmap.createBitmap(px, L, L, Bitmap.Config.ARGB_8888)
+            }
+        }
+        // La costa: de cada tierra, lo que no cae dentro de otra
+        val costa = if (ts.isNotEmpty()) com.gonzalo.atlas.lienzo.CapaPx(viejaCosta?.info ?: CapaInfo(CAPA_COSTA, "Costas (generadas)", referencia = true)) else null
+        if (costa != null) {
             val def = Pinceles.def("costa").copy(afiladoInicio = 0f, afiladoFin = 0f, presionTamano = 0f, estabilizacion = 0f)
             val trazos = ArrayList<com.gonzalo.atlas.lienzo.TrazoDatos>()
-            // De las costas de antes, se borra lo que ahora queda dentro de la tierra nueva
-            if (viejas.isNotEmpty()) {
-                val goma = Pinceles.def("rotulador").copy(afiladoInicio = 0f, afiladoFin = 0f, presionTamano = 0f, presionOpacidad = 0f, estabilizacion = 0f, grano = "", dureza = 1f)
-                for (v in viejas) for ((l, cerrada) in v.costas()) for (t in tramos(l, cerrada, false) { x, y -> nueva.en(x, y) > 0f })
-                    trazos += trazoDe(t, goma, 0, v.grosor * 2.6f + 2f, com.gonzalo.atlas.lienzo.TrazoDatos.BORRAR, 0)
+            for (q in ts.indices) {
+                val otras = ts.indices.filter { it != q && RectF.intersects(rs[it].rect, rs[q].rect) }
+                var k = 0
+                for ((l, cerrada) in rs[q].costas()) {
+                    val partes = if (otras.isEmpty()) listOf(if (cerrada) l + floatArrayOf(l[0], l[1]) else l) else tramos(l, cerrada) { x, y -> otras.none { rs[it].en(x, y) > 0f } }
+                    for (t in partes) trazos += trazoDe(t, def, ts[q].tinta, rs[q].grosor, 1000 + q * 131 + k++)
+                }
             }
-            // La costa nueva: entera o, uniéndose a otras, solo donde no era ya tierra
-            var k = 0
-            for ((l, cerrada) in nueva.costas()) {
-                val ts = if (viejas.isEmpty()) listOf(if (cerrada) l + floatArrayOf(l[0], l[1]) else l) else tramos(l, cerrada, true) { x, y -> !eraTierra(x, y) }
-                for (t in ts) trazos += trazoDe(t, def, tinta, nueva.grosor, com.gonzalo.atlas.lienzo.TrazoDatos.PINTAR, 1000 + k++)
+            lienzo.ponTrazos(costa, trazos, "Costa")
+        }
+        // Las capas nuevas, en el sitio de las viejas
+        synchronized(lienzo.cierre) {
+            fun pon(vieja: com.gonzalo.atlas.lienzo.CapaPx?, nueva: com.gonzalo.atlas.lienzo.CapaPx?, donde: () -> Int) {
+                if (nueva != null) {
+                    // (Lo que había guardado de la vieja y ya no está se borra del disco al guardar)
+                    nueva.sucias.addAll(nueva.teselas.keys); nueva.fondoSucias.addAll(nueva.fondo.keys); nueva.trazosSucios = true
+                    if (vieja != null) { nueva.sucias.addAll(vieja.teselas.keys); nueva.fondoSucias.addAll(vieja.fondo.keys) }
+                }
+                val i = if (vieja != null) lienzo.capas.indexOf(vieja) else -1
+                if (i >= 0) { if (nueva != null) lienzo.capas[i] = nueva else lienzo.capas.removeAt(i) }
+                else if (nueva != null) lienzo.capas.add(donde().coerceIn(0, lienzo.capas.size), nueva)
             }
-            lienzo.ponTrazos(capaLineas, trazos, "Costa")?.let { partes += it }
-            val antes = mapa.vectorJson().toString()
-            if (!mapa.escalaPuesta && anchoKm > 0.0) { mapa.kmPorPx = (anchoKm / rect.width()).toFloat(); mapa.escalaPuesta = true }
-            mapa.tierras += com.gonzalo.atlas.motor.Tierra(rect.left, rect.top, rect.width(), rect.height(), w, h, com.gonzalo.atlas.motor.FormaTierra(p.semilla, p.tipo, p.tierra, p.rugosidad, p.islas))
-            if (seccion) mapa.secciones += com.gonzalo.atlas.motor.Seccion(mapa.nuevoId("s"), "Continente", rect.left, rect.top, rect.width(), rect.height())
-            partes += Edicion.Vector("Tierra", antes, mapa.vectorJson().toString())
-            lienzo.apunta(Edicion.Varias("Continente", partes))
-            mapa.avisaVector()
-            aviso(if (viejas.isEmpty()) "Continente dibujado: la costa está en «${capaLineas.info.nombre}»" else "Continente dibujado y unido a la tierra que había")
+            pon(viejaColor, color) { 0 }
+            pon(viejaCosta, costa) { lienzo.capas.indexOfFirst { it.info.referencia }.let { if (it < 0) lienzo.capas.size else it } }
+            if (lienzo.capa(lienzo.activa) == null) lienzo.activa = lienzo.capas.lastOrNull { !it.info.referencia && it.info.id != CAPA_TIERRA }?.info?.id ?: lienzo.capas.lastOrNull()?.info?.id.orEmpty()
         }
     }
 
-    /** Si en ese recuadro hay tierras generadas antes (para ofrecer unirlas). */
-    fun hayTierraEn(rect: RectF) = mapa.tierras.any { RectF.intersects(it.rect, rect) }
+    /** Cambia las tierras generadas con [f] (añadir, mover, borrar…), las vuelve a dibujar y lo apunta todo para deshacerlo de una vez. */
+    private fun cambiaTierras(nombre: String, dicho: String?, f: () -> Unit) = trabajo("Dibujando las tierras…") {
+        val antes = mapa.vectorJson().toString()
+        val ed = lienzo.edicionCapas(nombre) { f(); pintaTierras() }
+        lienzo.apunta(Edicion.Varias(nombre, listOf(ed, Edicion.Vector(nombre, antes, mapa.vectorJson().toString()))))
+        mapa.avisaVector()
+        principal.post { vistaPrevia = null; capaActiva = lienzo.activa }
+        dicho?.let { aviso(it) }
+    }
 
     /**
-     * Pinta la tierra y el mar del relieve [campo] (de [w] × [h] muestras) en el recuadro: un color donde es tierra y otro
-     * donde es mar (0: nada). [eraTierra]: donde ya había tierra de otra generada antes, el mar no se pinta.
+     * Genera una tierra (un continente, un archipiélago…) dentro del recuadro [rect] del lienzo: la costa y, si se pide, la
+     * tierra y el mar de color, en sus capas propias. [rect] mide [anchoKm] de ancho: si el mapa aún no tiene escala, queda
+     * fijada por ese tamaño. Si toca a otra tierra generada, se funden; después se puede mover ([mueveTierra]) o borrar.
      */
-    private fun pintaCampo(c: com.gonzalo.atlas.lienzo.CapaPx, rect: RectF, campo: FloatArray, w: Int, h: Int, tierra: Int, mar: Int, eraTierra: ((Float, Float) -> Boolean)? = null): Edicion? {
-        val L = Lienzo.L
-        val nuevas = HashMap<Long, Bitmap?>()
-        val x0 = kotlin.math.floor(rect.left).toInt(); val y0 = kotlin.math.floor(rect.top).toInt(); val x1 = kotlin.math.ceil(rect.right).toInt(); val y1 = kotlin.math.ceil(rect.bottom).toInt()
-        val kx = w / rect.width(); val ky = h / rect.height()
-        for (ty in Math.floorDiv(y0, L)..Math.floorDiv(y1 - 1, L)) for (tx in Math.floorDiv(x0, L)..Math.floorDiv(x1 - 1, L)) {
-            if (!lienzo.dentro(tx, ty)) continue
-            val px = IntArray(L * L); var algo = false
-            for (j in 0 until L) {
-                val Y = ty * L + j; if (Y < y0 || Y >= y1) continue
-                val gy = ((Y + 0.5f - rect.top) * ky - 0.5f).coerceIn(0f, h - 1.001f); val iy = gy.toInt(); val fy = gy - iy
-                for (i in 0 until L) {
-                    val X = tx * L + i; if (X < x0 || X >= x1) continue
-                    val gx = ((X + 0.5f - rect.left) * kx - 0.5f).coerceIn(0f, w - 1.001f); val ix = gx.toInt(); val fx = gx - ix
-                    val o = iy * w + ix
-                    val v = (campo[o] * (1 - fx) + campo[o + 1] * fx) * (1 - fy) + (campo[o + w] * (1 - fx) + campo[o + w + 1] * fx) * fy
-                    val col = if (v > 0f) tierra else if (mar != 0 && eraTierra != null && eraTierra(X + 0.5f, Y + 0.5f)) 0 else mar
-                    if (col != 0) { px[j * L + i] = col; algo = true }
-                }
-            }
-            if (!algo) continue
-            val k = Lienzo.clave(tx, ty)
-            val n = c.teselas[k]?.copy(Bitmap.Config.ARGB_8888, true) ?: Bitmap.createBitmap(L, L, Bitmap.Config.ARGB_8888)
-            Canvas(n).drawBitmap(Bitmap.createBitmap(px, L, L, Bitmap.Config.ARGB_8888), 0f, 0f, null)
-            nuevas[k] = n
+    @Suppress("UNUSED_PARAMETER")
+    fun ponContinente(p: com.gonzalo.atlas.motor.FormaTierra, rect: RectF, anchoKm: Double, tinta: Int, tierra: Int?, mar: Int?, seccion: Boolean, unir: Boolean = true) {
+        val asp = rect.width() / rect.height()
+        val g = (max(rect.width(), rect.height()) / 2.5f).toInt().coerceIn(256, 900)
+        val w = if (asp >= 1f) g else max(64, (g * asp).toInt()); val h = if (asp >= 1f) max(64, (g / asp).toInt()) else g
+        val t = com.gonzalo.atlas.motor.Tierra(rect.left, rect.top, rect.width(), rect.height(), w, h, com.gonzalo.atlas.motor.FormaTierra(p.semilla, p.tipo, p.tierra, p.rugosidad, p.islas),
+            mapa.nuevoId("g"), tinta, tierra ?: 0, mar ?: 0, true)
+        val toca = tierras.any { RectF.intersects(it.rect, rect) }
+        tierraElegida = t.id
+        cambiaTierras("Continente", if (toca) "Continente dibujado y unido a la tierra que toca. Para moverlo: Mundo → Tierras generadas." else "Continente dibujado en sus capas («Costas» y «Tierra y mar»). Para moverlo: Mundo → Tierras generadas.") {
+            if (!mapa.escalaPuesta && anchoKm > 0.0) { mapa.kmPorPx = (anchoKm / rect.width()).toFloat(); mapa.escalaPuesta = true }
+            mapa.tierras += t
+            if (seccion) mapa.secciones += com.gonzalo.atlas.motor.Seccion(mapa.nuevoId("s"), "Continente", rect.left, rect.top, rect.width(), rect.height())
         }
-        return lienzo.cambia(c, "Tierra y mar", nuevas)
+    }
+
+    /** Si en ese recuadro hay tierras generadas (la nueva se fundirá con ellas). */
+    fun hayTierraEn(rect: RectF) = tierras.any { RectF.intersects(it.rect, rect) }
+
+    /** La tierra generada que hay en ese punto del lienzo: la que tiene tierra ahí o, si es mar, la del recuadro en el que cae. */
+    fun tierraEn(x: Float, y: Float): com.gonzalo.atlas.motor.Tierra? {
+        val ts = tierras
+        return ts.lastOrNull { Relieve(it.rect, molde(it)).en(x, y) > 0f } ?: ts.lastOrNull { it.rect.contains(x, y) }
+    }
+
+    /** Mueve una tierra generada ([dx], [dy] px del lienzo) y lo redibuja todo: si ahora toca a otra se funden; si se separa, vuelven a ser dos. */
+    fun mueveTierra(id: String, dx: Float, dy: Float) {
+        if (dx == 0f && dy == 0f) { vistaPrevia = null; return }
+        cambiaTierras("Mover tierra", null) { mapa.tierras.firstOrNull { it.id == id }?.let { it.x += dx; it.y += dy } }
+    }
+
+    fun borraTierra(id: String) { if (tierraElegida == id) tierraElegida = null; cambiaTierras("Borrar tierra", "Tierra borrada. Deshacer la recupera.") { mapa.tierras.removeAll { it.id == id } } }
+
+    /** La misma tierra (sitio, tamaño, colores) con otra forma al azar. */
+    fun otraFormaTierra(id: String) = cambiaTierras("Otra forma", null) {
+        val i = mapa.tierras.indexOfFirst { it.id == id }; if (i < 0) return@cambiaTierras
+        val t = mapa.tierras[i]; val f = t.forma
+        mapa.tierras[i] = t.con(com.gonzalo.atlas.motor.FormaTierra((System.nanoTime() / 1000L) % 100000L, f.tipo, f.tierra, f.rugosidad, f.islas))
+    }
+
+    private val previas = HashMap<String, Bitmap>()
+    /** Una imagen ligera de la tierra (su forma, medio transparente), para verla mientras se arrastra. */
+    private fun previa(t: com.gonzalo.atlas.motor.Tierra): Bitmap {
+        val m = molde(t)
+        return previas.getOrPut("${System.identityHashCode(m)}|${t.colTierra}|${t.tinta}") {
+            if (previas.size > 12) previas.clear()
+            val k = max(1, m.w / 320); val w = m.w / k; val h = m.h / k
+            val tierra = if (t.colTierra != 0) (t.colTierra and 0xFFFFFF) or (0xD0 shl 24) else 0x70E6D8AE
+            val px = IntArray(w * h) { i ->
+                val x = (i % w) * k; val y = (i / w) * k; val a = m.campo[y * m.w + x] > 0f
+                val costa = (x + k < m.w && (m.campo[y * m.w + x + k] > 0f) != a) || (y + k < m.h && (m.campo[(y + k) * m.w + x] > 0f) != a)
+                if (costa) t.tinta else if (a) tierra else 0
+            }
+            Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+        }
     }
 
     fun ponColor(c: Int) {
@@ -432,6 +510,9 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     /** Lo mismo con toda su precisión (para mover lugares, rótulos y dibujos también de muy cerca). */
     private var arrastreD: DoubleArray? = null
     private var antesArrastre: String? = null
+    /** La tierra generada que se está arrastrando: dónde se cogió (x, y) y cuánto se ha movido (dx, dy). */
+    private var arrastreTierra: FloatArray? = null
+    private var tierraArrastrada: com.gonzalo.atlas.motor.Tierra? = null
 
     fun empieza(x: Float, y: Float, xd: Double = x.toDouble(), yd: Double = y.toDouble()) {
         bx.clear(); by.clear(); bx += x; by += y
@@ -442,6 +523,7 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
             Herramienta.SECCION -> seccionBorrador = floatArrayOf(x, y, x, y)
             Herramienta.SELECCION -> marcoBorrador = formaSeleccion to floatArrayOf(x, y, x, y)
             Herramienta.ELEGIR -> { arrastre = floatArrayOf(x, y); arrastreD = doubleArrayOf(xd, yd); antesArrastre = mapa.vectorJson().toString() }
+            Herramienta.TIERRA -> { val t = if (ocupado) null else tierraEn(x, y); tierraElegida = t?.id ?: tierraElegida; arrastreTierra = t?.let { floatArrayOf(x, y, 0f, 0f) }; tierraArrastrada = t }
             else -> {}
         }
     }
@@ -454,6 +536,12 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
                 borrador = Linea("borrador", borrador?.tipo ?: "camino", bx.toFloatArray(), by.toFloatArray(), null)
             }
             Herramienta.REGLA -> regla = floatArrayOf(bx[0], by[0], x, y)
+            Herramienta.TIERRA -> {
+                val a = arrastreTierra ?: return; val t = tierraArrastrada ?: return
+                a[2] = x - a[0]; a[3] = y - a[1]
+                // Mientras se arrastra se ve su forma donde va a quedar (se redibuja de verdad al soltar)
+                if (kotlin.math.hypot(a[2], a[3]) * zoomVista > 6f) vistaPrevia = previa(t) to RectF(t.x + a[2], t.y + a[3], t.x + a[2] + t.w, t.y + a[3] + t.h)
+            }
             Herramienta.SECCION -> seccionBorrador = floatArrayOf(bx[0], by[0], x, y)
             Herramienta.SELECCION -> {
                 if (formaSeleccion == "lazo") { if (hypot(x - bx.last(), y - by.last()) < 1f) return; bx += x; by += y; marcoBorrador = "lazo" to FloatArray(bx.size * 2) { if (it % 2 == 0) bx[it / 2] else by[it / 2] } }
@@ -480,6 +568,10 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
 
     fun termina() {
         when (herramienta) {
+            Herramienta.TIERRA -> {
+                val a = arrastreTierra; val t = tierraArrastrada; arrastreTierra = null; tierraArrastrada = null
+                if (a != null && t != null && vistaPrevia != null) mueveTierra(t.id, a[2], a[3])
+            }
             Herramienta.RUTA -> {
                 val b = borrador ?: return; borrador = null
                 if (b.n >= 2) cambiaVector("Ruta") { val l = simplifica(b, 0.8f); val r = Linea(mapa.nuevoId("r"), tipoRuta, l.xs, l.ys, null); mapa.rutas += r; seleccion = r }
@@ -524,7 +616,7 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     }
 
     fun arrastra(): Boolean = when (herramienta) {
-        Herramienta.RUTA, Herramienta.REGLA, Herramienta.SECCION -> true
+        Herramienta.RUTA, Herramienta.REGLA, Herramienta.SECCION, Herramienta.TIERRA -> true
         Herramienta.SELECCION -> formaSeleccion != "zona"
         Herramienta.TERRITORIO -> modoTerritorio != ModoTerritorio.ZONA
         Herramienta.ELEGIR -> seleccion != null
@@ -644,6 +736,9 @@ class Editor(val mapa: Mapa, res: Resources, private val alGuardar: (Mapa) -> Un
     fun cierra() { guardaYa { lienzo.cierra() } }
 
     companion object {
+        /** Las capas de las tierras generadas (las crea y las redibuja la app). */
+        const val CAPA_TIERRA = "tierras_color"
+        const val CAPA_COSTA = "tierras_costa"
         /** Una imagen pequeña de la forma de tierra (para elegirla antes de ponerla). */
         fun imagenContinente(p: com.gonzalo.atlas.motor.FormaTierra, w: Int, h: Int, tierra: Int, mar: Int, tinta: Int): Bitmap {
             val a = com.gonzalo.atlas.motor.Continente.campo(p, w, h)

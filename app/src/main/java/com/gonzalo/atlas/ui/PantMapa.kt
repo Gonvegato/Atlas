@@ -151,6 +151,7 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
                         "marco" -> PanelMarco(ed)
                         "consulta" -> PanelConsulta(e, ed)
                         "continente" -> PanelContinente(ed, mesa)
+                        "tierras" -> PanelTierras(ed, mesa) { panel = it }
                         "transformar" -> PanelTransformar(ed, mesa)
                         "mundo" -> PanelMundo(ed) { panel = it }
                         "territorios" -> PanelTerritorios(e, ed, mesa)
@@ -170,7 +171,7 @@ fun PantMapa(e: EstadoApp, taller: Boolean = false) {
 private val titulos = mapOf("pinceles" to "Biblioteca de pinceles", "estudio" to "Estudio del pincel", "color" to "Color", "capas" to "Capas",
     "acciones" to "Acciones", "ajustes" to "Ajustes", "transformar" to "Transformar", "mundo" to "Mundo", "territorios" to "Territorios",
     "lugares" to "Lugares", "rutas" to "Rutas", "dibujos" to "Tus dibujos", "calco" to "Imagen para calcar", "secciones" to "Secciones del terreno", "sel" to "Lo elegido",
-    "marco" to "Selección", "licuar" to "Licuar", "continente" to "Generar un continente", "consulta" to "Política del mundo")
+    "marco" to "Selección", "licuar" to "Licuar", "continente" to "Generar un continente", "tierras" to "Tierras generadas", "consulta" to "Política del mundo")
 
 private fun nuevaCapa(ed: Editor) {
     val lz = ed.lienzo
@@ -219,7 +220,7 @@ private fun BarraSuperior(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean,
             Icono(Icons.Outlined.Wallpaper, "Calco", panel == "calco" || h == Herramienta.CALCO) { abre("calco") }
             if (!taller) {
                 Spacer(Modifier.width(4.dp)); Box(Modifier.width(1.dp).height(26.dp).background(O.GRIS_CLARO)); Spacer(Modifier.width(4.dp))
-                Icono(Icons.Outlined.Public, "Mundo", panel == "mundo" || panel == "continente" || h in herramientasMundo) { abre("mundo") }
+                Icono(Icons.Outlined.Public, "Mundo", panel == "mundo" || panel == "continente" || panel == "tierras" || h in herramientasMundo) { abre("mundo") }
                 if (h in herramientasMundo && !estrecho) Text(h.nombre, Modifier.padding(start = 4.dp), style = O.versalitas(11.sp, O.ACENTO))
             }
         }
@@ -248,7 +249,7 @@ private fun BarraSuperior(e: EstadoApp, ed: Editor, mesa: Mesa, taller: Boolean,
     }
 }
 
-private val herramientasMundo = setOf(Herramienta.SECCION, Herramienta.TERRITORIO, Herramienta.LUGAR, Herramienta.ROTULO, Herramienta.RUTA, Herramienta.SELLO, Herramienta.REGLA, Herramienta.ELEGIR, Herramienta.MANO)
+private val herramientasMundo = setOf(Herramienta.TIERRA, Herramienta.SECCION, Herramienta.TERRITORIO, Herramienta.LUGAR, Herramienta.ROTULO, Herramienta.RUTA, Herramienta.SELLO, Herramienta.REGLA, Herramienta.ELEGIR, Herramienta.MANO)
 
 /** La goma (las librerías de iconos no traen una que se parezca). */
 @Composable
@@ -658,6 +659,7 @@ private fun PanelMundo(ed: Editor, abre: (String) -> Unit) {
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(O.BLOQUE2).pulsableO { abre("continente") }.padding(12.dp)) {
         Column { Text("Generar un continente", style = O.texto(15.sp, O.TINTA)); Text("Das el tamaño total en km y la costa se dibuja sola", style = O.texto(12.sp, O.TINTA)) }
     }
+    F(Herramienta.TIERRA, "Tierras generadas", "Mover, juntar, separar o borrar los continentes generados", "tierras")
     F(Herramienta.SECCION, "Secciones del terreno", "Marcos con su tamaño en km: dibujas solo dentro", "secciones")
     F(Herramienta.TERRITORIO, "Territorios", "Imperios, reinos, provincias: toca dentro de tus fronteras", "territorios")
     F(Herramienta.LUGAR, "Lugares", "Ciudades, castillos, templos… con su mapa propio", "lugares")

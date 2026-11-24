@@ -341,6 +341,18 @@ class Lienzo(val mapa: Mapa, private val res: Resources) {
         sincronizaInfo(); version++; mapa.avisaVector(); avisaTodo()
     }
 
+    /**
+     * Para un cambio de capas que se hace ya en el hilo del lienzo y va junto a otros (se apunta fuera): [f] cambia las capas
+     * (cogiendo [cierre] solo para lo justo, y marcando ella lo que hay que guardar) y esto devuelve cómo deshacerlo.
+     */
+    fun edicionCapas(nombre: String, f: () -> Unit): Edicion.Capas {
+        val antes = estadoCapas()
+        f()
+        sincronizaInfo()
+        nitidez.olvida(); version++
+        return Edicion.Capas(nombre, antes, estadoCapas()).also { avisaTodo() }
+    }
+
     /** Cambia la estructura de capas con [f] y lo apunta para deshacer. */
     fun cambiaCapas(nombre: String, f: () -> Unit) = enHilo {
         val antes = estadoCapas()

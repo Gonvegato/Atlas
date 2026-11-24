@@ -247,12 +247,36 @@ internal fun PanelContinente(ed: Editor, mesa: Mesa) {
     InterruptorO("Pintar el mar", conMar) { conMar = it }
     if (conMar) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { for (c in listOf(0xFFB9D3DB, 0xFF8DB4BE, 0xFFA9C4D8, 0xFF5C7894, 0xFFCFE0DC, 0xFFD6E3E8, 0xFF3E6A8A).map { it.toInt() }) MuestraO(c, c == colMar, 28) { colMar = c }; MuestraO(ed.color, ed.color == colMar, 28) { colMar = ed.color } }
     InterruptorO("Crear una sección con ese tamaño", seccion) { seccion = it }
-    var unir by remember { mutableStateOf(true) }
     val toca = ed.vistaPrevia?.second?.let { ed.hayTierraEn(it) } == true
-    if (toca) InterruptorO("Unir con la tierra que ya hay ahí: si se tocan, quedan como una sola (se borra la costa que queda tierra adentro)", unir) { unir = it }
-    Text("La costa se dibuja con el color elegido (ahora ${"#%06X".format(ed.color and 0xFFFFFF)}), en la capa de líneas.", style = O.texto(12.sp, O.GRIS))
+    if (toca) Text("Ahí toca a otra tierra generada: se fundirán en una sola. Después puedes separarlas moviéndola.", style = O.texto(12.sp, O.ACENTO))
+    Text("La costa se dibuja con el color elegido (ahora ${"#%06X".format(ed.color and 0xFFFFFF)}). Las tierras generadas van en dos capas suyas, que se crean solas («Costas» y «Tierra y mar»): así luego se pueden mover, juntar, separar y borrar en Mundo → Tierras generadas.", style = O.texto(12.sp, O.GRIS))
     BotonO("Poner en el mapa", lleno = true, color = O.ACENTO, activo = kmA != null && kmH != null) {
         val r = ed.vistaPrevia?.second ?: mesa.recuadro(kmA ?: return@BotonO, kmH ?: return@BotonO)
-        ed.ponContinente(forma(), r, kmA ?: 0.0, ed.color, if (conTierra) colTierra else null, if (conMar) colMar else null, seccion, unir)
+        ed.ponContinente(forma(), r, kmA ?: 0.0, ed.color, if (conTierra) colTierra else null, if (conMar) colMar else null, seccion)
     }
+}
+
+
+/** Las tierras generadas: elegirlas, moverlas (arrastrándolas en el mapa), cambiarles la forma y borrarlas. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun PanelTierras(ed: Editor, mesa: Mesa, abre: (String) -> Unit) {
+    @Suppress("UNUSED_VARIABLE") val alDia = ed.cambios
+    val ts = ed.tierras
+    Text("Arrastra una tierra en el mapa para moverla. Si al soltarla toca a otra, se funden en una sola; si la apartas, vuelven a ser dos (con mar entre ellas). Con dos dedos se mueve la vista.", style = O.texto(13.sp, O.GRIS))
+    if (ts.isEmpty()) Text("Aún no hay tierras generadas en este mapa.", style = O.texto(14.sp, O.TINTA))
+    ts.forEachIndexed { i, t ->
+        val elegida = ed.tierraElegida == t.id
+        val nombre = FormaTierra.TIPOS.firstOrNull { it.first == t.forma.tipo }?.second ?: "Tierra"
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (elegida) O.ACENTO else O.CRUDO).pulsableO { ed.tierraElegida = t.id }.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("${i + 1}. $nombre · ${Medidas.formatoKm(t.w.toDouble() * ed.mapa.kmPorPx)} × ${Medidas.formatoKm(t.h.toDouble() * ed.mapa.kmPorPx)}", style = O.texto(15.sp, O.TINTA))
+            if (elegida) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                BotonO("Verla") { mesa.irA(t.x + t.w / 2f, t.y + t.h / 2f, (kotlin.math.min(mesa.width / t.w, mesa.height / t.h) * 0.7f).coerceIn(0.03f, 4f)) }
+                BotonO("Otra forma", activo = !ed.ocupado) { ed.otraFormaTierra(t.id) }
+                BotonO("Borrar", color = O.ROJO, activo = !ed.ocupado) { ed.borraTierra(t.id) }
+            }
+        }
+    }
+    BotonO("Generar otra tierra", lleno = true) { abre("continente") }
+    if (ed.mapa.tierras.any { !it.movible }) Text("Las tierras generadas con versiones anteriores quedaron dibujadas en tus capas («Líneas» y «Color») y no se pueden mover: genera otra en su lugar.", style = O.texto(12.sp, O.GRIS))
 }

@@ -4,6 +4,19 @@ App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma fir
 Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
 etiqueta `v0.15.0`.
 
+## 2.3.1 — continentes que se mueven
+
+- **Las tierras generadas se pueden mover.** Mundo → «Tierras generadas»: se arrastra una en el mapa (se ve su forma
+  donde va a quedar) y al soltarla se redibuja ahí. Si toca a otra, se funden en una sola; si se aparta, vuelven a ser
+  dos, cada una con su costa entera. También se les puede dar otra forma o borrarlas. Todo se deshace de una vez.
+- Para que moverlas no deje restos, las tierras generadas ya no se dibujan en tus capas: van en **dos capas suyas que la
+  app crea y redibuja sola**, «Tierra y mar (generados)» (abajo del todo) y «Costas (generadas)» (de referencia, bajo
+  tus líneas: el bote y los territorios se ciñen a ella). Lo que pintes a mano en esas dos capas se pierde al redibujar.
+- Se mueve la tierra generada (su costa y su color), **no lo que hayas dibujado encima** en tus capas, ni sus lugares,
+  rótulos o territorios: conviene colocar los continentes antes de detallarlos.
+- Las tierras generadas con la 2.3.0 o antes quedaron dibujadas en «Líneas» y «Color»: esas no se mueven ni se funden
+  con las nuevas.
+
 ## 2.3.0 — hasta el metro
 
 - **Acercarse hasta 262.144 aumentos.** Antes, 32. Con un mapa a 1 km por píxel, un metro mide entonces 262 px de pantalla;
