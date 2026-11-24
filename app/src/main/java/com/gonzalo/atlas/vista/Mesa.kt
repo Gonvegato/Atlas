@@ -60,7 +60,8 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
     var girar = true
     var alMoverse: () -> Unit = {}
 
-    private class Meta(val tipo: TipoPincel, val opacidad: Float, val capa: String, val color: Int, val tam: Float)
+    /** Lo que hace falta para pasar el trazo a la capa: el pincel, y la vista que había (de pantalla a lienzo) y su acercamiento. */
+    private class Meta(val tipo: TipoPincel, val opacidad: Float, val capa: String, val color: Int, val tam: Float, val aLienzo: Matrix, val zoom: Float)
     private val metas = HashMap<InProgressStrokeId, Meta>()
 
     init {
@@ -72,8 +73,9 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
                 for ((id, st) in strokes) {
                     val m = metas.remove(id)
                     if (m == null) { tinta.removeFinishedStrokes(setOf(id)); continue }
-                    // El trazo de verdad, con el color opaco (la opacidad se aplica al fundirlo con la capa)
-                    val opaco = st.copy(st.brush.copyWithColorIntArgb(m.color or (0xFF shl 24)))
+                    // El trazo de verdad: sus puntos pasados de la pantalla al lienzo (con la vista que había al dibujarlo), el
+                    // tamaño del pincel en píxeles del lienzo y el color opaco (la opacidad se aplica al fundirlo con la capa)
+                    val opaco = runCatching { aLienzo(st, m) }.getOrElse { st.copy(st.brush.copyWithColorIntArgb(m.color or (0xFF shl 24))) }
                     editor.trazoTerminado(opaco, m.tipo, m.opacidad, m.capa) {
                         dibujo.invalidate()
                         dibujo.postOnAnimation { tinta.removeFinishedStrokes(setOf(id)) }
@@ -85,6 +87,23 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         lz.alCambiar += { _ -> post { dibujo.postInvalidateOnAnimation() } }
         editor.alCambiarVista = { dibujo.postInvalidateOnAnimation() }
         mapa.alCambiarVector += { post { velo.olvida(); piramide.todoSucio(); dibujo.postInvalidateOnAnimation() } }
+    }
+
+    /** Rehace el trazo (dibujado en coordenadas de pantalla) en coordenadas del lienzo. */
+    private fun aLienzo(st: Stroke, m: Meta): Stroke {
+        val src = st.inputs
+        val lote = MutableStrokeInputBatch()
+        val p = FloatArray(2)
+        val unidad = if (src.hasStrokeUnitLength()) src.getStrokeUnitLengthCm() * m.zoom else StrokeInput.NO_STROKE_UNIT_LENGTH
+        for (i in 0 until src.size) {
+            val s = src.get(i)
+            p[0] = s.x; p[1] = s.y; m.aLienzo.mapPoints(p)
+            lote.add(s.toolType, p[0], p[1], s.elapsedTimeMillis, unidad,
+                if (src.hasPressure()) s.pressure else StrokeInput.NO_PRESSURE,
+                if (src.hasTilt()) s.tiltRadians else StrokeInput.NO_TILT, StrokeInput.NO_ORIENTATION)
+        }
+        val b = st.brush.copy(size = m.tam.coerceAtLeast(0.5f), epsilon = minOf(0.1f, m.tam / 4f)).copyWithColorIntArgb(m.color or (0xFF shl 24))
+        return Stroke(b, lote)
     }
 
     private var colocada = false
@@ -338,16 +357,17 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         val verColor = if (goma) (0xB0 shl 24) or (mapa.papel and 0xFFFFFF) else ((op * 255).toInt().coerceIn(10, 255) shl 24) or (editor.color and 0xFFFFFF)
         vista.m.invert(inv)
         punteroTrazo = e.getPointerId(e.actionIndex)
+        // Ink pinta en coordenadas de pantalla (sin transformaciones): el pincel, a su tamaño en pantalla
+        val tamPantalla = (tam * vista.zoom).coerceAtLeast(0.5f)
         val est = editor.estabilizacion
         val id = if (est > 0.01f) {
-            // Estabilizado: los puntos se suavizan aquí (cuerda) y se le dan a Ink ya en píxeles del lienzo
+            // Estabilizado: los puntos se suavizan aquí (cuerda) antes de dárselos a Ink
             val i = e.actionIndex
-            val m = vista.aMapa(e.getX(i), e.getY(i))
-            cuerda = floatArrayOf(m[0], m[1]); bajoTrazo = e.eventTime; herramientaLapiz = esLapiz(e, i)
-            runCatching { tinta.startStroke(entrada(m[0], m[1], e, i, e.eventTime), tipo.brush(verColor, tam), Matrix(vista.m)) }.getOrNull()
-        } else { cuerda = null; runCatching { tinta.startStroke(e, punteroTrazo, tipo.brush(verColor, tam), inv, Matrix()) }.getOrNull() } ?: return
+            cuerda = floatArrayOf(e.getX(i), e.getY(i)); bajoTrazo = e.eventTime; herramientaLapiz = esLapiz(e, i)
+            runCatching { tinta.startStroke(entrada(e.getX(i), e.getY(i), e, i, e.eventTime), tipo.brush(verColor, tamPantalla)) }.getOrNull()
+        } else { cuerda = null; runCatching { tinta.startStroke(e, punteroTrazo, tipo.brush(verColor, tamPantalla)) }.getOrNull() } ?: return
         trazo = id
-        metas[id] = Meta(tipo, op, capa.info.id, editor.color, tam)
+        metas[id] = Meta(tipo, op, capa.info.id, editor.color, tam, Matrix(inv), vista.zoom)
         cursor(e.x, e.y)
     }
 
@@ -357,8 +377,7 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
         if (cu != null) {
             // El final: la cuerda llega hasta donde levantaste el lápiz
             val i = e.findPointerIndex(punteroTrazo).takeIf { it >= 0 } ?: e.actionIndex
-            val m = vista.aMapa(e.getX(i), e.getY(i))
-            runCatching { tinta.finishStroke(entrada(m[0], m[1], e, i, e.eventTime), id) }
+            runCatching { tinta.finishStroke(entrada(e.getX(i), e.getY(i), e, i, e.eventTime), id) }
         } else runCatching { tinta.finishStroke(e, punteroTrazo, id) }
         trazo = null; cuerda = null
     }
@@ -383,11 +402,10 @@ class Mesa(ctx: Context, val editor: Editor, private val recurso: (String) -> Bi
      */
     private fun estabiliza(e: MotionEvent, i: Int, id: InProgressStrokeId) {
         val cu = cuerda ?: return
-        val largo = editor.estabilizacion * editor.estabilizacion * 70f * dens / vista.zoom
+        val largo = editor.estabilizacion * editor.estabilizacion * 70f * dens
         lote.clear()
         fun punto(sx: Float, sy: Float, t: Long, p: Float) {
-            val m = vista.aMapa(sx, sy)
-            val dx = m[0] - cu[0]; val dy = m[1] - cu[1]; val d = hypot(dx, dy)
+            val dx = sx - cu[0]; val dy = sy - cu[1]; val d = hypot(dx, dy)
             if (d <= largo || d < 0.01f) return
             val k = (d - largo) / d
             cu[0] += dx * k; cu[1] += dy * k

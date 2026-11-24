@@ -4,6 +4,12 @@ App de Android nativa (Kotlin y Compose), de la familia: misma cuenta, misma fir
 Paquete `com.gonzalo.atlas`. Hasta la 0.15.0 era una app de Godot (2D y 3D, con terreno procedural); está en la
 etiqueta `v0.15.0`.
 
+## 1.2.3
+
+- **Arreglado: el trazo se movía de sitio al levantar el lápiz.** Ink pinta ahora el trazo en curso en coordenadas de
+  pantalla, sin transformaciones, y al terminar ATLAS pasa cada punto al lienzo con la vista exacta que había al dibujarlo
+  (y el tamaño del pincel según el acercamiento): el trazo queda justo donde lo hiciste, con el lienzo girado o acercado.
+
 ## 1.2.2
 
 - **Mapas** (antes «Mapa»): elegir dónde dibujar. Seguir con el mapa en el que estabas, abrir cualquiera de tus mundos, hacer
